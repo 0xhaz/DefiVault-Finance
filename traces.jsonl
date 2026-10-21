@@ -342,3 +342,4 @@
 {"type":"event","event":{"event":{"kind":"rpc","id":"6c48a16e-1","timestamp":1792375762195,"method":"eth_accounts","params":[],"chainId":0,"result":["0x54812efcb8633224edc32a268a7d580e0abfb9ae"],"duration":225},"enrichmentStatus":"none"}}
 {"type":"event","event":{"event":{"kind":"rpc","id":"ffd961c2-1","timestamp":1792377068775,"method":"eth_accounts","params":[],"chainId":0,"result":["0x54812efcb8633224edc32a268a7d580e0abfb9ae"],"duration":3},"enrichmentStatus":"none"}}
 {"type":"event","event":{"event":{"kind":"rpc","id":"434f4922-1","timestamp":1792381922274,"method":"eth_accounts","params":[],"chainId":0,"result":["0x54812efcb8633224edc32a268a7d580e0abfb9ae"],"duration":75},"enrichmentStatus":"none"}}
+{"type":"event","event":{"event":{"kind":"rpc","id":"e54ac691-1","timestamp":1792476409109,"method":"eth_accounts","params":[],"chainId":0,"result":["0x54812efcb8633224edc32a268a7d580e0abfb9ae"],"duration":200},"enrichmentStatus":"none"}}
