@@ -10,7 +10,8 @@ contract ShariahScoreAggregator is Ownable2Step {
         GOLD_SPREAD,
         HALAL_LP,
         MURABAHA,
-        RWA_SUKUK
+        RWA_SUKUK, // RESERVED_4 // deprecated: was RWA_SUKUK — blocked per SR-001
+        GOLD_ALLOCATION // index 5 — S6-H XAUT spot allocation; appended per hard rule (no reorder)
     }
 
     struct Score {
@@ -23,6 +24,7 @@ contract ShariahScoreAggregator is Ownable2Step {
     error NotOracle();
     error InvalidScore();
     error NoValidScores();
+    error StrategyDeprecated(uint8 strategyIndex);
 
     event OracleUpdated(address indexed previousOracle, address indexed newOracle);
     event ScoreUpdated(
@@ -33,6 +35,7 @@ contract ShariahScoreAggregator is Ownable2Step {
         uint32 destinationDomain
     );
     event StrategyCertified(ShariahStrategy indexed strategy, bool certified);
+    event StrategyFlaggedDeprecated(uint8 indexed strategyIndex);
 
     address public oracle;
 
@@ -81,7 +84,7 @@ contract ShariahScoreAggregator is Ownable2Step {
         uint32 bestDestinationDomain;
         bool foundValid;
 
-        for (uint8 i = 0; i < 5; i++) {
+        for (uint8 i = 0; i < 6; i++) {
             ShariahStrategy currentStrategy = ShariahStrategy(i);
             if (!shariahCertified[currentStrategy]) {
                 continue;
@@ -113,13 +116,13 @@ contract ShariahScoreAggregator is Ownable2Step {
         external
         view
         returns (
-            uint8[5] memory values,
-            uint40[5] memory timestamps,
-            uint32[5] memory destinationDomains,
-            bool[5] memory certified
+            uint8[6] memory values,
+            uint40[6] memory timestamps,
+            uint32[6] memory destinationDomains,
+            bool[6] memory certified
         )
     {
-        for (uint8 i = 0; i < 5; i++) {
+        for (uint8 i = 0; i < 6; i++) {
             ShariahStrategy strategy = ShariahStrategy(i);
             Score memory current = scores[strategy];
             values[i] = current.value;
@@ -162,6 +165,7 @@ contract ShariahScoreAggregator is Ownable2Step {
     }
 
     function _writeScore(ShariahStrategy strategy, uint8 value, bytes32 dataHash, uint32 destinationDomain) internal {
+        if (uint8(strategy) == 4) revert StrategyDeprecated(4);
         if (value > 100) revert InvalidScore();
 
         Score memory nextScore = Score({

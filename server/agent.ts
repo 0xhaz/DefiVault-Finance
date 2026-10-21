@@ -159,7 +159,7 @@ type ShariahScanResult = {
 
 let latestShariahScan: ShariahScanResult | null = null;
 let lastShariahCycleAt = 0;
-let lastShariahS45At   = 0; // tracks S4-H (45s) sub-timer
+// Note: lastShariahS45At removed — S4-H (RESERVED_4) disabled per SR-001
 let shariahCycleCount  = 0;
 
 // ─────────────────────────────────────────────────────────────────
@@ -1022,28 +1022,25 @@ let lastSignalsAt = 0;      // track when protocol signals last fetched (every 6
   const loopShariah = async () => {
     const now = Date.now();
     try {
-      // Run S0-H, S1-H, S2-H, S3-H every 30s; S4-H on its own 45s sub-timer
+      // Run S0-H (ETH_SPREAD), S1-H (GOLD_SPREAD), S2-H (HALAL_LP), S3-H (MURABAHA) every 30s.
+      // S4-H (RESERVED_4 / RWA_SUKUK) is disabled per SR-001 — scoreRwaSukuk() returns score:0.
       const scan = await runShariahScan();
-
-      // S4-H (RWA_SUKUK) has its own 45s sub-timer — skip it unless 45s elapsed
-      if (now - lastShariahS45At < 45_000 && latestShariahScan?.RWA_SUKUK) {
-        scan.RWA_SUKUK = latestShariahScan.RWA_SUKUK; // keep last value
-      } else {
-        lastShariahS45At = now;
-      }
 
       latestShariahScan = scan;
       lastShariahCycleAt = now;
       shariahCycleCount++;
 
       const strategies = Object.entries(scan);
+      // Winner excludes index 4 (disabled) — filter by score > 0
       const winner = strategies
-        .filter(([, v]) => v !== null)
+        .filter(([, v]) => v !== null && (v?.score ?? 0) > 0)
         .reduce((a, b) => ((b[1]?.score ?? 0) > (a[1]?.score ?? 0) ? b : a), strategies[0]);
 
       console.log(
         `[Shariah] Cycle ${shariahCycleCount} | ` +
-        strategies.map(([k, v]) => `${k}: ${v?.score ?? '?'}`).join(' | ') +
+        strategies
+          .map(([k, v]) => `${k}: ${v?.score === 0 && k === 'RWA_SUKUK' ? 'DISABLED' : (v?.score ?? '?')}`)
+          .join(' | ') +
         ` | Winner: ${winner?.[0]} (${winner?.[1]?.score ?? 0})`
       );
     } catch (err) {

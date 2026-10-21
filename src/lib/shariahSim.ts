@@ -27,12 +27,12 @@ const STRATEGIES = [
     threshold: 75, domain: 3,
   },
   {
-    id: 1, key: 'GOLD_SPREAD', name: 'Tokenized Gold Spread',
-    shariahBasis: 'Gold arbitrage — physical asset, universally halal',
+    id: 1, key: 'GOLD_SPREAD', name: 'Atomic Gold Spread',
+    shariahBasis: 'Gold allocation (spot) — single-tx atomic USDC/PAXG swap (yad bi yad). Cross-chain routing blocked by NonAtomicGoldExchange guard. Board ruling pending (SR-005, SR-006).',
     permittedAssets: ['USDC', 'PAXG'],
     baseScore: 65, amp: 22, freq: 0.8, phase: 1.2,
     signal: (s: number) => `PAXG/USDC deviation ${(s * 0.003).toFixed(3)}%`,
-    threshold: 75, domain: 3,
+    threshold: 75, domain: 0, // 0 = local only; cross-chain is blocked by vault guard
   },
   {
     id: 2, key: 'HALAL_LP',   name: 'Halal Liquidity Pool',
@@ -50,13 +50,16 @@ const STRATEGIES = [
     signal: (s: number) => s > 75 ? '2 pending trades, best markup 1.4%' : 'No pending Murabaha trades',
     threshold: 75, domain: 0,
   },
+  // id:4 (RESERVED_4) intentionally omitted — strategy suspended per SR-001.
+  // OUSG/BUIDL are US Treasury-backed instruments; yield is interest income (riba).
+  // See docs/agents/SHARIAH_REVIEW.md for board ruling stub.
   {
-    id: 4, key: 'RWA_SUKUK',  name: 'RWA / Sukuk Yield',
-    shariahBasis: 'Asset ownership yielding distributions — halal',
-    permittedAssets: ['USDC', 'OUSG', 'BUIDL'],
-    baseScore: 68, amp: 12, freq: 0.6, phase: 1.9,
-    signal: (s: number) => `OUSG NAV $${(100 + s * 0.2).toFixed(4)}, est APY ${(4 + s * 0.02).toFixed(2)}%`,
-    threshold: 75, domain: 0,
+    id: 5, key: 'GOLD_ALLOCATION', name: 'Gold Allocation (XAUT, spot)',
+    shariahBasis: 'Spot allocated-gold holding — single-tx atomic USDC/XAUT swap (yad bi yad). No yield; return follows gold price. Board acceptance pending (SR-008, SR-009). XAUT not yet deployed on Arc Testnet — testnet uses MockXAUT.',
+    permittedAssets: ['USDC', 'XAUT'],
+    baseScore: 45, amp: 30, freq: 0.6, phase: 3.1,
+    signal: (s: number) => `Gold weight ${(s * 0.2).toFixed(1)}% vs target 20% (drift ${((s - 50) * 0.08).toFixed(2)}%)`,
+    threshold: 75, domain: 0, // 0 = local only; same atomic rule as S2-H
   },
 ];
 
@@ -80,10 +83,15 @@ export function getSimShariahRows(now = Date.now()): SimShariahRow[] {
   });
 }
 
-/** Strategy IDs eligible for the Conservative tier (Halal LP=2, Gold Spread=1, RWA/Sukuk=4) */
-export const CONSERVATIVE_STRATEGY_IDS = new Set([1, 2, 4]);
+/**
+ * Strategy IDs eligible for the Conservative tier.
+ * Mask 0b100110 = Gold Spread (bit1) + Halal LP (bit2) + Gold Allocation (bit5).
+ * RWA_SUKUK (id:4) removed per SR-001.
+ * GOLD_ALLOCATION (id:5) added per Task F.
+ */
+export const CONSERVATIVE_STRATEGY_IDS = new Set([1, 2, 5]);
 
-/** Returns only the 3 low-vol strategies for the Conservative tier. */
+/** Returns only the 3 low-vol Conservative strategies. */
 export function getSimConservativeRows(now = Date.now()): SimShariahRow[] {
   return getSimShariahRows(now).filter(r => CONSERVATIVE_STRATEGY_IDS.has(r.id));
 }

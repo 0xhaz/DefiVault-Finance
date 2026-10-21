@@ -477,3 +477,134 @@
 {"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792381891888}
 {"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792381891922}
 {"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792450308285}
+{"level":"debug","message":"[vite] connected.","timestamp":1792559438590}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792560454803}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792560454803}
+{"level":"debug","message":"(previous line repeated 1× more)","timestamp":1792560457024}
+{"level":"debug","message":"[vite] hot updated: /src/pages/DashboardPage.tsx","timestamp":1792560457024}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792560457024}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792560457024}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792560458350}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792560458350}
+{"level":"debug","message":"(previous line repeated 1× more)","timestamp":1792560460379}
+{"level":"debug","message":"[vite] hot updated: /src/pages/DashboardPage.tsx","timestamp":1792560460379}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792560460380}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792560460380}
+{"level":"debug","message":"(previous line repeated 1× more)","timestamp":1792560461744}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792560461744}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792560463359}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792560463359}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792560464880}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792560464880}
+{"level":"debug","message":"(previous line repeated 1× more)","timestamp":1792561348289}
+{"level":"debug","message":"[vite] hot updated: /src/pages/DashboardPage.tsx","timestamp":1792561348289}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792561348290}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792561348290}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564627581}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564627581}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564627581}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564627581}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564635341}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564635341}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564635343}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564635343}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564645526}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564645526}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564645526}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564645526}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564645528}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564645528}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564653956}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564653956}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564653956}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564653956}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564653958}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564653958}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564659551}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564659551}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564659552}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564659553}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564659635}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564659635}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564675213}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564675214}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564675216}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564675216}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564675261}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564675261}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564676634}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564676634}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564676647}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564676647}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564676647}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564676647}
+{"level":"debug","message":"(previous line repeated 1× more)","timestamp":1792564679103}
+{"level":"debug","message":"[vite] hot updated: /src/pages/DashboardPage.tsx","timestamp":1792564679103}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792564679106}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792564679106}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564684388}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564684388}
+{"level":"debug","message":"(previous line repeated 1× more)","timestamp":1792564685747}
+{"level":"debug","message":"[vite] hot updated: /src/pages/DashboardPage.tsx","timestamp":1792564685747}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792564685747}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792564685747}
+{"level":"debug","message":"(previous line repeated 1× more)","timestamp":1792564686094}
+{"level":"debug","message":"[vite] hot updated: /src/pages/DashboardPage.tsx","timestamp":1792564686094}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792564686094}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792564686094}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564686135}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564686136}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792564686499}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792564686499}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792564746999}
+{"level":"debug","message":"[vite] connected.","timestamp":1792564757138}
+{"level":"debug","message":"[vite] connected.","timestamp":1792564764364}
+{"level":"debug","message":"[vite] connected.","timestamp":1792564765478}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566656666}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792566656667}
+{"level":"debug","message":"[vite] hot updated: /src/pages/DashboardPage.tsx","timestamp":1792566656667}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792566656667}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566665217}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792566665217}
+{"level":"debug","message":"[vite] hot updated: /src/pages/DashboardPage.tsx","timestamp":1792566665217}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792566665217}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792566743221}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566743221}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792566744610}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566744610}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792566746183}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566746183}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792566749769}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566749769}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792566754308}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566754308}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792566758476}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566758476}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792566759885}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566759885}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792566765642}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566765642}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792566768329}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566768329}
+{"level":"debug","message":"[vite] hot updated: /src/pages/LandingPage.tsx","timestamp":1792566769666}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566769666}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792566991378}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566991378}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792566992730}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792566992730}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792567023734}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792567023734}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792567025117}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792567025117}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792567026631}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792567026631}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792567059945}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792567059945}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792567061305}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792567061305}
+{"level":"debug","message":"[vite] hot updated: /src/components/VaultPicker.tsx","timestamp":1792567065985}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792567065985}
+{"level":"debug","message":"[vite] hot updated: /src/pages/StrategiesPage.tsx","timestamp":1792567067471}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792567067471}
+{"level":"debug","message":"[vite] connected.","timestamp":1792572444708}
+{"level":"debug","message":"[vite] connected.","timestamp":1792572746226}

@@ -17,6 +17,10 @@ interface IRwaOracle {
     function getPrice() external view returns (uint256 price, uint256 timestamp);
 }
 
+/// @notice Interest-bearing instrument (holds OUSG/BUIDL — US Treasury-backed funds).
+/// @dev NOT for use in Shariah vaults. SR-001: OUSG and BUIDL fail the SC interest-bearing
+///      income screen. This adapter may remain active in Conventional vaults only.
+///      See docs/agents/SHARIAH_REVIEW.md for the board ruling stub.
 contract RwaYieldAdapter is IStrategyAdapter, Ownable2Step {
     using SafeERC20 for IERC20;
 
@@ -81,10 +85,10 @@ contract RwaYieldAdapter is IStrategyAdapter, Ownable2Step {
         IERC20(usdc).safeTransfer(vault, usdcReturned);
 
         rwaTokensHeld -= tokensToBurn;
-        if (amount >= totalDeployed) {
+        if (usdcReturned >= totalDeployed) {
             totalDeployed = 0;
         } else {
-            totalDeployed -= amount;
+            totalDeployed -= usdcReturned;
         }
 
         emit RwaRecalled(usdcReturned, tokensToBurn);

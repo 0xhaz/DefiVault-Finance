@@ -80,6 +80,7 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     }
 
     function deployCapital(address strategy, uint256 amount, bytes calldata data) external virtual onlyManagerOrOwner {
+        if (paused) revert Paused();
         data;
 
         // Enforce cumulative cap: already-deployed + new amount must stay within the BPS limit
@@ -97,7 +98,8 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         uint32 destinationDomain,
         bytes32 recipient,
         uint256 amount
-    ) external onlyManagerOrOwner {
+    ) public virtual onlyManagerOrOwner {
+        if (paused) revert Paused();
         if (tokenMessenger == address(0)) revert CrossChainNotConfigured();
         // Use immutable sourceDomain (not a hardcoded constant) to block same-chain burns
         if (destinationDomain == sourceDomain) revert SameDomainDeploy();
@@ -126,6 +128,7 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     }
 
     function returnCapital(address strategy, uint256 amount) external onlyManagerOrOwner {
+        if (paused) revert Paused();
         // Pull actual tokens back from the strategy before adjusting accounting
         IERC20(asset()).safeTransferFrom(strategy, address(this), amount);
         totalDeployed -= amount;
@@ -139,6 +142,7 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     /// @param adapter  Address implementing IStrategyAdapter (must have vault == address(this))
     /// @param amount   Requested USDC amount to recall (adapter may return less due to slippage)
     function recallCapital(address adapter, uint256 amount) external onlyManagerOrOwner {
+        if (paused) revert Paused();
         uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
         uint256 returned = IStrategyAdapter(adapter).recall(amount);
         uint256 balanceAfter = IERC20(asset()).balanceOf(address(this));

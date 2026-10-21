@@ -67,17 +67,19 @@ const PROTOCOL_LABELS_AGGRESSIVE = [
   { key: 'aaveLoopNetApy', label: 'Aave 2x Loop Net', format: (v: number) => `${v.toFixed(2)}%` },
   { key: 'gmxGlpApy',     label: 'GMX GLP Yield',     format: (v: number) => `${v.toFixed(2)}%` },
 ];
+// Conservative: Gold Spread + Halal LP + Gold Allocation (mask 0b100110)
 const CONSERVATIVE_PROTOCOLS = [
-  { label: 'Halal LP (Uni V3)',  value: '4–9% APY' },
-  { label: 'RWA / Sukuk (OUSG)', value: '4.5–5.5% APY' },
-  { label: 'PAXG Gold Spread',   value: '2–6% APY' },
+  { label: 'PAXG Gold Spread',      value: '2–6% APY' },
+  { label: 'Halal LP (Uni V3)',     value: '4–9% APY' },
+  { label: 'XAUT Allocation (spot)', value: 'Gold price return' },
 ];
+// Dynamic: all 5 active halal strategies (mask 0b101111)
 const DYNAMIC_PROTOCOLS = [
-  { label: 'Halal LP (Uni V3)',   value: '4–9% APY' },
-  { label: 'RWA / Sukuk (OUSG)',  value: '4.5–5.5% APY' },
-  { label: 'PAXG Gold Spread',    value: '2–6% APY' },
-  { label: 'ETH Cross-Chain Arb', value: '3–8% APY' },
-  { label: 'Murabaha Trades',     value: 'Event-driven' },
+  { label: 'ETH Cross-Chain Arb',   value: '3–8% APY' },
+  { label: 'PAXG Gold Spread',      value: '2–6% APY' },
+  { label: 'Halal LP (Uni V3)',     value: '4–9% APY' },
+  { label: 'Murabaha Trades',       value: 'Event-driven' },
+  { label: 'XAUT Allocation (spot)', value: 'Gold price return' },
 ];
 
 // ─── Tiny sub-components ──────────────────────────────────────────
@@ -146,8 +148,8 @@ export function VaultPicker({ selectedTier, onSelect, vaultMode }: VaultPickerPr
     return () => { clearInterval(simId); clearInterval(fetchId); };
   }, [shariahLive]);
 
-  // Conservative subset = strategies 1 (Gold Spread), 2 (Halal LP), 4 (RWA/Sukuk)
-  const conservativeRows = shariahRows.filter(r => [1, 2, 4].includes(r.id));
+  // Conservative subset = Gold Spread (id:1) + Halal LP (id:2) + Gold Allocation (id:5). SR-001 removed RWA/Sukuk.
+  const conservativeRows = shariahRows.filter(r => [1, 2, 5].includes(r.id));
   const dynamicRows      = shariahRows;
 
   const showConventional = vaultMode === 'conventional' || vaultMode === 'both';

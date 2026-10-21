@@ -1,7 +1,7 @@
 # Implementation Plan: Two-Community Vault System
 
 ## Summary
-Two parallel vault ecosystems for two user communities — Conventional and Shariah — each with its own scoring system, fee structure, and fully isolated TreasuryModule contract. Capital never mixes between communities. ETH, PAXG, USDC, USDT, and RWA tokens (OUSG, BUIDL) are all permitted in the Shariah vault; it is the *protocol action* (borrowing at interest, perp funding) that is haram, not the asset itself.
+Two parallel vault ecosystems for two user communities — Conventional and Shariah — each with its own scoring system, fee structure, and fully isolated TreasuryModule contract. Capital never mixes between communities. **Phase 2 (current):** three Shariah-design defects are being corrected — OUSG/BUIDL removed from Shariah tier (Task A), "Zakat" label restructured into charity + purification (Task B), gold exchanges made atomic for yad bi yad compliance (Task C).
 
 ---
 
@@ -206,17 +206,104 @@ Both `ConventionalTreasury.sol` and `ShariahTreasury.sol` are deployments of the
 
 ---
 
-## Done When
+## Phase 1 Done When (baseline — complete)
 
-- [ ] Both TreasuryModule deployments compile; ConventionalTreasury cannot receive ShariahVault fees
-- [ ] `ZakatModule` 30-day timelock enforced on wallet change
-- [ ] `ShariahVault.deployCapital()` reverts for unscreened adapters
-- [ ] `ConventionalVault` accrues only admin fee — no profit-share logic present
-- [ ] `CommodityMurabahaAdapter` stores all trade terms onchain before execution
-- [ ] Agent scores all 5 Shariah strategies separately from 4 conventional strategies
-- [ ] VaultPicker shows 3 tiers: Passive · Aggressive · Shariah
-- [ ] Strategies page Shariah tab shows 5 cards with halal basis notes
-- [ ] FeeDisclosure shows all params for the selected community
-- [ ] ZakatTracker shows running total + last distribution
-- [ ] TreasuryPanel shows pending fees per community, claimable by owner
-- [ ] Lint/typecheck passes with zero errors
+- [x] Both TreasuryModule deployments compile; ConventionalTreasury cannot receive ShariahVault fees
+- [x] `ZakatModule` 30-day timelock enforced on wallet change
+- [x] `ShariahVault.deployCapital()` reverts for unscreened adapters
+- [x] `CommodityMurabahaAdapter` stores all trade terms onchain before execution
+- [x] Agent scores all 5 Shariah strategies separately from 4 conventional strategies
+- [x] VaultPicker shows 3 tiers: Passive · Aggressive · Shariah
+- [x] Strategies page Shariah tab shows 5 cards with halal basis notes
+- [x] FeeDisclosure shows all params for the selected community
+
+---
+
+## Phase 2 Done When (Tasks A + B + C)
+
+### Task A — Remove OUSG/BUIDL
+- [ ] `ShariahScoreAggregator.writeScore(4, ...)` reverts `StrategyDeprecated`
+- [ ] `SHARIAH_CONSERVATIVE` mask is `6` (0b00110) — Gold + LP only
+- [ ] `SHARIAH_DYNAMIC` mask is `15` (0b01111) — drops bit 4
+- [ ] `RwaYieldAdapter` carries NatSpec warning; no logic change
+- [ ] `script/RecallRwaFromShariah.s.sol` compiles; unscreens the adapter
+- [ ] RWA_SUKUK scorer returns `score: 0, disabled: true` from server
+- [ ] `shariahSim.ts` has 4 strategies; Conservative set is `{1, 2}`
+- [ ] VaultPicker shows no "RWA / Sukuk" row in either Shariah card
+- [ ] `SHARIAH_REVIEW.md` exists with SR-001
+
+### Task B — Charity + Purification
+- [ ] `CharityModule.sol` compiles; `charityBps` cannot exceed 500; timelock enforced
+- [ ] `PurificationEscrow.sol` deducts purification before all other splits
+- [ ] Waterfall invariant fuzz passes: `purified + charity + manager + depositor == grossProfit`
+- [ ] `ZakatModule.sol` carries `@deprecated` NatSpec; all existing ZakatModule tests still green
+- [ ] `GET /api/zakat/estimate` returns share value + calculation template
+- [ ] UI shows "Charitable contribution (sadaqah)" — no "Zakat" label
+- [ ] `SHARIAH_REVIEW.md` has SR-002, SR-003, SR-004
+
+### Task C — Atomic Gold
+- [ ] `GoldExchangeAdapter` executes atomic swap in one call; no pending state after return
+- [ ] Cross-chain GOLD_SPREAD path reverts `NonAtomicGoldExchange`
+- [ ] Slippage bound reverts when `amountOut < minOut`
+- [ ] Gold strategy UI shows "Gold allocation (spot)" with board-ruling-pending note
+- [ ] `SHARIAH_REVIEW.md` has SR-005, SR-006, SR-007
+
+### All tasks (A + B + C)
+- [ ] All 145 existing tests green (updated tests carry a comment explaining the change)
+- [ ] `forge build` compiles with zero errors
+
+---
+
+## Phase 3 Done When (Tasks D + E — planned, not yet built)
+
+### Task D — SC Screening Service
+- [ ] `shariah-rules.yaml` versioned with all authority refs cited
+- [ ] `engine.ts` pure and deterministic — no network calls, no side effects
+- [ ] Each hard-exclude rule has a fixture test producing `FAIL` with the correct rule ID
+- [ ] Ratio boundary: `0.0499` → pass, `0.05` → REVIEW, `0.051` → FAIL
+- [ ] Missing data → `REVIEW` in all ratio screens
+- [ ] DefiLlama snapshots written to `server/screening/snapshots/` on every fetch
+- [ ] CoinGecko raw data never exposed in any API response
+- [ ] `GET /api/screening/latest` serves most recent report
+- [ ] `board/permitted-assets.json` has USDC, ETH, PAXG only — no OUSG/BUIDL
+- [ ] `bun test server/screening/tests/` passes
+
+### Task E — ShariahVault V2 + Migration
+- [ ] `ShariahVaultV2.deployCapital` reverts `NotScreened` when `pronouncementHash == 0`
+- [ ] `ShariahVaultV2.deployCapital` reverts when `block.timestamp >= expiresAt`
+- [ ] Non-boardRole cannot call `setScreening`
+- [ ] `ShariahAdapterRegistry` enforces 30-day timelock on all screening changes
+- [ ] V1 vault deposits and redemptions still work after V2 is deployed
+- [ ] Migration round-trip fuzz: V2 share value ≥ 99.9% of V1 USDC redeemed
+- [ ] `POST /api/apy/estimate` returns P10/P50/P90 with disclaimer; never a single number
+- [ ] APY panel in UI shows disclaimer always visible
+- [ ] Migration CTA requires two separate user signatures
+- [ ] `docs/migration-v1-to-v2.md` exists and explains V1 stays live indefinitely
+- [ ] `docs/agents/deployed-addresses.md` updated after deploy
+- [ ] All existing tests green; `forge build` zero errors
+
+---
+
+## Task F Done When (S6-H XAUT Gold Allocation)
+
+**Status: COMPLETE** (2026-10-22) — 242/242 tests green, zero lint/typecheck errors.
+
+- [x] `ShariahScoreAggregator.writeScore(5, ...)` accepted; `writeScore(4, ...)` still reverts `StrategyDeprecated`
+- [x] `SHARIAH_CONSERVATIVE` mask is `38` (0b100110); `SHARIAH_DYNAMIC` mask is `47` (0b101111)
+- [x] `GoldAllocationAdapter.deploy()` completes in one transaction; no USDC or XAUT stranded
+- [x] Stale oracle → `StaleGoldPrice()`; pool deviation > cap → `GoldPriceDeviation()`. Round-completeness checks added (startedAt > 0, answeredInRound >= roundId)
+- [x] Combined S2-H + S6-H value exceeding `MAX_GOLD_BPS` → `GoldCapExceeded()` on next deploy
+- [x] `isPriceSane()` returns false when oracle stale or pool deviation high; `currentValue()` falls back to `totalDeployed`
+- [x] All board-settable params reject changes before 30-day timelock elapses; `poolFee` bounded before uint24 cast; `oracleDecimals` updated atomically on oracle swap
+- [x] Wrong-role setter reverts; above-hard-cap setter reverts
+- [x] Fuzz: `currentValue()` within 1 unit for any `(balance, price)` — 512 runs PASS
+- [x] Fuzz: deploy→recall round trip loses ≤ `2 × maxSlippageBps / 10_000` — 512 runs PASS
+- [x] Fuzz: combined gold weight never exceeds `MAX_GOLD_BPS` — 512 runs PASS
+- [x] MockXAUT has 6 decimals; no hardcoded decimals in adapter
+- [x] `RedeployShariahAggregator.s.sol` compiles; certified[0..3]=true, certified[4..5]=false
+- [x] `DeployGoldAllocation.s.sol` compiles; records all addresses
+- [x] S6-H row visible in UI; Conservative shows 3 strategies (S2-H + S3-H + S6-H); Dynamic shows 5
+- [x] `HALAL` badge removed from Shariah toggle in LandingPage and Vault tier cards
+- [x] S3-H copy reads "Swap-fee income"
+- [x] SR-008 through SR-011 in `docs/agents/SHARIAH_REVIEW.md`
+- [x] `forge build` zero errors; `bun run check` zero errors; all 242 tests green (from 200 → 242 with Task F tests)

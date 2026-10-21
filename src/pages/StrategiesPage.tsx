@@ -13,11 +13,11 @@ interface StrategiesPageProps {
 
 type TabId = 'passive' | 'aggressive' | 'shariah-conservative' | 'shariah-dynamic';
 
-const ALL_TABS: { id: TabId; label: string; color: string; badge?: string }[] = [
+const ALL_TABS: { id: TabId; label: string; color: string }[] = [
   { id: 'passive',              label: 'Passive',              color: '#acc6e9' },
   { id: 'aggressive',           label: 'Aggressive',           color: '#f0b429' },
-  { id: 'shariah-conservative', label: 'Conservative Shariah', color: '#8dd89f', badge: 'HALAL' },
-  { id: 'shariah-dynamic',      label: 'Dynamic Shariah',      color: '#c9b8f5', badge: 'HALAL' },
+  { id: 'shariah-conservative', label: 'Conservative Shariah', color: '#8dd89f' },
+  { id: 'shariah-dynamic',      label: 'Dynamic Shariah',      color: '#c9b8f5' },
 ];
 
 // ── Shariah strategy data ──────────────────────────────────────────
@@ -50,7 +50,7 @@ function useShariahStrategies() {
   return { rows, online };
 }
 
-const SHARIAH_COLORS = ['#8dd89f', '#a8d4e8', '#c9b8f5', '#f0c17a', '#e8a0a8'];
+const SHARIAH_COLORS = ['#8dd89f', '#a8d4e8', '#c9b8f5', '#f0c17a', '#e8a0a8', '#d4b896'];
 
 function ShariahStrategyGrid({ minScore }: { minScore: number }) {
   const { rows, online } = useShariahStrategies();
@@ -174,7 +174,7 @@ export function StrategiesPage({ selectedTier, onSelectTier, onAgentRunningChang
           <h1 className="display text-2xl font-bold" style={{ color: 'var(--ink)', letterSpacing: '-0.03em' }}>Strategies</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--subtle)' }}>
             {isShariahTab
-              ? `Live scores for 5 Shariah-certified halal strategies${effectiveTier === 'shariah-conservative' ? ' (Conservative: S2-H, S3-H, S5-H only)' : ''}`
+              ? `Live scores for ${effectiveTier === 'shariah-conservative' ? '3' : '5'} active halal strategies${effectiveTier === 'shariah-conservative' ? ' (Conservative: Gold Spread + Halal LP + Gold Allocation)' : ''}`
               : 'Live scores for all 4 AI-scored signal strategies'}
           </p>
         </div>
@@ -193,12 +193,7 @@ export function StrategiesPage({ selectedTier, onSelectTier, onAgentRunningChang
               }}
             >
               {t.label}
-              {t.badge && (
-                <span className="text-xs px-1 py-0.5 rounded"
-                  style={{ background: 'rgba(141,216,159,0.12)', color: '#8dd89f', fontSize: '0.55rem' }}>
-                  {t.badge}
-                </span>
-              )}
+
             </button>
           ))}
         </div>

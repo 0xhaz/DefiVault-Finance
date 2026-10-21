@@ -12,7 +12,7 @@
  * or maysir (speculation). Permitted assets: USDC, ETH, PAXG, OUSG, BUIDL.
  */
 
-import { createPublicClient, http, parseAbi, formatUnits } from 'viem';
+import { createPublicClient, http, parseAbi } from 'viem';
 import { arbitrum, base, optimism, mainnet } from 'viem/chains';
 
 // ── RPC helpers ────────────────────────────────────────────────────────────
@@ -62,21 +62,16 @@ const ETH_USDC_POOLS: Record<string, `0x${string}`> = {
 // arc-studio-allow-onchain-literal
 const PAXG_USDC_POOL: `0x${string}` = '0x9f91579e4689F8f6e8d8d9fA42a33cFa9A0a1a9';
 
-// Ondo OUSG oracle on Ethereum mainnet — public price reference, not a user wallet
-// arc-studio-allow-onchain-literal
-const OUSG_TOKEN_ADDR: `0x${string}` = '0x1B19C19393e2d034D8Ff31ff34c81252FcBbee92';
-// arc-studio-allow-onchain-literal
-const OUSG_ORACLE_ADDR: `0x${string}` = '0x9Cad45a8BF0Ed41Ff33074449B357C7a1fAb4094';
+// OUSG token and oracle addresses are retained as reference comments only.
+// SR-001: OUSG/BUIDL removed from Shariah vault — do not use in live code.
+// OUSG token:  0x1B19C19393e2d034D8Ff31ff34c81252FcBbee92 (Ethereum mainnet)
+// OUSG oracle: 0x9Cad45a8BF0Ed41Ff33074449B357C7a1fAb4094 (Ethereum mainnet)
 
 // ── ABIs ───────────────────────────────────────────────────────────────────
 
 const SLOT0_ABI = parseAbi([
   'function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
   'function liquidity() external view returns (uint128)',
-]);
-
-const ORACLE_ABI = parseAbi([
-  'function getPrice(address token) external view returns (uint256 price, uint256 timestamp)',
 ]);
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -282,48 +277,109 @@ export interface RwaSukukResult {
   triggered: boolean;
 }
 
-let _lastOusgPrice: number | null = null;
-let _lastOusgTime: number | null = null;
 
+/**
+ * S4-H: RWA_SUKUK — DISABLED per SR-001.
+ *
+ * OUSG and BUIDL are US Treasury-backed funds. Their return constitutes riba
+ * (interest income) under SC Malaysia methodology. This strategy is suspended
+ * pending a board ruling. Index 4 is RESERVED_4 in ShariahScoreAggregator
+ * and all writes to it revert StrategyDeprecated on-chain.
+ *
+ * The scorer returns score=0 and disabled=true so the agent loop can log it
+ * without triggering an on-chain write attempt.
+ */
 export async function scoreRwaSukuk(): Promise<RwaSukukResult> {
-  let ousgPrice = 0;
-  let ousgApy = 0;
-
-  try {
-    const result = await ethClient.readContract({
-      address: OUSG_ORACLE_ADDR,
-      abi: ORACLE_ABI,
-      functionName: 'getPrice',
-      args: [OUSG_TOKEN_ADDR],
-    });
-    ousgPrice = Number(formatUnits(result[0], 18));
-  } catch {
-    const dayOffset = (Date.now() / 86400000) % 365;
-    ousgPrice = 100 * (1 + 0.052 * dayOffset / 365);
-  }
-
-  if (_lastOusgPrice && _lastOusgTime && ousgPrice > 0) {
-    const elapsed = Date.now() / 1000 - _lastOusgTime;
-    if (elapsed > 60) {
-      const periodReturn = (ousgPrice - _lastOusgPrice) / _lastOusgPrice;
-      ousgApy = Math.max(0, Math.min(20, (periodReturn / elapsed) * 365 * 24 * 3600 * 100));
-    }
-  }
-  if (ousgApy === 0) ousgApy = 5.0 + (Math.random() - 0.5) * 0.4;
-
-  _lastOusgPrice = ousgPrice;
-  _lastOusgTime = Date.now() / 1000;
-
-  const score = ousgApy >= 10 ? 90 : ousgApy >= 6 ? 70 : ousgApy >= 3 ? 40 : 20;
-
   return {
     strategy: 'RWA_SUKUK',
-    score,
+    score: 0,
     destinationDomain: 0,
-    signal: `OUSG NAV $${ousgPrice.toFixed(4)}, est APY ${ousgApy.toFixed(2)}%`,
-    ousgApy,
-    ousgPrice,
-    triggered: ousgApy >= 6,
+    signal: 'DISABLED — strategy suspended pending board ruling (SR-001)',
+    ousgApy: 0,
+    ousgPrice: 0,
+    triggered: false,
+  };
+}
+
+// ── Strategy S6-H: Gold Allocation (XAUT, spot) ───────────────────────────
+
+export interface GoldAllocationResult {
+  strategy: 'GOLD_ALLOCATION';
+  score: number;
+  destinationDomain: number;
+  signal: string;
+  goldWeightBps: number;      // current combined gold weight in bps (actual)
+  targetBps: number;          // goldAllocTargetBps from vault (default 2000 = 20%)
+  bandBps: number;            // goldAllocBandBps from vault (default 500 = 5%)
+  isPriceSane: boolean;
+  direction: 'BUY' | 'SELL' | 'NONE';
+  usdcAmount: number;         // USDC to buy or sell to return to target
+  triggered: boolean;
+  disabled: boolean;
+}
+
+/**
+ * S6-H: GOLD_ALLOCATION — XAUT spot allocation scorer.
+ *
+ * Scores high only when:
+ *   |goldWeight - goldAllocTargetBps| > goldAllocBandBps  AND  isPriceSane() == true
+ *
+ * Score is 0 when price is unsound (oracle stale or pool deviation exceeds cap).
+ * Polled every 5 minutes (caller responsibility — this function itself has no timer).
+ *
+ * On Arc Testnet: XAUT is not deployed; mock contracts are used.
+ * goldWeight is simulated based on time until real contract addresses are configured.
+ */
+export async function scoreGoldAllocation(): Promise<GoldAllocationResult> {
+  // On Arc Testnet, no live XAUT or oracle — simulate the weight for demo purposes.
+  // Production: read goldAllocationAdapter.currentValue(), vault.totalAssets(),
+  //   goldAllocTargetBps, goldAllocBandBps, and isPriceSane() from on-chain.
+  const targetBps = 2000;   // 20% target
+  const bandBps   = 500;    // 5% band — rebalance only outside ±5%
+  const isPriceSane = true; // testnet: always sane (mock oracle is always fresh)
+
+  // Simulate a slowly drifting gold weight
+  const t = Date.now() / 300_000; // cycle ~5 min
+  const simulatedWeightBps = Math.round(
+    targetBps + Math.sin(t * 0.7) * 1200 + Math.sin(t * 1.9) * 400
+  );
+  const clampedWeightBps = Math.max(0, Math.min(3000, simulatedWeightBps));
+
+  const drift = Math.abs(clampedWeightBps - targetBps);
+  const outsideBand = drift > bandBps;
+  const direction: 'BUY' | 'SELL' | 'NONE' = !outsideBand
+    ? 'NONE'
+    : clampedWeightBps < targetBps ? 'BUY' : 'SELL';
+
+  // USDC amount needed to return to target (approximate — 10,000 USDC notional vault)
+  const notionalVaultUsdc = 10_000;
+  const usdcAmount = outsideBand
+    ? Math.round(Math.abs(clampedWeightBps - targetBps) * notionalVaultUsdc / 10_000)
+    : 0;
+
+  const score = !isPriceSane ? 0
+    : !outsideBand ? 0
+    : drift >= 1500 ? 90    // >15% off target — strong signal
+    : drift >= 1000 ? 75    // >10% off target
+    : 65;                   // >5% off target (just outside band)
+
+  return {
+    strategy: 'GOLD_ALLOCATION',
+    score,
+    destinationDomain: 0, // always local — same atomic rule as S2-H
+    signal: !isPriceSane
+      ? 'SUSPENDED — oracle stale or pool deviation too high'
+      : !outsideBand
+        ? `Gold weight ${(clampedWeightBps / 100).toFixed(1)}% within target band (${((targetBps - bandBps) / 100).toFixed(0)}-${((targetBps + bandBps) / 100).toFixed(0)}%)`
+        : `${direction} signal: gold weight ${(clampedWeightBps / 100).toFixed(1)}% vs target ${(targetBps / 100).toFixed(0)}% (drift ${(drift / 100).toFixed(1)}%)`,
+    goldWeightBps: clampedWeightBps,
+    targetBps,
+    bandBps,
+    isPriceSane,
+    direction,
+    usdcAmount,
+    triggered: score >= 75,
+    disabled: false,
   };
 }
 
@@ -372,32 +428,45 @@ export const SHARIAH_STRATEGY_META = [
   },
   {
     id: 4, key: 'RWA_SUKUK', name: 'RWA / Sukuk Yield',
-    trigger: 'Every 45s', icon: 'building2',
-    description: 'Holds tokenized RWA assets (OUSG, BUIDL) directly for yield. The vault owns the asset — never pledges it.',
-    inputs: 'OUSG NAV oracle, BUIDL price feed on Ethereum mainnet',
-    signal: 'Annualized NAV appreciation rate',
-    targetRule: 'Yield above 6% APY becomes actionable',
-    shariahBasis: 'Asset ownership yielding distributions — halal. Explicitly no borrowing against these assets.',
-    permittedAssets: ['USDC', 'OUSG', 'BUIDL'],
+    trigger: 'SUSPENDED', icon: 'building2',
+    description: 'SUSPENDED — SR-001: OUSG/BUIDL are US Treasury-backed; yield is riba (interest income). Strategy index 4 is RESERVED_4 on-chain. See SHARIAH_REVIEW.md.',
+    inputs: 'N/A — scorer disabled',
+    signal: 'N/A',
+    targetRule: 'N/A',
+    shariahBasis: 'FAIL — US Treasury underlying constitutes riba income regardless of tokenisation.',
+    permittedAssets: [],
+  },
+  {
+    id: 5, key: 'GOLD_ALLOCATION', name: 'Gold Allocation (XAUT, spot)',
+    trigger: 'Every 5 min', icon: 'coins',
+    description: 'Holds up to 20% in allocated gold (XAUT), bought and sold in a single transaction. No yield; value follows the gold price.',
+    inputs: 'GoldAllocationAdapter.currentValue(), vault.totalAssets(), goldAllocTargetBps, isPriceSane()',
+    signal: 'Gold weight drift outside target band',
+    targetRule: '|weight - target| > band AND isPriceSane() == true',
+    shariahBasis: 'Spot allocated-gold holding — atomic USDC/XAUT swap (yad bi yad). Board acceptance pending (SR-008). XAUT not deployed on Arc Testnet — testnet uses MockXAUT.',
+    permittedAssets: ['USDC', 'XAUT'],
   },
 ];
 
-// ── Run all 5 Shariah strategies ──────────────────────────────────────────
+// ── Run all 6 Shariah strategies ──────────────────────────────────────────
 
 export async function runShariahScan() {
-  const [ethSpread, goldSpread, halalLP, murabaha, rwaSukuk] = await Promise.allSettled([
-    scoreEthSpread(),
-    scoreGoldSpread(),
-    scoreHalalLP(),
-    scoreMurabaha(),
-    scoreRwaSukuk(),
-  ]);
+  const [ethSpread, goldSpread, halalLP, murabaha, rwaSukuk, goldAllocation] =
+    await Promise.allSettled([
+      scoreEthSpread(),
+      scoreGoldSpread(),
+      scoreHalalLP(),
+      scoreMurabaha(),
+      scoreRwaSukuk(),
+      scoreGoldAllocation(),
+    ]);
 
   return {
-    ETH_SPREAD:  ethSpread.status  === 'fulfilled' ? ethSpread.value  : null,
-    GOLD_SPREAD: goldSpread.status === 'fulfilled' ? goldSpread.value : null,
-    HALAL_LP:    halalLP.status    === 'fulfilled' ? halalLP.value    : null,
-    MURABAHA:    murabaha.status   === 'fulfilled' ? murabaha.value   : null,
-    RWA_SUKUK:   rwaSukuk.status   === 'fulfilled' ? rwaSukuk.value   : null,
+    ETH_SPREAD:      ethSpread.status      === 'fulfilled' ? ethSpread.value      : null,
+    GOLD_SPREAD:     goldSpread.status     === 'fulfilled' ? goldSpread.value     : null,
+    HALAL_LP:        halalLP.status        === 'fulfilled' ? halalLP.value        : null,
+    MURABAHA:        murabaha.status       === 'fulfilled' ? murabaha.value       : null,
+    RWA_SUKUK:       rwaSukuk.status       === 'fulfilled' ? rwaSukuk.value       : null,
+    GOLD_ALLOCATION: goldAllocation.status === 'fulfilled' ? goldAllocation.value : null,
   };
 }

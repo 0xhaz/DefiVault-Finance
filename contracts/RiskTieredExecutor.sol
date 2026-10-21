@@ -14,8 +14,8 @@ contract RiskTieredExecutor is Ownable2Step {
     enum RiskTier {
         PASSIVE,
         AGGRESSIVE,
-        SHARIAH_CONSERVATIVE, // Halal LP (bit1) + Gold Spread (bit2) + RWA Sukuk (bit3) — low-vol only
-        SHARIAH_DYNAMIC       // All 5 halal strategies — full Shariah universe
+        SHARIAH_CONSERVATIVE, // Gold Spread (bit1) + Halal LP (bit2) — low-vol only; RWA_SUKUK removed per SR-001
+        SHARIAH_DYNAMIC       // All active halal strategies (5, bits 0-3+5) — full Shariah universe
     }
 
     struct StrategyConfig {
@@ -80,6 +80,7 @@ contract RiskTieredExecutor is Ownable2Step {
     uint256 public executionCooldown;
     uint256 public maxGasPrice;
     uint256 public lastExecutionTime;
+    bool private _executionLocked;
 
     uint8 public strategyMask;
 
@@ -98,18 +99,18 @@ contract RiskTieredExecutor is Ownable2Step {
             strategyMask = 9;   // 0b00001001 — S0 + S3
             tierName = "Passive";
         } else if (tier_ == RiskTier.SHARIAH_CONSERVATIVE) {
-            // Halal LP (bit1), Gold Spread (bit2), RWA/Sukuk (bit4) = 0b10110
+            // Gold Spread (bit1) + Halal LP (bit2) + Gold Allocation (bit5) = 0b100110 — SR-001 removed bit4
             minScoreToExecute = 80;
             executionCooldown = 2 hours;
             maxGasPrice = 20 gwei;
-            strategyMask = 22;  // 0b00010110 — bits 1,2,4
+            strategyMask = 38;  // 0b100110 — bits 1,2,5 (Gold Spread + LP + Gold Allocation)
             tierName = "Shariah Conservative";
         } else if (tier_ == RiskTier.SHARIAH_DYNAMIC) {
-            // All 5 halal strategies = 0b11111
+            // All active halal strategies (5) = 0b101111 — bit4 (RESERVED_4) off, bit5 (GOLD_ALLOCATION) on
             minScoreToExecute = 70;
             executionCooldown = 1 hours;
             maxGasPrice = 30 gwei;
-            strategyMask = 31;  // 0b00011111
+            strategyMask = 47;  // 0b101111 — bits 0,1,2,3,5
             tierName = "Shariah Dynamic";
         } else {
             // AGGRESSIVE
@@ -128,6 +129,8 @@ contract RiskTieredExecutor is Ownable2Step {
         if (block.timestamp < nextExecutionTime) {
             revert CooldownNotElapsed(nextExecutionTime - block.timestamp);
         }
+        if (_executionLocked) revert("ReentrancyGuard: reentrant call");
+        _executionLocked = true;
 
         uint8 score;
         uint8 idx;
@@ -178,6 +181,7 @@ contract RiskTieredExecutor is Ownable2Step {
         if (amount < config.minAmount || amount == 0) revert NothingToExecute();
 
         bool isShariahTier = (riskTier == RiskTier.SHARIAH_CONSERVATIVE || riskTier == RiskTier.SHARIAH_DYNAMIC);
+        lastExecutionTime = block.timestamp;
         if (isShariahTier || destinationDomain == 0) {
             vault.deployCapital(config.adapter, amount, "");
             IStrategyAdapter(config.adapter).deploy(amount);
@@ -193,7 +197,7 @@ contract RiskTieredExecutor is Ownable2Step {
             emit CrossChainExecutionTriggered(strategy, score, amount, destinationDomain, config.recipient, riskTier);
         }
 
-        lastExecutionTime = block.timestamp;
+        _executionLocked = false;
     }
 
     function setStrategyConfig(
