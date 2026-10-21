@@ -5,7 +5,7 @@ Live at [defivault.finance](https://defivault.finance) · USDC-native
 
 DeFiVault is an ERC-4626 vault protocol with four risk tiers across two communities — Conventional and Shariah. An on-chain AI agent continuously scores strategies, routes capital through protocol adapters, and executes the winning strategy on every cycle. All fees are transparent and on-chain; Shariah vaults auto-route charitable contributions before any profit split.
 
-**Current revision (Oct 2026):** Phase 2 complete. OUSG/BUIDL removed from the Shariah tier (SR-001); gold exchanges enforced as atomic single-transaction swaps for yad bi yad compliance (S2-H); S6-H XAUT Gold Allocation adapter added with Chainlink oracle + pool deviation guard and 30-day timelock on all board-settable parameters; `ShariahScoreAggregator` extended to 6 strategies; combined gold cap `MAX_GOLD_BPS = 3000` (30%) enforced across S2-H + S6-H. 242 tests green. Board rulings SR-001 through SR-011 in `docs/agents/SHARIAH_REVIEW.md`.
+**Current revision (Oct 2026):** Phases 2 and 3 complete. OUSG/BUIDL removed from the Shariah tier (SR-001); gold exchanges enforced as atomic single-transaction swaps for yad bi yad compliance (S2-H); S6-H XAUT Gold Allocation adapter added with Chainlink oracle + pool deviation guard and 30-day timelock on all board-settable parameters; combined gold cap `MAX_GOLD_BPS = 3000` (30%) across S2-H + S6-H. CharityModule + PurificationEscrow waterfall replaces ZakatModule for new deployments; SC Malaysia screening engine (`server/screening/`) with 11 SC-SAC rules and snapshot sink; ShariahVaultV2 with on-chain ShariahAdapterRegistry (pronouncement hash + expiry per adapter); migration UI and APY estimator with P10/P50/P90 disclaimers. 317 tests green. Board rulings SR-001 through SR-011 in `docs/agents/SHARIAH_REVIEW.md`.
 
 ---
 
@@ -21,7 +21,7 @@ DeFiVault is an ERC-4626 vault protocol with four risk tiers across two communit
 8. [Cross-Chain Flow](#cross-chain-flow)
 9. [Shariah Compliance Workflow](#shariah-compliance-workflow)
 10. [Fee Architecture](#fee-architecture)
-11. [Zakat Distribution](#zakat-distribution)
+11. [Charitable Contribution Waterfall](#charitable-contribution-waterfall)
 12. [Security Model](#security-model)
 13. [Test Coverage](#test-coverage)
 14. [Deployment](#deployment)
@@ -43,7 +43,8 @@ graph TB
         SA[Strategy Scorers]
         SS[Shariah Scorers]
         CP[CCTP Attestation Poller]
-        AC["API: /api/status · /api/shariah · /api/tiers"]
+        SC_ENG[Screening Engine — 11 SC-SAC rules]
+        AC["API: /api/status · /api/shariah · /api/screening · /api/charity · /api/apy"]
     end
 
     subgraph Conventional ["Conventional Vaults"]
@@ -58,11 +59,15 @@ graph TB
     subgraph Shariah ["Shariah Vaults"]
         SV_C[ShariahVault · Conservative]
         SV_D[ShariahVault · Dynamic]
+        SV_V2[ShariahVaultV2 · Registry-gated]
         RTE_SC[RiskTieredExecutor · SHARIAH_CONSERVATIVE]
         RTE_SD[RiskTieredExecutor · SHARIAH_DYNAMIC]
         SAGG[ShariahScoreAggregator]
         ST[TreasuryModule · Shariah]
-        ZM[ZakatModule]
+        ZM["ZakatModule (deprecated — v1 compat)"]
+        CM[CharityModule]
+        PE[PurificationEscrow]
+        REG[ShariahAdapterRegistry]
     end
 
     subgraph Adapters ["Protocol Adapters"]
@@ -90,6 +95,13 @@ graph TB
     SV_C --> ZM
     SV_D --> ST
     SV_D --> ZM
+    SV_C --> PE
+    SV_D --> PE
+    SV_V2 --> REG
+    SV_V2 --> PE
+    PE --> CM
+    PE --> ST
+    SC_ENG --> REG
     CV_P --> COMP
     CV_P --> CURVE
     CV_A --> AAVE
@@ -154,13 +166,38 @@ classDiagram
     class ShariahVault {
         +shariahTreasury: TreasuryModule
         +zakatModule: ZakatModule
+        +purificationEscrow: PurificationEscrow
+        +goldSpreadAdapter: address
+        +goldAllocationAdapter: address
         +shariahScreeningEnabled: bool
         +screened: mapping
         +deployCapital() override
-        +claimMusharakahProfit()
+        +claimMusharakahProfit() — delegates to purificationEscrow
         +sweepFeesToTreasury()
-        +name() svUSDC_name
-        +symbol() svUSDC
+        +name() virtual svUSDC_name
+        +symbol() virtual svUSDC
+    }
+
+    class ShariahVaultV2 {
+        +registry: ShariahAdapterRegistry
+        +deployCapital() override — checks registry
+        +setRegistry()
+        +name() svUSDCv2
+        +symbol() svUSDCv2
+    }
+
+    class ShariahAdapterRegistry {
+        +boardRole: mapping
+        +proposals: mapping
+        +screenings: mapping
+        +TIMELOCK_PERIOD: 30 days
+        +MAX_EXPIRY_PERIOD: 730 days
+        +proposeScreening(adapter, hash, expiresAt)
+        +executeScreening(adapter)
+        +proposeRemoval(adapter)
+        +executeRemoval(adapter)
+        +isScreened(adapter) bool
+        +grantBoardRole(address)
     }
 
     class TreasuryModule {
@@ -179,13 +216,36 @@ classDiagram
         +distributeZakat()
         +proposeZakatWalletChange()
         +confirmZakatWalletChange()
+        <<deprecated — v1 compat only>>
+    }
+
+    class CharityModule {
+        +charityBps: 250
+        +MAX_CHARITY_BPS: 500
+        +TIMELOCK_PERIOD: 30 days
+        +distributeCharity(grossProfit)
+        +proposeCharityWalletChange()
+        +proposeCharityRateChange()
+        +totalCharityDistributed: uint256
+    }
+
+    class PurificationEscrow {
+        +purificationBps: uint256
+        +MAX_PURIFICATION_BPS: 1000
+        +executeWaterfall(grossProfit, elapsed, principal)
+        +setPurificationBps(uint256)
     }
 
     ERC4626 <|-- AutonomousVault
     AutonomousVault <|-- ConventionalVault
     AutonomousVault <|-- ShariahVault
+    ShariahVault <|-- ShariahVaultV2
     ShariahVault --> TreasuryModule
     ShariahVault --> ZakatModule
+    ShariahVault --> PurificationEscrow
+    ShariahVaultV2 --> ShariahAdapterRegistry
+    PurificationEscrow --> CharityModule
+    PurificationEscrow --> TreasuryModule
     ConventionalVault --> TreasuryModule
 ```
 
@@ -224,8 +284,33 @@ Inherits `AutonomousVault`. Adds admin fee accrual (0.75% AUM, pro-rated per sec
 
 Inherits `AutonomousVault`. Overrides `deployCapital` to enforce:
 1. Adapter must be in `screened` mapping
-2. Asset must be in `permittedAssets` mapping (USDC, ETH, PAXG, OUSG, USDT, BUIDL)
+2. Asset must be in `permittedAssets` mapping (USDC, ETH, PAXG — OUSG and BUIDL removed per SR-001)
 3. Wakala fee accrued on every deployment
+4. Combined gold cap: `goldSpreadAdapter.currentValue() + goldAllocationAdapter.currentValue() <= MAX_GOLD_BPS * totalAssets() / 10_000`
+
+`claimMusharakahProfit(grossProfit)` now delegates to `purificationEscrow.executeWaterfall()` — reverts `PurificationEscrowNotSet` if escrow not wired. `MusharakahProfitClaimed` event emits 5 params: `(grossProfit, purified, charity, vaultShare, depositorShare)`.
+
+### `ShariahVaultV2.sol`
+
+Inherits `ShariahVault`. Adds on-chain governance via `ShariahAdapterRegistry`. Overrides `deployCapital` to check `registry.isScreened(strategy)` before the inherited checks — reverts `NotScreened` when `pronouncementHash == 0`, reverts `ScreeningExpired` when `block.timestamp >= expiresAt`. V1 vaults remain live; no forced migration.
+
+### `ShariahAdapterRegistry.sol`
+
+Governance-gated adapter registry. Board members (granted by owner) may propose and execute screening changes with a 30-day timelock. Each entry records a `pronouncementHash` (bytes32) and `expiresAt` (uint256 timestamp). `isScreened(adapter)` returns true only when both are non-zero and not expired. `MAX_EXPIRY_PERIOD = 730 days`.
+
+### `CharityModule.sol`
+
+Routes charitable contributions (sadaqah) from Shariah gross profit to the board-designated charity wallet. Default rate: `charityBps = 250` (2.5%), hard cap `MAX_CHARITY_BPS = 500` (5%). Both wallet address and rate require a 30-day timelock to change. Only the bound vault (or PurificationEscrow) can call `distributeCharity`.
+
+### `PurificationEscrow.sol`
+
+Enforces the four-step Shariah profit waterfall on every `claimMusharakahProfit` call:
+1. **Purification** — `purificationBps` of gross profit sent directly to CharityModule's charity wallet
+2. **Sadaqah** — `charityBps` of the remaining profit routed via CharityModule
+3. **Musharakah split** — remaining divided by TreasuryModule (10% vault share above 4% hurdle)
+4. **Depositor return** — depositor share transferred back to vault
+
+Invariant proven by fuzz: `purified + charity + vaultShare + depositorShare == grossProfit` (512 runs).
 
 ### `RiskTieredExecutor.sol`
 
@@ -297,11 +382,7 @@ Accounting-only fee ledger. Actual USDC transfer happens only when the vault cal
 
 ### `ZakatModule.sol`
 
-Auto-routes 2.5% of Shariah gross profit to a charity wallet before the Musharakah split.
-
-- Zakat rate: fixed at `ZAKAT_BPS = 250` (2.5%), non-adjustable
-- Wallet changes: 30-day timelock via `proposeZakatWalletChange` → `confirmZakatWalletChange`
-- Only the bound vault can call `distributeZakat`
+**Deprecated for new deployments.** Kept live for v1 vault history and redemption continuity. Do not wire into new vaults — use `CharityModule` + `PurificationEscrow` instead. The fixed `ZAKAT_BPS = 250` (2.5%) rate and 30-day wallet timelock remain intact for v1 vault operations.
 
 ### `PositionTracker.sol`
 
@@ -467,31 +548,39 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    D[Depositor sends USDC] --> SV[ShariahVault]
+    D[Depositor sends USDC] --> SV[ShariahVault / ShariahVaultV2]
 
     SV --> SC{Shariah screening enabled?}
     SC -- Yes --> CH{adapter in screened mapping?}
     CH -- No --> REV[revert AdapterNotScreened]
-    CH -- Yes --> WF["Accrue Wakala fee — 0.5% AUM/year"]
-    SC -- No --> WF
+    CH -- Yes --> V2{ShariahVaultV2?}
+    V2 -- Yes --> RG{"registry.isScreened(adapter)?"}
+    RG -- No --> RNS[revert NotScreened]
+    RG -- expired --> RSE[revert ScreeningExpired]
+    RG -- Yes --> WF
+    V2 -- No --> WF
+    SC -- No --> WF["Accrue Wakala fee — 0.5% AUM/year"]
 
     WF --> DC[deployCapital to halal adapter]
 
     DC --> PROFIT{Profit realized?}
-    PROFIT -- Yes --> ZK["claimMusharakahProfit(grossProfit)"]
-    ZK --> ZD["ZakatModule.distributeZakat — 2.5% to charity"]
-    ZD --> MS["TreasuryModule.calculateMusharakahSplit — 10% surplus above 4% hurdle"]
-    MS --> RP["TreasuryModule.recordMusharakahProfit — vaultShare to pendingFees"]
-    RP --> DEP[Depositor keeps depositorShare]
+    PROFIT -- Yes --> CMC["claimMusharakahProfit(grossProfit)"]
+    CMC --> PE["PurificationEscrow.executeWaterfall"]
+    PE --> PUR["1. Purification — purificationBps to charity wallet"]
+    PUR --> SAD["2. Sadaqah — charityBps via CharityModule"]
+    SAD --> MS["3. TreasuryModule.calculateMusharakahSplit — 10% above 4% hurdle"]
+    MS --> RP["4. vaultShare to pendingFees; depositorShare returned to vault"]
 
     style SV fill:#1a472a,color:#fff
-    style ZD fill:#92400e,color:#fff
+    style PE fill:#92400e,color:#fff
     style CH fill:#1e3a5f,color:#fff
+    style RG fill:#1e3a5f,color:#fff
 ```
 
-**Permitted Shariah assets:** USDC, USDT, ETH, PAXG — OUSG and BUIDL removed per SR-001  
+**Permitted Shariah assets:** USDC, ETH, PAXG — OUSG and BUIDL removed per SR-001  
 **XAUT:** S6-H adapter written; `shariahCertified[5]` is `false` until SR-008 accepted  
-**Prohibited actions:** Aave lending (riba), perp funding payments, front-running MEV, non-atomic gold transfers across chain boundaries (`goldCrossChainBlocked = true`)
+**Prohibited actions:** Aave lending (riba), perp funding payments, front-running MEV, non-atomic gold transfers across chain boundaries (`goldCrossChainBlocked = true`)  
+**V2 registry requirement:** `pronouncementHash != 0` AND `block.timestamp < expiresAt` — board must execute screening with a valid SC-SAC pronouncement hash before any adapter is usable in V2
 
 ---
 
@@ -506,9 +595,11 @@ graph LR
     end
 
     subgraph SFEE ["Shariah"]
-        SV[ShariahVault] -->|Wakala 0.5% AUM| STM["TreasuryModule (Shariah)"]
-        SV -->|Musharakah 10% above 4% hurdle| STM
-        SV -->|Zakat 2.5% of gross| ZW[Charity wallet]
+        SV2[ShariahVault] -->|Wakala 0.5% AUM| STM["TreasuryModule (Shariah)"]
+        SV2 -->|claimMusharakahProfit| PE2["PurificationEscrow"]
+        PE2 -->|purificationBps to| ZW[Charity wallet — purification]
+        PE2 -->|charityBps via CharityModule| ZW2[Charity wallet — sadaqah]
+        PE2 -->|Musharakah 10% above 4% hurdle| STM
         STM -->|sweepFeesToTreasury| SRECV[Fee receiver]
     end
 ```
@@ -517,39 +608,56 @@ graph LR
 |---|---|---|---|
 | Admin fee (Conventional) | 0.75% AUM / year | Pro-rated per second, accounting-only | On every `deployCapital` |
 | Wakala fee (Shariah) | 0.5% AUM / year | Pro-rated per second | On every Shariah `deployCapital` |
-| Musharakah profit share | 10% of profit above 4% hurdle | Applied on `claimMusharakahProfit` | When manager claims |
-| Charitable contribution | 2.5% of gross Musharakah profit | Auto-routed before Musharakah split | First, before any split |
+| Musharakah profit share | 10% of profit above 4% hurdle | Applied via PurificationEscrow on `claimMusharakahProfit` | When manager claims |
+| Purification (sadaqah) | Board-set `purificationBps` (default 0; max 10%) | Step 1 of waterfall; sent directly to charity wallet | Before any Musharakah split |
+| Charitable contribution (sadaqah) | Board-set `charityBps` (default 2.5%; max 5%) | Step 2 of waterfall; routed via CharityModule | After purification, before split |
 
 ---
 
-## Zakat Distribution
+## Charitable Contribution Waterfall
+
+The four-step waterfall is enforced by `PurificationEscrow.executeWaterfall()` on every `claimMusharakahProfit` call. The fuzz invariant `purified + charity + vaultShare + depositorShare == grossProfit` is proven at 512 runs.
 
 ```mermaid
 sequenceDiagram
     participant Manager
-    participant ShariahVault as ShariahVault
-    participant ZakatModule as ZakatModule
-    participant Charity as Charity Wallet
-    participant Treasury as TreasuryModule (Shariah)
+    participant SV as ShariahVault
+    participant PE as PurificationEscrow
+    participant CW as Charity Wallet
+    participant CM as CharityModule
+    participant TM as TreasuryModule (Shariah)
 
-    Manager->>ShariahVault: claimMusharakahProfit(grossProfit)
-    ShariahVault->>ShariahVault: forceApprove(zakatModule, grossProfit)
-    ShariahVault->>ZakatModule: distributeZakat(grossProfit)
-    ZakatModule->>ZakatModule: zakatAmount = grossProfit × 2.5%
-    ZakatModule->>Charity: safeTransferFrom(vault, charity, zakatAmount)
-    ZakatModule-->>ShariahVault: (zakatAmount, remaining)
-    ShariahVault->>Treasury: calculateMusharakahSplit(remaining, elapsed, principal)
-    Treasury-->>ShariahVault: (hurdleAmount, vaultShare, depositorShare)
-    ShariahVault->>Treasury: recordMusharakahProfit(vaultShare)
-    ShariahVault->>ShariahVault: reset hurdlePrincipal + hurdleStartTime
-    ShariahVault-->>Manager: MusharakahProfitClaimed event
+    Manager->>SV: claimMusharakahProfit(grossProfit)
+    SV->>SV: forceApprove(purificationEscrow, grossProfit)
+    SV->>PE: executeWaterfall(grossProfit, elapsed, principal)
+
+    Note over PE: Step 1 — Purification
+    PE->>CW: safeTransfer(purified = grossProfit × purificationBps%)
+
+    Note over PE: Step 2 — Sadaqah via CharityModule
+    PE->>CM: distributeCharity(afterPurification)
+    CM->>CW: safeTransferFrom(vault, charity, charityAmount)
+    CM-->>PE: (charityAmount, remaining)
+
+    Note over PE: Step 3 — Musharakah split
+    PE->>TM: calculateMusharakahSplit(remaining, elapsed, principal)
+    TM-->>PE: (hurdleAmount, vaultShare, depositorShare)
+    PE->>TM: recordMusharakahProfit(vaultShare)
+
+    Note over PE: Step 4 — Return depositor share
+    PE->>SV: safeTransfer(depositorShare)
+    PE-->>SV: WaterfallExecuted(grossProfit, purified, charity, vaultShare, depositorShare)
+    SV-->>Manager: MusharakahProfitClaimed(grossProfit, purified, charity, vaultShare, depositorShare)
 ```
 
-**Zakat wallet changes require a 30-day timelock:**
+**All wallet and rate changes require a 30-day timelock:**
 
 ```
-proposeZakatWalletChange(newWallet)  →  wait 30 days  →  confirmZakatWalletChange()
+CharityModule.proposeCharityWalletChange(newWallet)  →  wait 30 days  →  confirmCharityWalletChange()
+CharityModule.proposeCharityRateChange(newBps)        →  wait 30 days  →  confirmCharityRateChange()
 ```
+
+The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is not wired into any new vault. V1 redemptions remain available at NAV with no forced migration.
 
 ---
 
@@ -567,8 +675,11 @@ proposeZakatWalletChange(newWallet)  →  wait 30 days  →  confirmZakatWalletC
 | Gas price manipulation | `maxGasPrice` guard per tier in `RiskTieredExecutor` |
 | Cross-chain double-settle | `settleCrossChain` deletes `pendingCrossChain[nonce]` atomically |
 | Same-domain CCTP loop | `deployCrossChain` reverts `SameDomainDeploy` if `destDomain == sourceDomain` |
-| Charitable wallet rug | 30-day timelock on all `ZakatModule` wallet changes |
+| Charitable wallet rug | 30-day timelock on all `CharityModule` wallet + rate changes; `ZakatModule` also timelocked for v1 compat |
 | RWA lending exposure | `RwaYieldAdapter` has no approve-for-lending function by design |
+| Unscreened adapter in V2 | `ShariahAdapterRegistry.isScreened` checks hash non-zero AND expiry; board + 30-day timelock to screen |
+| Screening expiry bypass | `ScreeningExpired` revert when `block.timestamp >= expiresAt`; max expiry 730 days enforced at proposal |
+| Combined deduction drain | `MAX_COMBINED_DEDUCTION_BPS = 5000`; PurificationEscrow reverts if purification + charity would exceed 50% |
 | Gold cap breach | `ShariahVault.deployCapital` sums `goldSpreadAdapter.currentValue() + goldAllocationAdapter.currentValue()` and reverts `GoldCapExceeded` when combined > `MAX_GOLD_BPS` (30%) |
 | Non-atomic gold cross-chain | `ShariahVault.deployCrossChain` reverts `NonAtomicGoldExchange` when `goldCrossChainBlocked = true` |
 | Stale Chainlink gold price | `GoldAllocationAdapter._getOraclePrice` checks `startedAt > 0`, `answeredInRound >= roundId`, `answer > 0`, and `block.timestamp - updatedAt <= maxStalenessSecs` |
@@ -580,7 +691,9 @@ proposeZakatWalletChange(newWallet)  →  wait 30 days  →  confirmZakatWalletC
 
 ## Test Coverage
 
-242 tests — 142 unit + 100 fuzz — across 17 test files in `contracts/test/`.
+317 tests — 192 unit + 125 fuzz — across 21 Foundry test files in `contracts/test/`, plus 47 bun tests in `server/screening/tests/`.
+
+**Foundry test suite (`forge test --fuzz-runs 512`):**
 
 | File | Tests | Type | Coverage |
 |---|---|---|---|
@@ -590,9 +703,13 @@ proposeZakatWalletChange(newWallet)  →  wait 30 days  →  confirmZakatWalletC
 | `TreasuryModuleTest.t.sol` | 16 | Unit | Accrue, claim, Musharakah split, bps guards |
 | `ZakatModuleTest.t.sol` | 12 | Unit | Distribute, timelock, propose/confirm/cancel |
 | `CommodityMurabahaAdapterTest.t.sol` | 18 | Unit | Request, execute, settle, expire, DoS guard |
-| `ShariahVaultTaskATest.t.sol` | 10 | Unit | StrategyDeprecated guard, mask values, OUSG recall script |
+| `ShariahVaultTaskATest.t.sol` | 11 | Unit | StrategyDeprecated guard, mask values, OUSG recall script |
 | `GoldExchangeAdapterTest.t.sol` | 31 | Unit | Atomic swap, slippage, cross-chain block, combined cap |
 | `GoldAllocationAdapterTest.t.sol` | 28 | Unit | Oracle guards, deviation, timelock params, combined cap |
+| `CharityModuleTest.t.sol` | 20 | Unit | Distribute, wallet + rate timelock, cap enforcement |
+| `PurificationEscrowTest.t.sol` | 15 | Unit | Waterfall invariant, steps 1–4, ShariahVault integration |
+| `ShariahAdapterRegistryTest.t.sol` | 17 | Unit | Screening lifecycle, removal, board role, all custom errors |
+| `ShariahVaultV2Test.t.sol` | 9 | Unit | NotScreened / ScreeningExpired reverts, V1 compat, migration round-trip |
 | `FuzzAutonomousVault.t.sol` | 10 | Fuzz (512 runs) | Round-trip, multi-depositor fairness, cap at all amounts |
 | `FuzzScoreAggregator.t.sol` | 9 | Fuzz (512 runs) | Winner invariant, ring-buffer, staleness, access control |
 | `FuzzRiskTieredExecutor.t.sol` | 10 | Fuzz (512 runs) | Score/cooldown/gas guards at all param values |
@@ -601,14 +718,27 @@ proposeZakatWalletChange(newWallet)  →  wait 30 days  →  confirmZakatWalletC
 | `FuzzCommodityMurabaha.t.sol` | 9 | Fuzz (512 runs) | Sale price math, O(1) removal, max-trade cap |
 | `FuzzGoldExchangeAdapter.t.sol` | 13 | Fuzz (512 runs) | Round-trip value, no PAXG stranded, cap invariant |
 | `FuzzGoldAllocationAdapter.t.sol` | 5 | Fuzz (512 runs) | `currentValue()` precision, round-trip, gold cap invariant, timelock |
+| `FuzzCharityModule.t.sol` | 6 | Fuzz (512 runs) | Arithmetic exactness, cap, timelock boundary, accumulator monotonicity |
+| `FuzzPurificationEscrow.t.sol` | 4 | Fuzz (512 runs) | Waterfall invariant, zero-purification, charity proportionality |
+| `FuzzShariahVaultV2.t.sol` | 4 | Fuzz (512 runs) | Migration round-trip NAV, timelock, screening expiry lifecycle, allocation cap |
 
-Run the full suite:
+**Bun screening tests (`bun test server/screening/tests/`):**
+
+47 tests covering all 11 SC-SAC rules, boundary conditions for RS-002 three-zone screen (0.0499/0.05/0.051), missing data → REVIEW, verdict priority combiner, known protocol fixtures (Aave FAIL / OUSG FAIL / UniV3 PASS / PAXG PASS / Hyperliquid FAIL), and determinism guarantee.
+
+Run the full Foundry suite:
 
 ```bash
 forge test --fuzz-runs 512
 ```
 
-Run a single file:
+Run the screening engine bun tests:
+
+```bash
+bun test server/screening/tests/
+```
+
+Run a single Foundry file:
 
 ```bash
 forge test --match-path contracts/test/AutonomousVaultTest.t.sol -vv
@@ -625,7 +755,7 @@ All contracts deploy to **Arc Testnet** (chain ID 2911) with USDC as the native 
 ```
 1.  TreasuryModule (Conventional)                  — no deps
 2.  TreasuryModule (Shariah)                       — no deps
-3.  ZakatModule × 2                                — no deps (one per Shariah vault)
+3.  ZakatModule × 2                                — no deps (one per Shariah v1 vault; deprecated)
 4.  ScoreAggregator                                — no deps
 5.  ShariahScoreAggregator (6-strategy)            — no deps   [script: RedeployShariahAggregator.s.sol]
 6.  ConventionalVault (Passive)                    — needs TreasuryModule
@@ -640,6 +770,13 @@ All contracts deploy to **Arc Testnet** (chain ID 2911) with USDC as the native 
 15. setStrategyConfig per adapter                  — configures each adapter per tier
 16. setGoldSpreadAdapter / setGoldAllocationAdapter on ShariahVault
 17. setCertified(0..3, true) — indices 4 and 5 remain false (SR-001 and SR-008 pending)
+18. CharityModule                                  — needs asset + charityWallet + vault [script: DeployShariahV2.s.sol]
+19. PurificationEscrow                             — needs asset + charityModule + shariahTreasury
+20. setPurificationEscrow on ShariahVault (Conservative + Dynamic)
+21. ShariahAdapterRegistry                         — owner grants boardRole to board multisig
+22. ShariahVaultV2 (Conservative + Dynamic)        — needs TreasuryModule + ZakatModule + registry [script: DeployShariahV2.s.sol]
+23. board: proposeScreening per adapter            — wait 30 days → executeScreening (one per adapter per vault)
+24. setRegistry on ShariahVaultV2 if registry rotated — owner-only; 30-day timelock for re-screening
 ```
 
 **Constructor args quick reference:**
@@ -693,12 +830,16 @@ All deployed vault addresses are recorded in `AGENTS.md` after deployment.
 contracts/
 ├── AutonomousVault.sol          # Base ERC-4626 vault (pause gates on all capital paths)
 ├── ConventionalVault.sol        # Conventional tier (admin fee)
-├── ShariahVault.sol             # Shariah tier (Wakala + Musharakah + gold cap)
+├── ShariahVault.sol             # Shariah tier (Wakala + Musharakah + gold cap + waterfall)
+├── ShariahVaultV2.sol           # V2: registry-gated deployCapital; inherits ShariahVault
+├── ShariahAdapterRegistry.sol   # On-chain adapter registry (board role + 30-day timelock)
+├── CharityModule.sol            # Charitable contribution router (board-settable rate + wallet)
+├── PurificationEscrow.sol       # 4-step Shariah profit waterfall (purification → sadaqah → Musharakah → depositor)
 ├── ScoreAggregator.sol          # 4-strategy conventional scorer
 ├── ShariahScoreAggregator.sol   # 6-strategy Shariah scorer (index 4 deprecated)
 ├── RiskTieredExecutor.sol       # Strategy router (4 tiers; reentrancy guard)
 ├── TreasuryModule.sol           # Fee accounting module
-├── ZakatModule.sol              # Charitable contribution router (30-day timelock)
+├── ZakatModule.sol              # DEPRECATED — v1 compat only; do not wire into new vaults
 ├── PositionTracker.sol          # Position lifecycle + PnL
 ├── IStrategyAdapter.sol         # Adapter interface
 ├── VaultExecutor.sol            # Legacy executor (superseded)
@@ -723,24 +864,40 @@ contracts/
 ├── script/
 │   ├── RecallRwaFromShariah.s.sol        # Unscreen RwaYieldAdapter (Task A)
 │   ├── RedeployShariahAggregator.s.sol   # Re-deploy 6-strategy aggregator (Task F)
-│   └── DeployGoldAllocation.s.sol        # Deploy mocks + adapter + wire vaults (Task F)
+│   ├── DeployGoldAllocation.s.sol        # Deploy mocks + adapter + wire vaults (Task F)
+│   └── DeployShariahV2.s.sol             # Deploy CharityModule + PurificationEscrow + V2 vault + registry (Task E)
 └── test/
-    ├── *Test.t.sol              # 142 unit tests
-    └── Fuzz*.t.sol              # 100 fuzz tests (512 runs each)
+    ├── *Test.t.sol              # 192 unit tests across 13 files
+    └── Fuzz*.t.sol              # 125 fuzz tests across 11 files (512 runs each)
 
 server/
-├── agent.ts                     # AI agent (scoring + execution)
-└── shariah-strategies.ts        # Shariah strategy scorers (6 strategies; S5-H disabled)
+├── agent.ts                     # AI agent (scoring + execution + charity/apy endpoints)
+├── shariah-strategies.ts        # Shariah strategy scorers (6 strategies; S5-H disabled)
+├── screening/
+│   ├── shariah-rules.yaml       # 11 SC-SAC rules (5 hard-exclude, 3 ratio, 3 qualitative)
+│   ├── engine.ts                # Pure screening function; verdict: PASS / REVIEW / FAIL
+│   ├── sources/
+│   │   ├── defi-llama.ts        # DeFiLlama data source with snapshot sink
+│   │   └── protocol-profiles.ts # Static flag registry for 12 known protocols
+│   └── tests/
+│       └── engine.test.ts       # 47 bun tests covering all rules + boundary conditions
+└── board/
+    └── permitted-assets.json    # USDC/ETH/PAXG permitted; OUSG/BUIDL prohibited (SR-001)
 
 src/
 ├── App.tsx                      # Router + vault-mode state
-├── pages/                       # 6 route pages
-├── components/                  # UI components
+├── pages/                       # 6 route pages (includes SettingsPage with MigrationPanel)
+├── components/
+│   ├── CharityTracker.tsx       # Charitable contribution tracker (SR-002 pending badge)
+│   ├── MigrationPanel.tsx       # V1 → V2 migration UI (two-step; APY P10/P50/P90)
+│   └── ...                      # Other UI components
 └── lib/shariahSim.ts            # Simulated scores (pre-deploy; 6 strategies)
 
-docs/agents/
-├── SHARIAH_REVIEW.md            # Board ruling stubs SR-001 through SR-011
-└── shariah-vault-revision-plan.md
+docs/
+├── agents/
+│   ├── SHARIAH_REVIEW.md            # Board ruling stubs SR-001 through SR-011
+│   └── shariah-vault-revision-plan.md
+└── migration-v1-to-v2.md           # V1 → V2 migration guide (no forced migration)
 ```
 
 ---

@@ -6,6 +6,22 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+/**
+ * @dev DEPRECATED — superseded by CharityModule + PurificationEscrow (Task B).
+ *
+ *      ZakatModule remains deployed and functional so that v1 vault history and
+ *      existing on-chain recordings are preserved. New ShariahVault deployments
+ *      MUST use CharityModule + PurificationEscrow instead.
+ *
+ *      ZakatModule MUST NOT be used as the primary profit-routing mechanism in any
+ *      new vault deployment. See SHARIAH_REVIEW.md SR-002 / SR-003 / SR-004 for the
+ *      board rulings required before CharityModule goes live.
+ *
+ *      "Zakat" is a specific religious obligation (2.5% of annual nisab-exceeding
+ *      wealth). This contract calculates and routes a fixed 2.5% of Musharakah
+ *      gross profit, which may not satisfy the legal definition of Zakat without
+ *      a formal board pronouncement. CharityModule uses the term "sadaqah" instead.
+ */
 contract ZakatModule is Ownable2Step {
     using SafeERC20 for IERC20;
 

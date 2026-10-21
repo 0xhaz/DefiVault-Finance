@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {AutonomousVault} from "./AutonomousVault.sol";
 import {TreasuryModule} from "./TreasuryModule.sol";
 import {ZakatModule} from "./ZakatModule.sol";
+import {PurificationEscrow} from "./PurificationEscrow.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
@@ -27,17 +28,24 @@ contract ShariahVault is AutonomousVault {
     /// @dev Thrown when deploying to either gold adapter would push combined gold above MAX_GOLD_BPS.
     error GoldCapExceeded(uint256 combinedGoldValue, uint256 cap);
 
+    error PurificationEscrowNotSet();
+
     event AdapterScreened(address indexed adapter, bool approved);
     event PermittedAssetUpdated(address indexed asset_, bool permitted);
     event WakalaFeeAccrued(uint256 amount);
-    event MusharakahProfitClaimed(uint256 grossProfit, uint256 zakatAmount, uint256 vaultShare, uint256 depositorShare);
+    event MusharakahProfitClaimed(uint256 grossProfit, uint256 purified, uint256 charity, uint256 vaultShare, uint256 depositorShare);
     event ShariahScreeningToggled(bool enabled);
     event GoldCrossChainBlockedUpdated(bool blocked);
     event GoldAllocationAdapterUpdated(address indexed adapter);
     event GoldSpreadAdapterUpdated(address indexed adapter);
+    event PurificationEscrowUpdated(address indexed escrow);
 
     TreasuryModule public immutable shariahTreasury;
+    /// @dev v1 — DEPRECATED. Kept for history. New profit routing uses purificationEscrow.
     ZakatModule public immutable zakatModule;
+    /// @notice v2 profit-distribution waterfall: purification → sadaqah → Musharakah split.
+    ///         Set via setPurificationEscrow(). If zero, claimMusharakahProfit reverts.
+    PurificationEscrow public purificationEscrow;
 
     /// @notice Hard cap: combined S2-H (PAXG) + S6-H (XAUT) value must not exceed 30% of totalAssets.
     /// @dev    Hard-coded — not board-settable. Requires a contract upgrade to change.
@@ -79,11 +87,11 @@ contract ShariahVault is AutonomousVault {
         permittedAssets[address(asset_)] = true;
     }
 
-    function name() public pure override(ERC20, IERC20Metadata) returns (string memory) {
+    function name() public pure virtual override(ERC20, IERC20Metadata) returns (string memory) {
         return "Shariah Vault Share";
     }
 
-    function symbol() public pure override(ERC20, IERC20Metadata) returns (string memory) {
+    function symbol() public pure virtual override(ERC20, IERC20Metadata) returns (string memory) {
         return "svUSDC";
     }
 
@@ -150,24 +158,35 @@ contract ShariahVault is AutonomousVault {
         emit WakalaFeeAccrued(fee);
     }
 
+    /**
+     * @notice Distribute Shariah profit through the v2 waterfall (purification → sadaqah → Musharakah).
+     * @dev    Requires `purificationEscrow` to be set (setPurificationEscrow).
+     *         The escrow contract enforces the full invariant:
+     *           purified + charity + vaultShare + depositorShare == grossProfit
+     *
+     *         v1 ZakatModule path has been removed. Existing v1 vaults retain their
+     *         ZakatModule and continue to function — only new profit claims use this path.
+     */
     function claimMusharakahProfit(uint256 grossProfit) external onlyManagerOrOwner {
-        IERC20(asset()).forceApprove(address(zakatModule), grossProfit);
-        (uint256 zakatAmount, uint256 remaining) = zakatModule.distributeZakat(grossProfit);
-        IERC20(asset()).forceApprove(address(zakatModule), 0);
+        if (address(purificationEscrow) == address(0)) revert PurificationEscrowNotSet();
 
-        (uint256 hurdleAmount, uint256 vaultShare, uint256 depositorShare) = shariahTreasury.calculateMusharakahSplit(
-            remaining,
-            block.timestamp - hurdleStartTime,
-            hurdlePrincipal
-        );
-        hurdleAmount;
+        // Approve escrow to pull the gross profit from vault.
+        IERC20(asset()).forceApprove(address(purificationEscrow), grossProfit);
 
-        shariahTreasury.recordMusharakahProfit(vaultShare);
+        (uint256 purified, uint256 charity, uint256 vaultShare, uint256 depositorShare) =
+            purificationEscrow.executeWaterfall(
+                grossProfit,
+                block.timestamp - hurdleStartTime,
+                hurdlePrincipal
+            );
+
+        // Clear any leftover allowance (defensive).
+        IERC20(asset()).forceApprove(address(purificationEscrow), 0);
 
         hurdlePrincipal = totalAssets();
         hurdleStartTime = block.timestamp;
 
-        emit MusharakahProfitClaimed(grossProfit, zakatAmount, vaultShare, depositorShare);
+        emit MusharakahProfitClaimed(grossProfit, purified, charity, vaultShare, depositorShare);
     }
 
     /// @notice Sweep accrued fees to a receiver. Amount is capped to `pendingFees` to
@@ -217,5 +236,14 @@ contract ShariahVault is AutonomousVault {
     function setGoldAllocationAdapter(address adapter) external onlyOwner {
         goldAllocationAdapter = adapter;
         emit GoldAllocationAdapterUpdated(adapter);
+    }
+
+    /// @notice Set the PurificationEscrow address for v2 Musharakah profit distribution.
+    /// @dev    Must be set before claimMusharakahProfit() can be called.
+    ///         The escrow must be constructed with this vault's address, asset,
+    ///         a CharityModule, and the shariahTreasury.
+    function setPurificationEscrow(address escrow) external onlyOwner {
+        purificationEscrow = PurificationEscrow(escrow);
+        emit PurificationEscrowUpdated(escrow);
     }
 }

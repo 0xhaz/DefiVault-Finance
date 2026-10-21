@@ -1,0 +1,163 @@
+# Shariah Screening Rules — SC Malaysia Methodology
+# Authority: Securities Commission Malaysia (SC) Shariah Advisory Council (SAC)
+# Reference:  SC Revised Shariah Screening Methodology (2013 / updated 2023)
+# Version:    1.0.0
+# Updated:    2026-10-21
+#
+# Each rule has:
+#   id:           unique rule identifier
+#   category:     HARD_EXCLUDE | RATIO | QUALITATIVE
+#   description:  plain-English description
+#   threshold:    numeric boundary (for RATIO rules)
+#   operator:     gte | gt | lte | lt (direction that triggers FAIL)
+#   authority:    citation
+#   outcome:      FAIL | REVIEW (what a threshold breach produces)
+#
+# RATIO rules with missing data produce REVIEW (not FAIL).
+# HARD_EXCLUDE rules with any confirmed activity produce FAIL unconditionally.
+
+version: "1.0.0"
+methodology: "SC Malaysia SAC Revised Screening Methodology"
+jurisdiction: "Malaysia"
+lastUpdated: "2026-10-21"
+
+hardExcludes:
+  - id: HX-001
+    description: "Conventional interest-bearing lending or borrowing (riba)"
+    examples:
+      - "Aave lending/borrowing at fixed interest"
+      - "Compound lending at variable interest"
+      - "Any protocol where USDC earns yield purely through lending at interest"
+    authority: "SC SAC Resolution 2013 — riba prohibition"
+    outcome: FAIL
+
+  - id: HX-002
+    description: "Perpetual funding rate arbitrage (riba al-jahiliyyah analog)"
+    examples:
+      - "Hyperliquid ETH-PERP funding rate carry"
+      - "Any derivative funding rate income"
+    authority: "SC SAC Resolution on derivatives speculation"
+    outcome: FAIL
+
+  - id: HX-003
+    description: "Front-running / information-asymmetry exploitation (gharar + zulm)"
+    examples:
+      - "Stargate bridge flow front-running"
+      - "MEV sandwich attacks"
+      - "Latency-arbitrage strategies that disadvantage counterparties"
+    authority: "SC SAC Principle — prohibition of gharar (excessive uncertainty) and zulm (injustice)"
+    outcome: FAIL
+
+  - id: HX-004
+    description: "Securities backed primarily by riba-based instruments"
+    examples:
+      - "US Treasury bond tokens (OUSG, BUIDL, USYC) where underlying is interest-bearing"
+      - "Money-market fund tokens backed by T-bills"
+    note: "SR-001 — OUSG/BUIDL removed from Shariah tier per board ruling"
+    authority: "SC SAC — riba prohibition applies to synthetic/tokenized forms"
+    outcome: FAIL
+
+  - id: HX-005
+    description: "Gambling, speculative derivatives with no underlying asset transfer"
+    examples:
+      - "Prediction markets with no commodity delivery"
+      - "Synthetic leverage without asset ownership"
+    authority: "SC SAC — maisir (gambling) prohibition"
+    outcome: FAIL
+
+ratioScreens:
+  - id: RS-001
+    description: "Debt-to-total-assets ratio"
+    metric: "totalDebt / totalAssets"
+    threshold: 0.33
+    operator: "gte"
+    note: "SC Malaysia benchmark: < 33% of total assets. Missing data → REVIEW."
+    authority: "SC SAC 2013 benchmark — financial ratio test"
+    outcome: FAIL
+    missingData: REVIEW
+
+  - id: RS-002
+    description: "Non-compliant revenue ratio"
+    metric: "nonCompliantRevenue / totalRevenue"
+    threshold: 0.05
+    operator: "gte"
+    note: "SC Malaysia benchmark: < 5% of total revenue from non-compliant activities. 0.0499 → PASS. 0.05 → REVIEW. 0.051 → FAIL."
+    authority: "SC SAC 2013 benchmark — revenue test"
+    outcome: FAIL
+    reviewThreshold: 0.05
+    failThreshold: 0.051
+    missingData: REVIEW
+
+  - id: RS-003
+    description: "Interest-bearing deposits or securities ratio"
+    metric: "interestBearingAssets / totalAssets"
+    threshold: 0.33
+    operator: "gte"
+    note: "SC Malaysia benchmark: < 33% of total assets in interest-bearing instruments."
+    authority: "SC SAC 2013 benchmark — financial ratio test"
+    outcome: FAIL
+    missingData: REVIEW
+
+qualitativeScreens:
+  - id: QS-001
+    description: "Core business must be halal"
+    check: "primaryActivityIsHalal"
+    authority: "SC SAC — core business activity test"
+    outcome: FAIL
+
+  - id: QS-002
+    description: "Gold and commodity exchanges must be atomic (yad bi yad)"
+    check: "goldExchangeIsAtomic"
+    note: "SR-005 — GoldExchangeAdapter atomic swap satisfies this. Cross-chain gold routing blocked."
+    authority: "SC SAC — spot commodity exchange requirement"
+    outcome: FAIL
+
+  - id: QS-003
+    description: "LP fee income must come from genuine trade activity only (musharakah)"
+    check: "lpIncomeIsSwapFeeOnly"
+    note: "S3-H — Uniswap V3 concentrated LP. Yield from swap fees only, not lending."
+    authority: "SC SAC — musharakah fee income permission"
+    outcome: REVIEW
+
+permittedProtocols:
+  - name: "Uniswap V3 (USDC/ETH or USDC/PAXG)"
+    basis: "Swap-fee income from genuine trade = musharakah. No lending."
+    strategyId: "S3-H"
+    status: PERMITTED
+
+  - name: "PAXG spot swap (GoldExchangeAdapter)"
+    basis: "Physical gold-backed, atomic settlement, yad bi yad compliant."
+    strategyId: "S2-H"
+    status: PERMITTED
+
+  - name: "XAUT spot swap (GoldAllocationAdapter)"
+    basis: "Physical gold-backed. Awaiting board certification SR-008."
+    strategyId: "S6-H"
+    status: PENDING_BOARD
+
+  - name: "Commodity Murabaha (CommodityMurabahaAdapter)"
+    basis: "Cost-plus sale with disclosed markup, all terms onchain before execution."
+    strategyId: "S4-H"
+    status: PERMITTED
+
+  - name: "Cross-chain USDC/ETH spread (ETH_SPREAD)"
+    basis: "Commodity arbitrage — ETH is a productive asset. Pending SR-007 deferred-exchange ruling."
+    strategyId: "S1-H"
+    status: PENDING_BOARD
+
+prohibitedProtocols:
+  - name: "Aave / Compound (lending at interest)"
+    ruleId: "HX-001"
+    basis: "Riba — fixed interest income from lending."
+
+  - name: "OUSG / BUIDL / USYC (T-bill tokens)"
+    ruleId: "HX-004"
+    basis: "Underlying is US Treasuries — riba-based instrument. SR-001."
+
+  - name: "Hyperliquid perpetual funding"
+    ruleId: "HX-002"
+    basis: "Derivative funding rate = riba al-jahiliyyah analog."
+
+  - name: "Stargate bridge front-running"
+    ruleId: "HX-003"
+    basis: "Gharar + zulm — exploits information asymmetry."

@@ -608,3 +608,34 @@
 {"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792567067471}
 {"level":"debug","message":"[vite] connected.","timestamp":1792572444708}
 {"level":"debug","message":"[vite] connected.","timestamp":1792572746226}
+{"level":"debug","message":"[vite] connected.","timestamp":1792572935763}
+{"level":"debug","message":"[vite] hot updated: /src/pages/VaultPage.tsx","timestamp":1792573382169}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792573382169}
+{"level":"debug","message":"[vite] hot updated: /src/pages/VaultPage.tsx","timestamp":1792573393251}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792573393251}
+{"level":"debug","message":"[vite] hot updated: /src/pages/VaultPage.tsx","timestamp":1792573399540}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792573399540}
+{"level":"debug","message":"[vite] hot updated: /src/pages/VaultPage.tsx","timestamp":1792573406601}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792573406601}
+{"level":"debug","message":"[vite] hot updated: /src/pages/VaultPage.tsx","timestamp":1792573413095}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792573413095}
+{"level":"debug","message":"[vite] hot updated: /src/pages/VaultPage.tsx","timestamp":1792573426675}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792573426675}
+{"level":"debug","message":"[vite] connected.","timestamp":1792573466923}
+{"level":"error","message":"Unhandled promise rejection: Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)","timestamp":1792573467097,"stack":"Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)"}
+{"level":"error","message":"Unhandled promise rejection: Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)","timestamp":1792573476841,"stack":"Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)"}
+{"level":"debug","message":"[vite] connected.","timestamp":1792573514101}
+{"level":"debug","message":"[vite] connected.","timestamp":1792573579135}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792573668650}
+{"level":"error","message":"Unhandled promise rejection: Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)","timestamp":1792573977069,"stack":"Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)"}
+{"level":"debug","message":"[vite] hot updated: /src/pages/SettingsPage.tsx","timestamp":1792574742949}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792574742950}
+{"level":"debug","message":"[vite] hot updated: /src/pages/SettingsPage.tsx","timestamp":1792574742950}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792574742951}
+{"level":"debug","message":"[vite] hot updated: /src/pages/SettingsPage.tsx","timestamp":1792574745913}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792574745913}
+{"level":"debug","message":"[vite] hot updated: /src/pages/SettingsPage.tsx","timestamp":1792574745913}
+{"level":"debug","message":"[vite] hot updated: /src/index.css","timestamp":1792574745913}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792575037685}
+{"level":"error","message":"Unhandled promise rejection: Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)","timestamp":1792575045101,"stack":"Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)"}
+{"level":"debug","message":"[vite] connected.","timestamp":1792575287369}

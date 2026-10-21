@@ -1,0 +1,55 @@
+{
+  "_comment": "Board-approved permitted assets for the Shariah vault. Managed by board resolution. Last updated: 2026-10-21.",
+  "_authority": "SC Malaysia SAC + DefiVault Finance Shariah Board",
+  "_version": "1.1.0",
+  "permittedAssets": [
+    {
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "basis": "Stablecoin — fiat representation, not interest-bearing by itself",
+      "status": "PERMITTED",
+      "boardResolution": null,
+      "note": "Native gas on Arc Testnet. Address: 0x3600000000000000000000000000000000000000"
+    },
+    {
+      "symbol": "ETH",
+      "name": "Ether",
+      "basis": "Productive digital commodity — staking yield from validation work (not lending)",
+      "status": "PERMITTED",
+      "boardResolution": null,
+      "note": "ETH_SPREAD strategy pending board ruling SR-007 on deferred cross-chain exchange."
+    },
+    {
+      "symbol": "PAXG",
+      "name": "PAX Gold",
+      "basis": "Physical gold-backed ERC-20, 1:1 Brinks custody, universally halal commodity",
+      "status": "PERMITTED",
+      "boardResolution": "SR-005",
+      "note": "GoldExchangeAdapter (S2-H) confirmed atomic swap. SR-006 (PAXG custody terms) pending."
+    },
+    {
+      "symbol": "XAUT",
+      "name": "Tether Gold",
+      "basis": "Physical gold-backed ERC-20 — awaiting Amanah Advisors certification acceptance",
+      "status": "PENDING_BOARD",
+      "boardResolution": "SR-008",
+      "note": "GoldAllocationAdapter (S6-H) written. shariahCertified[5] = false until SR-008 resolved."
+    }
+  ],
+  "prohibitedAssets": [
+    {
+      "symbol": "OUSG",
+      "name": "Ondo US Government Bond Fund",
+      "basis": "Underlying is US Treasuries — interest-bearing (riba)",
+      "boardResolution": "SR-001",
+      "removedAt": "2026-10-21"
+    },
+    {
+      "symbol": "BUIDL",
+      "name": "BlackRock USD Institutional Digital Liquidity Fund",
+      "basis": "Underlying is US T-bills — interest-bearing (riba)",
+      "boardResolution": "SR-001",
+      "removedAt": "2026-10-21"
+    }
+  ]
+}

@@ -37,7 +37,10 @@
 import express from 'express';
 import cors from 'cors';
 import { createPublicClient, http, parseAbi, encodeFunctionData, keccak256, toHex } from 'viem';
-import { runShariahScan, SHARIAH_STRATEGY_META, type EthSpreadResult, type GoldSpreadResult, type HalalLPResult, type MurabahaResult, type RwaSukukResult } from './shariah-strategies';
+import { runShariahScan, SHARIAH_STRATEGY_META, type EthSpreadResult, type GoldSpreadResult, type HalalLPResult, type MurabahaResult, type RwaSukukResult, type GoldAllocationResult } from './shariah-strategies';
+import { screen } from './screening/engine.ts';
+import { buildProtocolData, listKnownProtocols } from './screening/sources/protocol-profiles.ts';
+import permittedAssetsJson from './board/permitted-assets.json';
 
 // ─────────────────────────────────────────────────────────────────
 // Chain + RPC
@@ -150,11 +153,12 @@ const SHARIAH_AGGREGATOR_ADDRESS = (process.env.VITE_SHARIAH_AGGREGATOR_ADDRESS 
 const SHARIAH_EXECUTOR_ADDRESS   = (process.env.VITE_SHARIAH_EXECUTOR_ADDRESS   ?? '') as `0x${string}`;
 
 type ShariahScanResult = {
-  ETH_SPREAD:  EthSpreadResult  | null;
-  GOLD_SPREAD: GoldSpreadResult | null;
-  HALAL_LP:    HalalLPResult    | null;
-  MURABAHA:    MurabahaResult   | null;
-  RWA_SUKUK:   RwaSukukResult   | null;
+  ETH_SPREAD:      EthSpreadResult      | null;
+  GOLD_SPREAD:     GoldSpreadResult     | null;
+  HALAL_LP:        HalalLPResult        | null;
+  MURABAHA:        MurabahaResult       | null;
+  RWA_SUKUK:       RwaSukukResult       | null;
+  GOLD_ALLOCATION: GoldAllocationResult | null;
 };
 
 let latestShariahScan: ShariahScanResult | null = null;
@@ -812,6 +816,73 @@ app.post('/cctp/register', (req, res) => {
   res.json({ ok: true });
 });
 
+// ─────────────────────────────────────────────────────────────────
+// GET /api/charity/estimate
+// Returns a per-share charitable contribution estimate and a
+// calculation template for the caller's UI.
+//
+// This is advisory only — it does NOT write to chain or trigger
+// any distribution. All fields are estimates based on current
+// share value and the configured charityBps (default 250 = 2.5%).
+//
+// Board rulings SR-002 and SR-003 must be completed before any
+// live distribution is triggered on-chain.
+// ─────────────────────────────────────────────────────────────────
+app.get('/api/charity/estimate', (req, res) => {
+  // Parse optional query parameters for the caller to supply their own figures.
+  const grossProfitUsdc  = parseFloat((req.query.grossProfitUsdc  as string) ?? '0') || 0;
+  const shareCount       = parseFloat((req.query.shareCount       as string) ?? '0') || 0;
+  const charityBps       = parseInt  ((req.query.charityBps       as string) ?? '250', 10) || 250;
+  const purificationBps  = parseInt  ((req.query.purificationBps  as string) ?? '0', 10) || 0;
+
+  // Clamp to hard caps (mirrors CharityModule and PurificationEscrow constants).
+  const safeCharityBps      = Math.min(Math.max(0, charityBps), 500);
+  const safePurificationBps = Math.min(Math.max(0, purificationBps), 1000);
+
+  // Waterfall calculation (mirrors PurificationEscrow.executeWaterfall logic).
+  const purified       = Math.floor(grossProfitUsdc * safePurificationBps / 10_000);
+  const afterPurify    = grossProfitUsdc - purified;
+  const charityAmount  = Math.floor(afterPurify    * safeCharityBps / 10_000);
+  const afterCharity   = afterPurify - charityAmount;
+
+  // Per-share charity estimate (advisory).
+  const perShareCharity = shareCount > 0 ? charityAmount / shareCount : 0;
+
+  res.json({
+    disclaimer: [
+      'This is an estimate only. No distribution has been triggered.',
+      'Board rulings SR-002 (charity rate) and SR-003 (charity wallet) must be',
+      'completed before any on-chain charitable distribution is executed.',
+      'The contribution is voluntary sadaqah, not Zakat.',
+    ],
+    inputs: {
+      grossProfitUsdc,
+      shareCount,
+      charityBps: safeCharityBps,
+      purificationBps: safePurificationBps,
+    },
+    waterfall: {
+      grossProfit:    grossProfitUsdc,
+      purified,
+      afterPurification: afterPurify,
+      charityContribution: charityAmount,
+      afterCharity,
+    },
+    perShareEstimate: {
+      charityUsdc:   perShareCharity,
+      note: shareCount > 0
+        ? `Each share contributes ~$${perShareCharity.toFixed(6)} USDC to charity from this profit claim.`
+        : 'Provide shareCount to compute per-share estimate.',
+    },
+    calculationTemplate: {
+      step1: `purified = grossProfit × ${safePurificationBps} / 10000`,
+      step2: `charityContribution = (grossProfit - purified) × ${safeCharityBps} / 10000`,
+      step3: 'remainder = grossProfit - purified - charityContribution',
+      step4: 'Musharakah split applied to remainder (10% vault share above 4% hurdle)',
+    },
+  });
+});
+
 app.get('/cctp/pending', (_req, res) => {
   const list = Array.from(pendingCctpPositions.values()).map(p => ({
     ...p,
@@ -923,6 +994,164 @@ app.post('/api/config/reset', (_req, res) => {
   agentConfig = { ...DEFAULT_CONFIG };
   console.log('[Agent] Config reset to defaults');
   res.json({ ok: true, config: agentConfig });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Screening cache — rebuilt lazily on first request, then every 5 min
+// ─────────────────────────────────────────────────────────────────
+let _screeningCache: ReturnType<typeof screen>[] | null = null;
+let _screeningCacheAt = 0;
+const SCREENING_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function getScreeningReports(): ReturnType<typeof screen>[] {
+  const now = Date.now();
+  if (_screeningCache && (now - _screeningCacheAt) < SCREENING_CACHE_TTL_MS) {
+    return _screeningCache;
+  }
+  const reports = listKnownProtocols().map(slug => {
+    const data = buildProtocolData(slug);
+    return data ? screen(data) : null;
+  }).filter((r): r is ReturnType<typeof screen> => r !== null);
+  _screeningCache = reports;
+  _screeningCacheAt = now;
+  return reports;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// GET /api/screening/latest
+// Returns the most recent advisory screening report for all known
+// protocols, derived from static profiles + SC Malaysia rule engine.
+//
+// Task D spec:
+//   - output is advisory only (never writes scores on-chain)
+//   - CoinGecko raw data is never exposed in any response
+//   - board/permitted-assets.json has USDC, ETH, PAXG only (no OUSG/BUIDL)
+// ─────────────────────────────────────────────────────────────────
+app.get('/api/screening/latest', (_req, res) => {
+  const reports = getScreeningReports();
+  const summary = {
+    pass:   reports.filter(r => r.verdict === 'PASS').length,
+    review: reports.filter(r => r.verdict === 'REVIEW').length,
+    fail:   reports.filter(r => r.verdict === 'FAIL').length,
+  };
+  res.json({
+    advisory: true,
+    disclaimer: 'Screening output is advisory only. A qualified Shariah advisor must review before any on-chain deployment. This report does not constitute a board pronouncement.',
+    generatedAt: Math.floor(_screeningCacheAt / 1000),
+    ruleVersion: reports[0]?.ruleVersion ?? '1.0.0',
+    summary,
+    reports,
+    permittedAssets: permittedAssetsJson,
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────
+// POST /api/apy/estimate
+// Returns P10 / P50 / P90 APY scenario estimates for a Shariah vault.
+//
+// Task E spec:
+//   - Returns P10/P50/P90 with disclaimer; never a single number
+//   - APY panel in UI shows disclaimer always visible
+//   - This endpoint is advisory only — it never reads or writes chain state
+// ─────────────────────────────────────────────────────────────────
+app.post('/api/apy/estimate', (req, res) => {
+  const body = req.body as {
+    strategyIds?:       number[];  // which Shariah strategy indices to include (0-5)
+    hurdleRateBps?:     number;    // default 400 (4%)
+    musharakahShareBps?: number;   // default 1000 (10%)
+    charityBps?:        number;    // default 250 (2.5%)
+    purificationBps?:   number;    // default 0
+    timeHorizonDays?:   number;    // default 365
+  };
+
+  const hurdleRateBps      = Math.min(Math.max(0, body.hurdleRateBps      ?? 400),  2000);
+  const musharakahShareBps = Math.min(Math.max(0, body.musharakahShareBps ?? 1000), 5000);
+  const charityBps         = Math.min(Math.max(0, body.charityBps         ?? 250),   500);
+  const purificationBps    = Math.min(Math.max(0, body.purificationBps    ?? 0),    1000);
+  const timeHorizonDays    = Math.min(Math.max(1, body.timeHorizonDays    ?? 365),  3650);
+  const strategyIds        = body.strategyIds ?? [0, 1, 2, 3, 5]; // active strategies
+
+  // Strategy gross-yield assumptions (simulated, not live data):
+  // These represent the P10/P50/P90 gross yield range for each strategy
+  // based on historical analogues. NOT a prediction or guarantee.
+  const STRATEGY_YIELD_RANGES: Record<number, { p10: number; p50: number; p90: number; name: string }> = {
+    0: { p10: 0.5,  p50: 1.5,  p90: 4.0,  name: 'S1-H ETH Spread' },
+    1: { p10: 0.3,  p50: 1.2,  p90: 3.5,  name: 'S2-H Gold Spread' },
+    2: { p10: 2.0,  p50: 4.5,  p90: 9.0,  name: 'S3-H Halal LP' },
+    3: { p10: 1.0,  p50: 2.5,  p90: 5.0,  name: 'S4-H Murabaha' },
+    4: { p10: 0.0,  p50: 0.0,  p90: 0.0,  name: 'S5-H RESERVED (disabled)' },
+    5: { p10: 0.5,  p50: 1.8,  p90: 4.2,  name: 'S6-H Gold Allocation' },
+  };
+
+  // Aggregate gross yield across selected strategies (simple average — conservative)
+  const selected = strategyIds.filter(id => id >= 0 && id <= 5 && id !== 4);
+  const agg = (pct: 'p10' | 'p50' | 'p90') => {
+    if (selected.length === 0) return 0;
+    return selected.reduce((sum, id) => sum + (STRATEGY_YIELD_RANGES[id]?.[pct] ?? 0), 0) / selected.length;
+  };
+
+  const grossP10 = agg('p10');
+  const grossP50 = agg('p50');
+  const grossP90 = agg('p90');
+
+  // Waterfall deductions: purification + charity + musharakah share + hurdle
+  const wakalaFeeApy = 0.5; // 0.5% AUM/yr Wakala fee
+  const totalDeductionFactor = (1 - purificationBps / 10_000) * (1 - charityBps / 10_000);
+
+  function depositorNetApy(grossApy: number): number {
+    const hurdleApy = hurdleRateBps / 10_000 * 100;
+    if (grossApy <= hurdleApy) return Math.max(0, grossApy - wakalaFeeApy);
+    const surplusApy = grossApy - hurdleApy;
+    const depositorSurplus = surplusApy * (1 - musharakahShareBps / 10_000) * totalDeductionFactor;
+    return Math.max(0, hurdleApy + depositorSurplus - wakalaFeeApy);
+  }
+
+  const netP10 = depositorNetApy(grossP10);
+  const netP50 = depositorNetApy(grossP50);
+  const netP90 = depositorNetApy(grossP90);
+
+  res.json({
+    disclaimer: [
+      'These are illustrative scenario estimates only — NOT a prediction, guarantee, or projection.',
+      'Actual returns depend on market conditions, strategy execution, and protocol risk.',
+      'Past performance analogues used for P10/P50/P90 ranges are not indicative of future results.',
+      'This output is advisory only and must not be presented as a Shariah board endorsement.',
+      'Always display this disclaimer alongside any APY estimate shown to end users.',
+    ],
+    inputs: {
+      strategyIds: selected,
+      strategies: selected.map(id => STRATEGY_YIELD_RANGES[id]?.name ?? `S${id}-H`),
+      hurdleRateBps,
+      musharakahShareBps,
+      charityBps,
+      purificationBps,
+      timeHorizonDays,
+      wakalaFeeApyPct: wakalaFeeApy,
+    },
+    grossApyPct:     { p10: +grossP10.toFixed(2), p50: +grossP50.toFixed(2), p90: +grossP90.toFixed(2) },
+    depositorNetApyPct: { p10: +netP10.toFixed(2), p50: +netP50.toFixed(2), p90: +netP90.toFixed(2) },
+    strategyBreakdown: selected.map(id => ({
+      id,
+      name: STRATEGY_YIELD_RANGES[id]?.name,
+      grossApyRange: STRATEGY_YIELD_RANGES[id] ? {
+        p10: STRATEGY_YIELD_RANGES[id].p10,
+        p50: STRATEGY_YIELD_RANGES[id].p50,
+        p90: STRATEGY_YIELD_RANGES[id].p90,
+      } : null,
+    })),
+  });
+});
+
+// GET /api/screening/:protocol — single protocol report
+app.get('/api/screening/:protocol', (req, res) => {
+  const slug = req.params.protocol;
+  const data = buildProtocolData(slug);
+  if (!data) {
+    res.status(404).json({ ok: false, error: `Protocol '${slug}' not in static registry. Known protocols: ${listKnownProtocols().join(', ')}` });
+    return;
+  }
+  const report = screen(data);
+  res.json({ advisory: true, report });
 });
 
 const PORT = parseInt(process.env.AGENT_PORT ?? '3001', 10);

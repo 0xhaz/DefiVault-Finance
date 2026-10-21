@@ -2,7 +2,7 @@ import { VaultStats } from '../components/VaultStats';
 import { VaultActions } from '../components/VaultActions';
 import { VaultPicker } from '../components/VaultPicker';
 import { ActivePositions } from '../components/ActivePositions';
-import { ZakatTracker } from '../components/ZakatTracker';
+import { CharityTracker } from '../components/CharityTracker';
 import { FeeDisclosure } from '../components/FeeDisclosure';
 import { TreasuryPanel } from '../components/TreasuryPanel';
 import { Shield, Zap, Moon, Info } from 'lucide-react';
@@ -63,10 +63,10 @@ const TIER_SPECS: Record<TierSelection, {
       { label: 'Execution Cooldown',  value: '2 hours' },
       { label: 'Wakala Fee',          value: '0.5% AUM/yr' },
       { label: 'Musharakah Share',    value: '10% above 4% hurdle' },
-      { label: 'Zakat',               value: '2.5% auto-routed' },
-      { label: 'Strategies',          value: 'S2-H, S3-H, S5-H' },
+      { label: 'Charity (sadaqah)',   value: '2.5% auto-routed' },
+      { label: 'Strategies',          value: 'S2-H, S3-H, S6-H' },
     ],
-    description: 'Three low-volatility Shariah strategies: PAXG gold spread, Halal Uniswap V3 LP (USDC/ETH or USDC/PAXG), and RWA/Sukuk yield via OUSG and BUIDL. No Murabaha trades and no stablecoin spread — conservative depositors get stable yield with minimal volatility. No riba-based lending, no perp funding, no front-running.',
+    description: 'Three low-volatility Shariah strategies: PAXG gold spread (S2-H), Halal Uniswap V3 LP (S3-H, swap-fee income only), and XAUT Gold Allocation (S6-H, spot — board certification pending). No Murabaha trades and no stablecoin spread — conservative depositors get stable yield with minimal volatility. No riba-based lending, no perp funding, no front-running.',
   },
   'shariah-dynamic': {
     name: 'Dynamic Shariah', tagline: 'All 5 halal strategies, higher yield', color: '#c9b8f5',
@@ -79,10 +79,10 @@ const TIER_SPECS: Record<TierSelection, {
       { label: 'Execution Cooldown',  value: '1 hour' },
       { label: 'Wakala Fee',          value: '0.5% AUM/yr' },
       { label: 'Musharakah Share',    value: '10% above 4% hurdle' },
-      { label: 'Zakat',               value: '2.5% auto-routed' },
-      { label: 'Strategies',          value: 'All 5 halal (S1-H – S5-H)' },
+      { label: 'Charity (sadaqah)',   value: '2.5% auto-routed' },
+      { label: 'Strategies',          value: 'S1-H, S2-H, S3-H, S4-H, S6-H' },
     ],
-    description: 'All five Shariah-board certified strategies: USDC/ETH spread, PAXG gold spread, Halal Uniswap V3 LP, Commodity Murabaha, and RWA/Sukuk yield via OUSG and BUIDL. Dynamic allocation across all five maximises halal yield. No riba-based lending, no perp funding, no front-running. Zakat auto-routed before Musharakah profit split.',
+    description: 'Five active Shariah strategies: USDC/ETH cross-chain spread (S1-H), PAXG gold spread (S2-H), Halal LP swap-fee income (S3-H), Commodity Murabaha (S4-H), and XAUT Gold Allocation (S6-H, board certification pending). Dynamic allocation maximises halal yield. No riba-based lending, no perp funding, no front-running. Charitable contribution auto-routed before Musharakah split.',
   },
 };
 
@@ -121,7 +121,7 @@ export function VaultPage({ selectedTier, onSelectTier, vaultMode }: VaultPagePr
                   className="ml-auto text-xs px-2 py-0.5 rounded-full font-semibold"
                   style={{ background: 'rgba(141,216,159,0.12)', color: '#8dd89f', fontSize: '0.6rem', alignSelf: 'flex-start' }}
                 >
-                  SHARIAH CERTIFIED
+                  SHARIAH
                 </span>
               )}
             </div>
@@ -144,7 +144,7 @@ export function VaultPage({ selectedTier, onSelectTier, vaultMode }: VaultPagePr
           {/* Shariah-specific panels */}
           {spec.isShariahTier && (
             <div className="space-y-4">
-              <ZakatTracker />
+              <CharityTracker />
               <FeeDisclosure isShariahTier />
               <TreasuryPanel isShariahTier />
             </div>
@@ -167,7 +167,7 @@ export function VaultPage({ selectedTier, onSelectTier, vaultMode }: VaultPagePr
             <Info size={14} style={{ color: spec.color, flexShrink: 0, marginTop: 1 }} />
             <p className="text-xs leading-relaxed" style={{ color: 'var(--muted)' }}>
               {spec.isShariahTier
-                ? 'Shares are ERC-4626 compliant and Shariah-certified. Withdraw any time — Musharakah profit is claimed separately by the vault manager after the settlement period.'
+                ? 'Shares are ERC-4626 compliant. Withdraw any time — Musharakah profit is claimed separately by the vault manager after the settlement period. A charitable contribution (sadaqah) is auto-routed before the split.'
                 : 'Shares are ERC-4626 compliant. Withdraw any time — the agent will automatically recall capital from the active strategy adapter to fulfil your redemption.'}
             </p>
           </div>

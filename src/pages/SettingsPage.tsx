@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Save, RefreshCw, Info, Shield, Zap, Moon, Globe, ExternalLink, RotateCcw, CheckCircle, AlertCircle } from 'lucide-react';
+import { MigrationPanel } from '../components/MigrationPanel';
 import type { VaultMode, TierSelection } from '../App';
 
 interface SettingsPageProps {
@@ -422,6 +423,17 @@ export function SettingsPage({ selectedTier, onSelectTier, vaultMode, onVaultMod
           Changes apply on the agent&apos;s next cycle — no restart needed. Min 5s, max 300s. Strategy 3 is event-driven.
         </p>
       </section>
+
+      {/* V2 Migration — shown only in Shariah or Both modes */}
+      {(vaultMode === 'shariah' || vaultMode === 'both') && (
+        <section>
+          <p className="text-xs uppercase mb-3" style={{ color: 'var(--subtle)', letterSpacing: '0.08em' }}>Shariah Vault V2 Migration</p>
+          <MigrationPanel
+            v1ShareBalance="0.00"
+            v2Address={import.meta.env.VITE_SHARIAH_VAULT_V2_ADDRESS as string | undefined}
+          />
+        </section>
+      )}
 
       {/* Action row */}
       <div className="flex items-center gap-3 pt-1">
