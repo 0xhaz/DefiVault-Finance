@@ -41,7 +41,7 @@ graph TB
         SA[Strategy Scorers]
         SS[Shariah Scorers]
         CP[CCTP Attestation Poller]
-        AC[/api/status · /api/shariah · /api/tiers]
+        AC["API: /api/status · /api/shariah · /api/tiers"]
     end
 
     subgraph Conventional ["Conventional Vaults"]
@@ -145,8 +145,8 @@ classDiagram
         +conventionalTreasury: TreasuryModule
         +accrueAdminFee()
         +sweepFeesToTreasury()
-        +name() "Conventional Vault Share"
-        +symbol() "cvUSDC"
+        +name() cvUSDC_name
+        +symbol() cvUSDC
     }
 
     class ShariahVault {
@@ -157,8 +157,8 @@ classDiagram
         +deployCapital() override
         +claimMusharakahProfit()
         +sweepFeesToTreasury()
-        +name() "Shariah Vault Share"
-        +symbol() "svUSDC"
+        +name() svUSDC_name
+        +symbol() svUSDC
     }
 
     class TreasuryModule {
@@ -231,18 +231,18 @@ One instance per vault tier. Reads the winning strategy from the aggregator and 
 
 ```mermaid
 flowchart LR
-    EW[executeWinner] --> GC{gas price\n≤ max?}
+    EW[executeWinner] --> GC{gas price OK?}
     GC -- No --> GP[revert GasPriceTooHigh]
-    GC -- Yes --> CD{cooldown\nelapsed?}
+    GC -- Yes --> CD{cooldown elapsed?}
     CD -- No --> CDE[revert CooldownNotElapsed]
     CD -- Yes --> GWS[getWinningStrategy]
-    GWS --> SC{score ≥\nminScore?}
+    GWS --> SC{score >= minScore?}
     SC -- No --> SL[revert ScoreTooLow]
-    SC -- Yes --> BM{strategy in\nbitmask?}
+    SC -- Yes --> BM{strategy in bitmask?}
     BM -- No --> SM[revert StrategyNotAllowed]
-    BM -- Yes --> AE{adapter\nenabled?}
+    BM -- Yes --> AE{adapter enabled?}
     AE -- No --> SD[revert StrategyDisabled]
-    AE -- Yes --> DD{destination\ndomain == 0?}
+    AE -- Yes --> DD{destDomain == 0?}
     DD -- Local --> VC[vault.deployCapital]
     DD -- Remote --> VX[vault.deployCrossChain]
 ```
@@ -357,31 +357,31 @@ The Express agent (`server/agent.ts`) runs continuously alongside the frontend. 
 
 ```mermaid
 flowchart TD
-    subgraph Conventional Scorers
-        S1[S1 scorer\n30s interval\nUniswap + CEX spread]
-        S2[S2 scorer\n30s interval\nHyperliquid funding rate]
-        S3[S3 scorer\nevent-driven\nStargate bridge volume]
-        S4[S4 scorer\n45s interval\nAave + Ondo RWA yield]
+    subgraph CONV ["Conventional Scorers"]
+        S1["S1 scorer — 30s — Uniswap + CEX spread"]
+        S2["S2 scorer — 30s — Hyperliquid funding rate"]
+        S3["S3 scorer — event-driven — Stargate volume"]
+        S4["S4 scorer — 45s — Aave + Ondo RWA yield"]
     end
 
-    subgraph Shariah Scorers
-        SH1[ETH Spread scorer\n60s interval]
-        SH2[Gold Spread scorer\n60s interval]
-        SH3[Halal LP scorer\n60s interval]
-        SH4[Murabaha scorer\nevent-driven]
-        SH5[RWA Sukuk scorer\n120s interval]
+    subgraph SHAR ["Shariah Scorers"]
+        SH1["ETH Spread scorer — 60s"]
+        SH2["Gold Spread scorer — 60s"]
+        SH3["Halal LP scorer — 60s"]
+        SH4["Murabaha scorer — event-driven"]
+        SH5["RWA Sukuk scorer — 120s"]
     end
 
-    subgraph Protocol Signals
-        PS[fetchProtocolSignals\n60s interval\nCompound APY · Curve APY\nAave loop rate · GMX GLP APY]
+    subgraph PROTO ["Protocol Signals"]
+        PS["fetchProtocolSignals — 60s — Compound · Curve · Aave · GMX APY"]
     end
 
     S1 & S2 & S3 & S4 --> AGG_W[ScoreAggregator.writeBatchScores]
     SH1 & SH2 & SH3 & SH4 & SH5 --> SAGG_W[ShariahScoreAggregator.writeBatchScores]
     PS --> S1 & S2 & S3 & S4
 
-    AGG_W --> API[/api/status]
-    SAGG_W --> SHARIAH_API[/api/shariah]
+    AGG_W --> API["/api/status"]
+    SAGG_W --> SHARIAH_API["/api/shariah"]
 ```
 
 All agent intervals and thresholds are hot-reloadable via `POST /api/config`.
@@ -463,20 +463,20 @@ sequenceDiagram
 flowchart TD
     D[Depositor sends USDC] --> SV[ShariahVault]
 
-    SV --> SC{Shariah\nscreening\nenabled?}
-    SC -- Yes --> CH{adapter in\nscreened mapping?}
+    SV --> SC{Shariah screening enabled?}
+    SC -- Yes --> CH{adapter in screened mapping?}
     CH -- No --> REV[revert AdapterNotScreened]
-    CH -- Yes --> WF[Accrue Wakala fee\n0.5% AUM / year]
+    CH -- Yes --> WF["Accrue Wakala fee — 0.5% AUM/year"]
     SC -- No --> WF
 
     WF --> DC[deployCapital to halal adapter]
 
-    DC --> PROFIT{Profit\nrealized?}
-    PROFIT -- Yes --> ZK[claimMusharakahProfit\ngrossProfit]
-    ZK --> ZD[ZakatModule.distributeZakat\n2.5% → charity wallet]
-    ZD --> MS[TreasuryModule.calculateMusharakahSplit\nremaining - 4% hurdle\n10% surplus → vault]
-    MS --> RP[TreasuryModule.recordMusharakahProfit\nvaultShare → pendingFees]
-    RP --> DEP[Depositor keeps\ndepositorShare]
+    DC --> PROFIT{Profit realized?}
+    PROFIT -- Yes --> ZK["claimMusharakahProfit(grossProfit)"]
+    ZK --> ZD["ZakatModule.distributeZakat — 2.5% to charity"]
+    ZD --> MS["TreasuryModule.calculateMusharakahSplit — 10% surplus above 4% hurdle"]
+    MS --> RP["TreasuryModule.recordMusharakahProfit — vaultShare to pendingFees"]
+    RP --> DEP[Depositor keeps depositorShare]
 
     style SV fill:#1a472a,color:#fff
     style ZD fill:#92400e,color:#fff
@@ -492,16 +492,16 @@ flowchart TD
 
 ```mermaid
 graph LR
-    subgraph Conventional
-        CV[ConventionalVault] -->|accrue fee\nper-second| CTM[TreasuryModule\nConventional]
-        CTM -->|claimFees\naccounting only| CTM
-        CV -->|sweepFeesToTreasury\nactual transfer| RECV[Fee receiver]
+    subgraph CFEE ["Conventional"]
+        CV[ConventionalVault] -->|accrue fee per-second| CTM["TreasuryModule (Conventional)"]
+        CTM -->|claimFees - accounting only| CTM
+        CV -->|sweepFeesToTreasury - actual transfer| RECV[Fee receiver]
     end
 
-    subgraph Shariah
-        SV[ShariahVault] -->|Wakala\n0.5% AUM| STM[TreasuryModule\nShariah]
-        SV -->|Musharakah\n10% above 4% hurdle| STM
-        SV -->|Zakat\n2.5% of gross| ZW[Charity wallet]
+    subgraph SFEE ["Shariah"]
+        SV[ShariahVault] -->|Wakala 0.5% AUM| STM["TreasuryModule (Shariah)"]
+        SV -->|Musharakah 10% above 4% hurdle| STM
+        SV -->|Zakat 2.5% of gross| ZW[Charity wallet]
         STM -->|sweepFeesToTreasury| SRECV[Fee receiver]
     end
 ```
