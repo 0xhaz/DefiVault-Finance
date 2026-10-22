@@ -238,11 +238,15 @@ contract PurificationEscrowTest is Test {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 3. setPurificationBps(100) → purified==10e6 from 1000e6
+    // 3. proposePurificationRate(100) → purified==10e6 from 1000e6  [PR2 updated]
     // ─────────────────────────────────────────────────────────────────────────
     function test_waterfall_with_purification() public {
+        // PR2: board proposes + 30-day timelock + confirm (owner is initial board member)
         vm.prank(owner);
-        escrow.setPurificationBps(100); // 1%
+        escrow.proposePurificationRate(100); // 1%
+        vm.warp(block.timestamp + 30 days);
+        vm.prank(owner);
+        escrow.confirmPurificationRate();
 
         uint256 gross = 1_000e6;
         usdc.approve(address(escrow), gross);
@@ -307,14 +311,14 @@ contract PurificationEscrowTest is Test {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 7. setPurificationBps above cap reverts PurificationAboveCap
+    // 7. proposePurificationRate above cap reverts PurificationAboveCap  [PR2 updated]
     // ─────────────────────────────────────────────────────────────────────────
     function test_setPurificationBps_above_cap_reverts() public {
         vm.prank(owner);
         vm.expectRevert(
             abi.encodeWithSelector(PurificationEscrow.PurificationAboveCap.selector, 1001, 1000)
         );
-        escrow.setPurificationBps(1001);
+        escrow.proposePurificationRate(1001);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -354,22 +358,26 @@ contract PurificationEscrowTest is Test {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 9. Non-owner cannot call setPurificationBps
+    // 9. Non-board account cannot call proposePurificationRate  [PR2 updated]
     // ─────────────────────────────────────────────────────────────────────────
     function test_setPurificationBps_nonOwner_reverts() public {
         vm.prank(other);
         vm.expectRevert(
-            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, other)
+            abi.encodeWithSelector(PurificationEscrow.NotBoardRole.selector, other)
         );
-        escrow.setPurificationBps(100);
+        escrow.proposePurificationRate(100);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
     // 10. charityWallet receives correct purification amount directly
     // ─────────────────────────────────────────────────────────────────────────
     function test_charityWallet_receives_correct_purification() public {
+        // PR2: propose + timelock + confirm
         vm.prank(owner);
-        escrow.setPurificationBps(200); // 2%
+        escrow.proposePurificationRate(200); // 2%
+        vm.warp(block.timestamp + 30 days);
+        vm.prank(owner);
+        escrow.confirmPurificationRate();
 
         uint256 gross = 1_000e6;
         usdc.approve(address(escrow), gross);

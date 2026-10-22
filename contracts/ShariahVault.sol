@@ -70,6 +70,12 @@ contract ShariahVault is AutonomousVault {
     uint256 public lastFeeAccrualTime;
     uint256 public hurdlePrincipal;
     uint256 public hurdleStartTime;
+    /// @notice Cumulative unrecovered loss below the high-water mark (PR3.1).
+    ///         Set to max(0, highWaterMark - totalAssets()) at each profit claim.
+    ///         Cleared when totalAssets() recovers to highWaterMark.
+    uint256 public hwmDeficit;
+    /// @notice Highest totalAssets() seen at the start of any claim period (PR3.1).
+    uint256 public highWaterMark;
 
     constructor(
         IERC20 asset_,
@@ -83,7 +89,8 @@ contract ShariahVault is AutonomousVault {
 
         shariahScreeningEnabled = true;
         lastFeeAccrualTime = block.timestamp;
-        hurdleStartTime = block.timestamp;
+        hurdleStartTime    = block.timestamp;
+        highWaterMark      = 0; // set on first deposit or explicit call
         permittedAssets[address(asset_)] = true;
     }
 
@@ -173,6 +180,16 @@ contract ShariahVault is AutonomousVault {
         // Approve escrow to pull the gross profit from vault.
         IERC20(asset()).forceApprove(address(purificationEscrow), grossProfit);
 
+        // PR3.1: Update high-water mark and deficit BEFORE claiming profit.
+        uint256 assetsNow = totalAssets();
+        if (assetsNow > highWaterMark) {
+            highWaterMark = assetsNow;
+            hwmDeficit    = 0;
+        } else {
+            // Below high-water mark: deficit persists, manager earns nothing on recovery.
+            hwmDeficit = highWaterMark - assetsNow;
+        }
+
         (uint256 purified, uint256 charity, uint256 vaultShare, uint256 depositorShare) =
             purificationEscrow.executeWaterfall(
                 grossProfit,
@@ -183,8 +200,15 @@ contract ShariahVault is AutonomousVault {
         // Clear any leftover allowance (defensive).
         IERC20(asset()).forceApprove(address(purificationEscrow), 0);
 
+        // PR3.2: Lock the depositor share for linear unlock (prevents deposit-claim-redeem sandwich).
+        if (depositorShare > 0) {
+            _lockProfitInternal(depositorShare);
+        }
+
         hurdlePrincipal = totalAssets();
         hurdleStartTime = block.timestamp;
+        // Update HWM to new assets after claim.
+        if (totalAssets() > highWaterMark) highWaterMark = totalAssets();
 
         emit MusharakahProfitClaimed(grossProfit, purified, charity, vaultShare, depositorShare);
     }
@@ -216,6 +240,33 @@ contract ShariahVault is AutonomousVault {
     function setShariahScreening(bool enabled) external onlyOwner {
         shariahScreeningEnabled = enabled;
         emit ShariahScreeningToggled(enabled);
+    }
+
+    /**
+     * @notice Returns 0 when any gold adapter reports an insane price (PR1 — deposit pause).
+     * @dev    Keeps redemptions open — only blocks new capital entering at a wrong price.
+     *         If neither gold adapter is set, falls through to the ERC-4626 default.
+     */
+    function maxDeposit(address receiver) public view virtual override returns (uint256) {
+        if (_goldPriceInsane()) return 0;
+        return super.maxDeposit(receiver);
+    }
+
+    /// @notice Mirror of maxDeposit — blocks minting when oracle is insane.
+    function maxMint(address receiver) public view virtual override returns (uint256) {
+        if (_goldPriceInsane()) return 0;
+        return super.maxMint(receiver);
+    }
+
+    /// @dev Returns true when at least one gold adapter is set and reports price insanity.
+    function _goldPriceInsane() internal view returns (bool) {
+        if (goldAllocationAdapter != address(0) && !IGoldAdapter(goldAllocationAdapter).isPriceSane()) {
+            return true;
+        }
+        if (goldSpreadAdapter != address(0) && !IGoldAdapter(goldSpreadAdapter).isPriceSane()) {
+            return true;
+        }
+        return false;
     }
 
     function setHurdlePrincipal(uint256 principal) external onlyOwner {

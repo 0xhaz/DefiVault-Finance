@@ -180,6 +180,12 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         return totalDeployed;
     }
 
+    /// @notice S2-H uses no oracle — price sanity is always considered true.
+    ///         Required by IGoldAdapter so ShariahVault can call isPriceSane() uniformly.
+    function isPriceSane() external pure returns (bool) {
+        return true;
+    }
+
     function protocolName() external pure returns (string memory) {
         return "GoldExchangeAdapter: USDC/PAXG atomic swap (yad bi yad)";
     }

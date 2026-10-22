@@ -462,19 +462,31 @@ contract GoldAllocationAdapterTest is Test {
         // A future SR-override should gate deposits on this flag.
     }
 
-    /// @notice currentValue() falls back to totalDeployed when oracle is stale.
+    /// @notice PR1: currentValue() uses lastGoodPrice * (1 - staleHaircutBps) when oracle stale.
+    ///         Cost basis (totalDeployed) is NEVER used (see PR1 spec).
     function test_currentValue_falls_back_to_totalDeployed_when_stale() public {
         uint256 amount = 3_300e6;
         _deployCapital(amount);
 
-        uint256 deployed = adapter.totalDeployed();
-        assertGt(deployed, 0, "totalDeployed must be positive");
+        uint256 lastGoodPrice = adapter.lastGoodPrice();
+        assertGt(lastGoodPrice, 0, "lastGoodPrice must be set after deploy");
+
+        uint256 xautHeld = adapter.xautHeld();
+        assertGt(xautHeld, 0, "xautHeld must be positive");
 
         // Make oracle stale
         oracle.setUpdatedAt(block.timestamp - MAX_STALENESS - 1);
 
-        // currentValue should fall back to totalDeployed
-        assertEq(adapter.currentValue(), deployed, "currentValue must fall back to totalDeployed when stale");
+        // PR1: currentValue should use lastGoodPrice with haircut (NOT totalDeployed)
+        uint256 val = adapter.currentValue();
+        // Pool also set to same price, so lower-of-two = lastGoodPrice
+        // grossValue = xautHeld * lastGoodPrice / 1e6
+        // haircut applied: grossValue * (10_000 - 500) / 10_000
+        uint256 grossValue = (xautHeld * lastGoodPrice) / 1e6;
+        uint256 expectedHaircutValue = (grossValue * (10_000 - 500)) / 10_000;
+        assertApproxEqRel(val, expectedHaircutValue, 0.01e18,
+            "PR1: currentValue must use lastGoodPrice * (1 - haircut) when stale, NOT totalDeployed");
+        assertLt(val, amount, "currentValue with haircut should be less than deployed amount");
     }
 
     // ═════════════════════════════════════════════════════════════════════════

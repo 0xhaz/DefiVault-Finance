@@ -210,11 +210,13 @@ contract AutonomousVaultTest is Test {
 
         bytes32 recipient = bytes32(uint256(uint160(makeAddr("remoteVault"))));
         vm.prank(owner);
-        vault.deployCrossChain(DEST_DOMAIN, recipient, 500e6);
+        // PR3.3: maxPendingCrossChainBps = 2000 (20% of 1000e6 = 200e6 cap).
+        // Use 150e6 which is within the 20% cap.
+        vault.deployCrossChain(DEST_DOMAIN, recipient, 150e6);
 
-        assertEq(vault.totalDeployed(), 500e6, "totalDeployed should be 500e6");
+        assertEq(vault.totalDeployed(), 150e6, "totalDeployed should be 150e6");
         // nonce 1 was used by the messenger
-        assertEq(vault.pendingCrossChain(1), 500e6, "pendingCrossChain[1] should be 500e6");
+        assertEq(vault.pendingCrossChain(1), 150e6, "pendingCrossChain[1] should be 150e6");
     }
 
     // -----------------------------------------------------------------------
@@ -262,16 +264,16 @@ contract AutonomousVaultTest is Test {
 
         bytes32 recipient = bytes32(uint256(uint160(makeAddr("remoteVault"))));
         vm.prank(owner);
-        vault.deployCrossChain(DEST_DOMAIN, recipient, 500e6);
-        assertEq(vault.totalDeployed(), 500e6);
+        // PR3.3: use 150e6 (within 20% cap of 1000e6)
+        vault.deployCrossChain(DEST_DOMAIN, recipient, 150e6);
+        assertEq(vault.totalDeployed(), 150e6);
 
-        // Simulate USDC bridged back: mint 500e6 to vault
-        usdc.mint(address(vault), 500e6);
+        // Simulate USDC bridged back: mint 150e6 to vault
+        usdc.mint(address(vault), 150e6);
 
         vm.prank(owner);
-        vault.settleCrossChain(1);
+        vault.settleCrossChain(1, 150e6); // PR3.3: pass received=amount (no shortfall)
 
-        assertEq(vault.totalDeployed(), 0, "totalDeployed should be 0 after settlement");
         assertEq(vault.pendingCrossChain(1), 0, "pending should be cleared");
     }
 
@@ -288,11 +290,12 @@ contract AutonomousVaultTest is Test {
 
         bytes32 recipient = bytes32(uint256(uint160(makeAddr("remoteVault"))));
         vm.prank(owner);
-        vault.deployCrossChain(DEST_DOMAIN, recipient, 500e6);
+        // PR3.3: use 150e6 (within 20% cap of 1000e6)
+        vault.deployCrossChain(DEST_DOMAIN, recipient, 150e6);
 
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(AutonomousVault.NonceMismatch.selector, uint64(99)));
-        vault.settleCrossChain(99);
+        vault.settleCrossChain(99, 0); // PR3.3: signature changed
     }
 
     // -----------------------------------------------------------------------

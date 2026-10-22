@@ -5,7 +5,7 @@ Live at [defivault.finance](https://defivault.finance) · USDC-native
 
 DeFiVault is an ERC-4626 vault protocol with four risk tiers across two communities — Conventional and Shariah. An on-chain AI agent continuously scores strategies, routes capital through protocol adapters, and executes the winning strategy on every cycle. All fees are transparent and on-chain; Shariah vaults auto-route charitable contributions before any profit split.
 
-**Current revision (Oct 2026):** Phases 2 and 3 complete (Tasks A–F, B, D, E; G1–G4 safety fixes). OUSG/BUIDL removed from Shariah tier (SR-001); gold exchanges enforced as atomic single-transaction swaps for yad bi yad compliance (S2-H); S6-H XAUT Gold Allocation adapter with Chainlink oracle (round-completeness checked), pool deviation guard, and 30-day timelock on all board-settable parameters; combined gold cap 30%; GoldAllocationAdapter.recall() never reverts on stale oracle (G1). CharityModule + PurificationEscrow waterfall replaces ZakatModule; purification (disposal of non-compliant income) tracked separately from sadaqah charitable contribution. SC Malaysia screening engine with 11 SC-SAC rules; ShariahVaultV2 with ShariahAdapterRegistry (board-timelocked pronouncement hash + expiry per adapter; board role changes require board co-proposal + 30-day timelock, G4). Migration UI and APY estimator (P10/P50/P90). 338 tests green. Open board review items SR-001 to SR-011 (none yet approved) in `docs/agents/SHARIAH_REVIEW.md`.
+**Current revision (Oct 2026):** Phases 2 and 3 complete (Tasks A–F, B, D, E; G1–G4 safety fixes; H PR1–PR3). OUSG/BUIDL removed from Shariah tier (SR-001); gold exchanges enforced as atomic single-transaction swaps for yad bi yad compliance (S2-H); S6-H XAUT Gold Allocation adapter with Chainlink oracle, pool deviation guard, and 30-day timelock on all board-settable parameters; combined gold cap 30%; `currentValue()` never reverts — stale oracle falls back to `lastGoodPrice × (1 − staleHaircutBps)` (PR1); deposits paused via `maxDeposit/maxMint = 0` when oracle insane. PurificationEscrow rate now requires board propose + 30-day timelock (PR2). High-water mark loss carry-forward in TreasuryModule; profit unlock streaming (3-day default) in AutonomousVault; cross-chain pending cap (20% default) with immediate shortfall booking on settle (PR3). SR-G6 renumbered SR-012. 364 tests green. Open board review items SR-001 to SR-013 (none yet approved) in `docs/agents/SHARIAH_REVIEW.md`.
 
 ---
 
@@ -152,11 +152,19 @@ classDiagram
         +totalDeployed: uint256
         +maxAllocationBps: uint256
         +sourceDomain: uint32
+        +lockedProfit: uint256
+        +unlockedAt: uint256
+        +profitUnlockPeriod: uint256 (3 days default)
+        +totalPendingCrossChain: uint256
+        +maxPendingCrossChainBps: uint256 (2000 default)
         +deployCapital()
-        +deployCrossChain()
+        +deployCrossChain() — cap: maxPendingCrossChainBps
         +returnCapital()
         +recallCapital()
-        +settleCrossChain()
+        +settleCrossChain(nonce, received) — books shortfall
+        +lockProfit(amount)
+        +_currentLockedProfit() — linear decay
+        +totalAssets() — subtracts locked profit
     }
 
     class ConventionalVault {
@@ -175,8 +183,12 @@ classDiagram
         +goldAllocationAdapter: address
         +shariahScreeningEnabled: bool
         +screened: mapping
+        +highWaterMark: uint256
+        +hwmDeficit: uint256
         +deployCapital() override
-        +claimMusharakahProfit() — delegates to purificationEscrow
+        +claimMusharakahProfit() — HWM split + lockProfit
+        +maxDeposit() returns 0 when gold oracle not sane
+        +maxMint() returns 0 when gold oracle not sane
         +sweepFeesToTreasury()
         +name() virtual svUSDC_name
         +symbol() virtual svUSDC
@@ -215,6 +227,7 @@ classDiagram
         +accrue()
         +claimFees()
         +calculateMusharakahSplit()
+        +calculateMusharakahSplitHWM(gross, elapsed, principal, hwmDeficit)
     }
 
     class ZakatModule {
@@ -240,7 +253,9 @@ classDiagram
         +purificationBps: uint256
         +MAX_PURIFICATION_BPS: 1000
         +executeWaterfall(grossProfit, elapsed, principal)
-        +setPurificationBps(uint256)
+        +proposePurificationRate(uint256)
+        +confirmPurificationRate()
+        +cancelPurificationRate()
     }
 
     ERC4626 <|-- AutonomousVault
@@ -271,7 +286,9 @@ Base ERC-4626 vault. All four tier vaults inherit this.
 | Max allocation cap | 80% of `totalAssets()` by default (configurable up to 95%) |
 | Manager role | Single address that can call `deployCapital` and `deployCrossChain` |
 | CCTP | Immutable `sourceDomain` set at construction; `tokenMessenger` configurable |
-| Cross-chain accounting | `pendingCrossChain[nonce]` tracks outbound capital until `settleCrossChain` |
+| Cross-chain accounting | `pendingCrossChain[nonce]` tracks outbound capital until `settleCrossChain`; shortfall booked as immediate NAV loss |
+| Cross-chain cap | `maxPendingCrossChainBps` (default 20%) caps total in-flight USDC; `deployCrossChain` reverts `PendingCrossChainCapExceeded` if breached |
+| Profit unlock | `lockedProfit` streams into `totalAssets()` linearly over `profitUnlockPeriod` (default 3 days, max 14 days); flash-claim-redeem earns ~0 |
 
 Key functions:
 
@@ -280,7 +297,7 @@ function deployCapital(address strategy, uint256 amount, bytes calldata data) pu
 function deployCrossChain(uint32 destDomain, bytes32 recipient, uint256 amount) external
 function returnCapital(address strategy, uint256 amount) external
 function recallCapital(address adapter, uint256 amount) external
-function settleCrossChain(uint64 nonce) external
+function settleCrossChain(uint64 nonce, uint256 received) external
 ```
 
 ### `ConventionalVault.sol`
@@ -295,7 +312,9 @@ Inherits `AutonomousVault`. Overrides `deployCapital` to enforce:
 3. Wakala fee accrued on every deployment
 4. Combined gold cap: `goldSpreadAdapter.currentValue() + goldAllocationAdapter.currentValue() <= MAX_GOLD_BPS * totalAssets() / 10_000`
 
-`claimMusharakahProfit(grossProfit)` now delegates to `purificationEscrow.executeWaterfall()` — reverts `PurificationEscrowNotSet` if escrow not wired. `MusharakahProfitClaimed` event emits 5 params: `(grossProfit, purified, charity, vaultShare, depositorShare)`.
+`claimMusharakahProfit(grossProfit)` delegates to `purificationEscrow.executeWaterfall()` — reverts `PurificationEscrowNotSet` if escrow not wired. After the waterfall, it calls `_lockProfitInternal(depositorShare)` to stream the profit into `totalAssets()` over `profitUnlockPeriod` (default 3 days), preventing flash-claim-redeem attacks. Tracks `highWaterMark` and `hwmDeficit` per claim: if NAV is below the prior HWM, `hwmDeficit` is set and `calculateMusharakahSplitHWM` is used so the vault earns zero until depositors are made whole. `MusharakahProfitClaimed` event emits 5 params: `(grossProfit, purified, charity, vaultShare, depositorShare)`.
+
+`maxDeposit`/`maxMint` are overridden to return 0 when `goldAllocationAdapter.isPriceSane()` is false — new deposits are blocked while the gold oracle is stale; redemptions remain open at all times.
 
 ### `ShariahVaultV2.sol`
 
@@ -387,6 +406,8 @@ Accounting-only fee ledger. Actual USDC transfer happens only when the vault cal
 
 `claimFees` is accounting-only — it decrements `pendingFees` and emits the event; the caller must separately trigger `sweepFeesToTreasury` on the vault to move actual tokens. Fee sweeps are capped to `pendingFees` to prevent draining depositor principal.
 
+`calculateMusharakahSplitHWM(grossProfit, elapsed, principal, hwmDeficit)` is the high-water mark variant: `vaultShare = 0` when `grossProfit < hwmDeficit`, ensuring the vault takes no profit during a loss-recovery period. Called by `ShariahVault.claimMusharakahProfit` when `hwmDeficit > 0`.
+
 ### `ZakatModule.sol`
 
 **Deprecated for new deployments.** Kept live for v1 vault history and redemption continuity. Do not wire into new vaults — use `CharityModule` + `PurificationEscrow` instead. The fixed `ZAKAT_BPS = 250` (2.5%) rate and 30-day wallet timelock remain intact for v1 vault operations.
@@ -422,7 +443,7 @@ Only the vault can call `deploy` and `recall` (enforced by `onlyVault` modifier 
 | `HalalLPAdapter` | Uniswap V3 USDC/ETH | Conservative + Dynamic | S3-H | Active |
 | `CommodityMurabahaAdapter` | Murabaha trade lifecycle | Dynamic | S4-H | Active |
 | `GoldExchangeAdapter` | PAXG/USDC atomic swap (Uniswap V3) | Conservative + Dynamic | S2-H | Active |
-| `GoldAllocationAdapter` | XAUT spot position (oracle + Uniswap V3) | Conservative + Dynamic | S6-H | Pending SR-008; `recall()` never reverts on stale oracle (G1) |
+| `GoldAllocationAdapter` | XAUT spot position (oracle + Uniswap V3) | Conservative + Dynamic | S6-H | Pending SR-008; stale oracle falls back to `lastGoodPrice × (1 − staleHaircutBps)` (PR1); `pokePrice()` permissionless; `recall()` never reverts (G1) |
 | `RwaYieldAdapter` | OUSG / BUIDL direct hold | — | S5-H | Deprecated (SR-001); unscreened from Shariah tier |
 
 ### `CommodityMurabahaAdapter` — Trade Lifecycle
@@ -543,10 +564,12 @@ sequenceDiagram
     Dest->>Dest: capital deployed to protocol
 
     Note over Owner,Vault: Inbound — settle return
-    Owner->>Vault: settleCrossChain(nonce)
-    Vault->>Vault: totalDeployed -= pendingCrossChain[nonce]
+    Owner->>Vault: settleCrossChain(nonce, received)
+    Vault->>Vault: shortfall = pendingCrossChain[nonce] - received
+    Vault->>Vault: totalDeployed -= pendingCrossChain[nonce] (shortfall absorbed into NAV)
+    Vault->>Vault: totalPendingCrossChain -= pendingCrossChain[nonce]
     Vault->>Vault: delete pendingCrossChain[nonce]
-    Vault-->>Owner: CrossChainSettled event
+    Vault-->>Owner: CrossChainSettled(nonce, received, shortfall)
 ```
 
 ---
@@ -576,7 +599,7 @@ flowchart TD
     PE --> PUR["1. Purification — purificationBps to charity wallet"]
     PUR --> SAD["2. Sadaqah — charityBps via CharityModule"]
     SAD --> MS["3. TreasuryModule.calculateMusharakahSplit — 10% above 4% hurdle"]
-    MS --> RP["4. vaultShare to pendingFees; depositorShare returned to vault"]
+    MS --> RP["4. vaultShare to pendingFees; depositorShare returned to vault — then lockProfit(depositorShare)"]
 
     style SV fill:#1a472a,color:#fff
     style PE fill:#92400e,color:#fff
@@ -618,7 +641,7 @@ graph LR
 | Musharakah profit share | 10% of profit above 4% hurdle | Applied via PurificationEscrow on `claimMusharakahProfit` | When manager claims |
 | Purification (disposal of non-compliant income) | Board-set `purificationBps` (default 0; max 10%) | Step 1 of waterfall; sent directly to charity wallet | Before any Musharakah split |
 | Charitable contribution (sadaqah) | Board-set `charityBps` (default 2.5%; max 5%) | Step 2 of waterfall; routed via CharityModule | After purification, before split; **30-day timelock** via `proposeCharityRateChange` |
-| Purification rate setter | `PurificationEscrow.setPurificationBps` (default 0%; max 10%) | `onlyOwner`, **no timelock** (asymmetric with charityBps — see SR-G6 note) | Immediate; board should consider adding a timelock |
+| Purification rate setter | `PurificationEscrow.proposePurificationRate` → `confirmPurificationRate` (default 0%; max 10%) | `onlyBoard`, 30-day timelock (PR2 / SR-012) | Full timelock; symmetric with charityBps governance |
 
 ---
 
@@ -658,14 +681,15 @@ sequenceDiagram
     SV-->>Manager: MusharakahProfitClaimed(grossProfit, purified, charity, vaultShare, depositorShare)
 ```
 
-**CharityModule wallet and rate changes require a 30-day timelock:**
+**All profit waterfall rate and wallet changes require a 30-day timelock:**
 
 ```
 CharityModule.proposeCharityWalletChange(newWallet)  →  wait 30 days  →  confirmCharityWalletChange()
 CharityModule.proposeCharityRateChange(newBps)        →  wait 30 days  →  confirmCharityRateChange()
+PurificationEscrow.proposePurificationRate(newBps)    →  wait 30 days  →  confirmPurificationRate()
 ```
 
-Note: `PurificationEscrow.setPurificationBps` is `onlyOwner` with **no timelock** (asymmetric — see SR-G6 in `SHARIAH_REVIEW.md`).
+All three are `onlyBoard`. `grantBoardRole`/`revokeBoardRole` on each contract is `onlyOwner`. Governance is now symmetric — see SR-012 in `SHARIAH_REVIEW.md`.
 
 The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is not wired into any new vault. V1 redemptions remain available at NAV with no forced migration.
 
@@ -683,7 +707,7 @@ The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is 
 | Over-allocation | `maxAllocationBps` cumulative cap (default 80%) enforced on every deployment |
 | Stale oracle execution | 5-minute staleness guard in both score aggregators |
 | Gas price manipulation | `maxGasPrice` guard per tier in `RiskTieredExecutor` |
-| Cross-chain double-settle | `settleCrossChain` deletes `pendingCrossChain[nonce]` atomically |
+| Cross-chain double-settle | `settleCrossChain` deletes `pendingCrossChain[nonce]` atomically; shortfall booked immediately as NAV loss |
 | Same-domain CCTP loop | `deployCrossChain` reverts `SameDomainDeploy` if `destDomain == sourceDomain` |
 | Charitable wallet rug | 30-day timelock on all `CharityModule` wallet + rate changes; `ZakatModule` also timelocked for v1 compat |
 | RWA lending exposure | `RwaYieldAdapter` has no approve-for-lending function by design |
@@ -694,15 +718,22 @@ The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is 
 | Non-atomic gold cross-chain | `ShariahVault.deployCrossChain` reverts `NonAtomicGoldExchange` when `goldCrossChainBlocked = true` |
 | Stale Chainlink gold price | `GoldAllocationAdapter._getOraclePrice` checks `startedAt > 0`, `answeredInRound >= roundId`, `answer > 0`, and `block.timestamp - updatedAt <= maxStalenessSecs` |
 | Pool-oracle gold deviation (deploy) | `GoldAllocationAdapter.deploy()` checks `isPriceSane()` first; reverts `OracleNotSane` if oracle is stale or pool price deviates beyond `maxDeviationBps`. New gold buys are blocked; existing positions are unaffected. |
-| Pool-oracle gold deviation (recall) | `GoldAllocationAdapter.recall()` uses `_getOraclePriceSafe()` — never reverts on stale oracle. When stale, uses `totalDeployed` as conservative floor; when pool deviates, uses the lower of oracle/pool price. `vault.redeem()` always succeeds even when the gold oracle is down (G1). |
+| Stale oracle gold valuation | `GoldAllocationAdapter.currentValue()` never returns cost basis. Sane oracle: oracle price cross-checked with pool (lower of two). Stale oracle: `min(lastGoodPrice, poolPrice) × (1 − staleHaircutBps)` where `staleHaircutBps` defaults to 500 (5%), capped at 2000 (20%), board-settable via 30-day timelock (PR1 / SR-013). `lastGoodPrice` updated on every successful oracle read; `pokePrice()` is permissionless. `vault.redeem()` always succeeds — pool reads are try/catch. |
+| Stale oracle deposit block | `ShariahVault.maxDeposit`/`maxMint` return 0 when `goldAllocationAdapter.isPriceSane()` is false — new deposits blocked while oracle is down; redemptions remain open (PR1). |
+| Pool-oracle gold deviation (recall) | `GoldAllocationAdapter.recall()` uses `_getOraclePriceSafe()` — never reverts on stale oracle. When pool deviates, uses the lower of oracle/pool price. `vault.redeem()` always succeeds even when the gold oracle is down (G1). |
 | Parameter manipulation (gold adapter) | All numeric and address params on `GoldAllocationAdapter` require 30-day timelock via `proposeParamChange` / `executeParamChange`; hard caps enforced at proposal time |
 | Reentrancy in executor | `RiskTieredExecutor.executeWinner` uses `_executionLocked` guard; `lastExecutionTime` set before external calls |
+| Flash-claim-redeem profit extraction | `_lockProfitInternal` locks new `depositorShare` for `profitUnlockPeriod` (default 3 days); `totalAssets()` subtracts `_currentLockedProfit()` — a deposit-claim-redeem in the same block extracts ~0 |
+| Loss carry-forward (Musharakah HWM) | `TreasuryModule.calculateMusharakahSplitHWM`: `vaultShare = 0` until cumulative losses (`hwmDeficit`) are recovered above `highWaterMark`; depositors bear losses pro-rata, vault takes no profit during recovery (PR3 / SR-004) |
+| Cross-chain over-exposure | `deployCrossChain` reverts `PendingCrossChainCapExceeded` when `totalPendingCrossChain + amount > totalAssets() × maxPendingCrossChainBps / 10_000` (default cap 20%); cap enforced against pre-burn NAV (bug fix — previously checked post-burn) |
 
 ---
 
 ## Test Coverage
 
-**338 Foundry tests** (249 unit + 89 fuzz) across **25 test files**; **48 bun tests** in `server/screening/tests/`. Counts from `forge test --summary` — never hand-edited (G11).
+**364 Foundry tests** (275 unit + 89 fuzz) across **26 test files**; **48 bun tests** in `server/screening/tests/`. Counts from `forge test --summary` — never hand-edited (G11).
+
+New in Task H: `TaskHTest.t.sol` (26 tests) covering PR1 gold haircut, PR2 purification timelock, PR3.1 HWM loss carry-forward, PR3.2 profit unlock streaming, PR3.3 cross-chain pending cap and shortfall booking.
 
 **Foundry test suite (`forge test --fuzz-runs 512`):**
 
@@ -733,6 +764,7 @@ The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is 
 | `FuzzCharityModule.t.sol` | 6 | Fuzz (512 runs) | Arithmetic exactness, cap, timelock boundary, accumulator monotonicity |
 | `FuzzPurificationEscrow.t.sol` | 4 | Fuzz (512 runs) | Waterfall invariant, zero-purification, charity proportionality |
 | `FuzzShariahVaultV2.t.sol` | 4 | Fuzz (512 runs) | Migration round-trip NAV, timelock, screening expiry lifecycle, allocation cap |
+| `TaskHTest.t.sol` | 26 | Unit + Fuzz | PR1 gold haircut (11), PR2 purification timelock (5), PR3.1 HWM (3), PR3.2 profit unlock (3), PR3.3 cross-chain cap + shortfall (4) |
 
 **Bun screening tests (`bun test server/screening/tests/`):**
 
@@ -880,7 +912,7 @@ contracts/
 │   ├── DeployGoldAllocation.s.sol        # Deploy mocks + adapter + wire vaults (Task F)
 │   └── DeployShariahV2.s.sol             # Deploy CharityModule + PurificationEscrow + V2 vault + registry (Task E)
 └── test/
-    ├── *Test.t.sol              # 249 unit tests across 14 files (incl. TaskGTest.t.sol)
+    ├── *Test.t.sol              # 275 unit tests across 15 files (incl. TaskGTest.t.sol, TaskHTest.t.sol)
     └── Fuzz*.t.sol              # 89 fuzz tests across 11 files (512 runs each)
 
 server/
@@ -908,7 +940,7 @@ src/
 
 docs/
 ├── agents/
-│   ├── SHARIAH_REVIEW.md            # Open board review items SR-001 through SR-011 (none approved)
+│   ├── SHARIAH_REVIEW.md            # Open board review items SR-001 through SR-013 (none approved)
 │   ├── deployed-addresses.md        # Contract addresses filled after each deploy run
 │   └── shariah-vault-revision-plan.md
 └── migration-v1-to-v2.md           # V1 → V2 migration guide (no forced migration)

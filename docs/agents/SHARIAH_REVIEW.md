@@ -232,16 +232,69 @@ Before `GoldAllocationAdapter` can be used in production:
 
 ---
 
-## SR-G6 — Purification rate: global blended rate vs per-adapter taint ratio
+## SR-013 — Gold oracle stale-price fallback (PR1 implemented)
 
 | Field | Value |
 |---|---|
 | Status | REVIEW |
 | Raised | 2026-10-22 |
-| Task | G (G6) |
+| Task | H (PR1) |
+| Affects | `GoldAllocationAdapter.currentValue()`, `ShariahVault.maxDeposit/maxMint` |
+
+**Issue.** When the Chainlink XAU/USD oracle is stale, `currentValue()` previously returned `totalDeployed` (cost basis). This overstates value when gold has fallen (unfair to redeemers), and understates when gold has risen (unfair to depositors).
+
+**Implemented (PR1).** After every successful oracle read, `lastGoodPrice` is cached. When the oracle is not sane, `currentValue()` returns `min(lastGoodPrice, poolPrice if readable) × (1 - staleHaircutBps)`. Default haircut: 5%. Hard cap: 20%. Board-settable via 30-day timelock (`PARAM_STALE_HAIRCUT`). Cost basis is never used in valuation. `maxDeposit`/`maxMint` return 0 when oracle is insane — new deposits blocked; redemptions remain open.
+
+**Board action required.** Default `staleHaircutBps = 500` (5%) is a reasonable engineering default. Board should confirm this is within approved parameters before live deploy.
+
+---
+
+## SR-014 — High-water mark and profit unlock (PR3 implemented)
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-22 |
+| Task | H (PR3) |
+| Affects | `TreasuryModule.calculateMusharakahSplitHWM`, `AutonomousVault.lockProfit`, `ShariahVault.claimMusharakahProfit` |
+
+**Issue.** Two separate fairness risks: (a) after a vault loss, the manager could earn profit share on recovery before all depositors' losses are made whole (high-water mark); (b) a depositor could deposit just before a profit claim and redeem immediately after, extracting profit they did not earn (sandwich attack).
+
+**Implemented (PR3.1 + PR3.2).** `TreasuryModule.calculateMusharakahSplitHWM(hwmDeficit)` zeroes `vaultShare` until recovery > `hwmDeficit`. `claimMusharakahProfit` updates `highWaterMark` and `hwmDeficit` before each claim. `AutonomousVault._currentLockedProfit()` linearly decays `lockedProfit` over `profitUnlockPeriod` (default 3 days, max 14 days); `totalAssets()` subtracts locked profit so a deposit-claim-redeem earns ~0. `claimMusharakahProfit` calls `_lockProfitInternal(depositorShare)` after each waterfall.
+
+**Board action required.** Default `profitUnlockPeriod = 3 days`. Board to confirm this is acceptable. `calculateMusharakahSplitHWM` is a pure helper; existing `calculateMusharakahSplit` remains for backward compat.
+
+---
+
+## SR-015 — Cross-chain pending cap and shortfall accounting (PR3 implemented)
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-22 |
+| Task | H (PR3) |
+| Affects | `AutonomousVault.deployCrossChain`, `AutonomousVault.settleCrossChain` |
+
+**Issue.** (a) No cap on how much vault capital could be in-flight cross-chain — a single deploy could send 100% of assets to a remote chain with no recovery guarantee. (b) `settleCrossChain` had no mechanism to handle bridge shortfalls (fees, slippage, loss); a returned amount less than sent would have been silently ignored.
+
+**Implemented (PR3.3).** `maxPendingCrossChainBps` (default 2000 = 20%, max 5000) enforces a cap at deploy time, checked against pre-burn `totalAssets()`. `settleCrossChain(nonce, received)` signature updated with `received` param. Shortfall = `sent - received` is booked as an immediate NAV loss by decrementing `totalDeployed` by `sent` without adding back `received` (received tokens are already in vault balance from CCTP mint). `CrossChainSettled` event emits `(nonce, received, shortfall)`.
+
+**Board action required.** Default cap 20% is a conservative engineering default. Board to confirm.
+
+---
+
+## SR-012 — Purification rate: global blended rate vs per-adapter taint ratio
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-22 |
+| Task | G (G6) / H (PR2) |
 | Affects | `PurificationEscrow.purificationBps`, `CharityModule`, profit waterfall |
 
-**Issue.** Task B's original spec called for a per-adapter `taintedRatioBps` — each adapter would report its own non-compliant income fraction, and the purification step would deduct only the tainted portion. The current implementation uses a single global `purificationBps` applied to all Musharakah profit regardless of source.
+**Governance fix (PR2).** `PurificationEscrow.setPurificationBps` (previously immediate, onlyOwner) replaced with `proposePurificationRate` → `confirmPurificationRate` pattern (30-day timelock, `onlyBoard`). `boardRole` mapping with `grantBoardRole`/`revokeBoardRole` by owner. Deployer is initial board member. This resolves the governance asymmetry with `charityBps`.
+
+**Open architectural issue.** Task B's original spec called for a per-adapter `taintedRatioBps` — each adapter would report its own non-compliant income fraction, and the purification step would deduct only the tainted portion. The current implementation uses a single global `purificationBps` applied to all Musharakah profit regardless of source.
 
 The board must confirm whether a single blended purification rate is acceptable, or whether the vault must track per-adapter taint and apply individualized rates. The implications are:
 

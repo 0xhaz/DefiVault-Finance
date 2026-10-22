@@ -48,6 +48,14 @@ contract PurificationEscrow is Ownable2Step {
     error CombinedDeductionAboveCap(uint256 combined, uint256 cap);
     /// @dev Thrown when purificationBps is set above the hard cap (1000 = 10%).
     error PurificationAboveCap(uint256 proposed, uint256 cap);
+    /// @dev PR2: board role required to propose rate change.
+    error NotBoardRole(address caller);
+    /// @dev Proposal executed before timelock elapsed.
+    error TimelockNotElapsed(uint256 earliest, uint256 current);
+    /// @dev No pending proposal to execute or cancel.
+    error NoPendingProposal();
+    /// @dev A proposal already exists; cancel it first.
+    error ProposalAlreadyExists();
 
     // ── Events ──────────────────────────────────────────────────────────────
 
@@ -59,6 +67,8 @@ contract PurificationEscrow is Ownable2Step {
         uint256 depositorShare
     );
     event PurificationBpsUpdated(uint256 previous, uint256 updated);
+    event PurificationRateProposed(uint256 newBps, uint256 executeAfter);
+    event PurificationRateProposalCancelled();
 
     // ── Constants ────────────────────────────────────────────────────────────
 
@@ -66,12 +76,25 @@ contract PurificationEscrow is Ownable2Step {
     uint256 public constant MAX_PURIFICATION_BPS = 1000;
     /// @notice Hard cap: purification + charity combined cannot exceed 50%.
     uint256 public constant MAX_COMBINED_DEDUCTION_BPS = 5000;
+    /// @notice Board role must propose; 30-day timelock before execution (PR2, SR-G6 → SR-012).
+    uint256 public constant PURIFICATION_TIMELOCK = 30 days;
 
     // ── State ────────────────────────────────────────────────────────────────
 
     /// @notice Fraction of grossProfit to set aside as purification (default 0).
     ///         Raised only when the board identifies a specific impure-income event.
     uint256 public purificationBps;
+
+    /// @notice Board members authorised to propose rate changes (PR2).
+    mapping(address => bool) public boardRole;
+
+    struct PendingRateChange {
+        uint256 newBps;
+        uint256 executeAfter;
+        bool exists;
+    }
+    /// @notice Pending purification rate proposal.
+    PendingRateChange public pendingRateChange;
 
     address public immutable vault;
     address public immutable asset;
@@ -92,6 +115,7 @@ contract PurificationEscrow is Ownable2Step {
         charityModule   = CharityModule(charityModule_);
         shariahTreasury = TreasuryModule(shariahTreasury_);
         purificationBps = 0; // no impure income identified at deploy
+        boardRole[initialOwner] = true; // deployer is initial board member
     }
 
     // ── Waterfall ────────────────────────────────────────────────────────────
@@ -178,20 +202,50 @@ contract PurificationEscrow is Ownable2Step {
 
     // ── Owner controls ───────────────────────────────────────────────────────
 
+    // ── Board role management ────────────────────────────────────────────────
+
+    modifier onlyBoard() {
+        if (!boardRole[msg.sender]) revert NotBoardRole(msg.sender);
+        _;
+    }
+
+    /// @notice Owner grants board membership (no timelock — owner is trusted for membership).
+    function grantBoardRole(address account) external onlyOwner { boardRole[account] = true; }
+
+    /// @notice Owner revokes board membership.
+    function revokeBoardRole(address account) external onlyOwner { boardRole[account] = false; }
+
+    // ── Purification rate — timelocked (PR2 / SR-012) ───────────────────────
+
     /**
-     * @notice Set the purification rate.
+     * @notice Board proposes a new purification rate (30-day timelock).
      * @dev    ONLY raise this when the board has identified a specific impure-income event.
-     *         Cannot exceed MAX_PURIFICATION_BPS (10%). Combined with charityBps must not
-     *         exceed MAX_COMBINED_DEDUCTION_BPS (50%).
      */
-    function setPurificationBps(uint256 newBps) external onlyOwner {
+    function proposePurificationRate(uint256 newBps) external onlyBoard {
         if (newBps > MAX_PURIFICATION_BPS) revert PurificationAboveCap(newBps, MAX_PURIFICATION_BPS);
         uint256 combined = newBps + charityModule.charityBps();
-        if (combined > MAX_COMBINED_DEDUCTION_BPS) {
-            revert CombinedDeductionAboveCap(combined, MAX_COMBINED_DEDUCTION_BPS);
-        }
+        if (combined > MAX_COMBINED_DEDUCTION_BPS) revert CombinedDeductionAboveCap(combined, MAX_COMBINED_DEDUCTION_BPS);
+        if (pendingRateChange.exists) revert ProposalAlreadyExists();
+        uint256 executeAfter = block.timestamp + PURIFICATION_TIMELOCK;
+        pendingRateChange = PendingRateChange({newBps: newBps, executeAfter: executeAfter, exists: true});
+        emit PurificationRateProposed(newBps, executeAfter);
+    }
+
+    /// @notice Board confirms the pending rate change after the 30-day timelock.
+    function confirmPurificationRate() external onlyBoard {
+        PendingRateChange memory p = pendingRateChange;
+        if (!p.exists) revert NoPendingProposal();
+        if (block.timestamp < p.executeAfter) revert TimelockNotElapsed(p.executeAfter, block.timestamp);
+        delete pendingRateChange;
         uint256 previous = purificationBps;
-        purificationBps  = newBps;
-        emit PurificationBpsUpdated(previous, newBps);
+        purificationBps  = p.newBps;
+        emit PurificationBpsUpdated(previous, p.newBps);
+    }
+
+    /// @notice Board cancels the pending rate proposal.
+    function cancelPurificationRate() external onlyBoard {
+        if (!pendingRateChange.exists) revert NoPendingProposal();
+        delete pendingRateChange;
+        emit PurificationRateProposalCancelled();
     }
 }

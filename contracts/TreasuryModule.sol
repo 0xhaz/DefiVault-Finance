@@ -104,6 +104,40 @@ contract TreasuryModule is Ownable2Step {
         depositorShare = grossProfit - vaultShare;
     }
 
+    /**
+     * @notice Calculates the Musharakah split respecting a cumulative high-water mark.
+     * @dev    PR3.1: the manager earns nothing on recovery up to the previous high-water mark.
+     *         `hwmDeficit` is the cumulative loss that must be recovered before any profit share.
+     *         Pass hwmDeficit = 0 for periods where no prior loss exists.
+     *
+     * @param grossProfit    Gross profit for this claim period.
+     * @param elapsedSeconds Seconds since hurdleStartTime.
+     * @param principal      Hurdle principal (vault totalAssets at last claim).
+     * @param hwmDeficit     Cumulative unrecovered loss below the high-water mark (USDC).
+     */
+    function calculateMusharakahSplitHWM(
+        uint256 grossProfit,
+        uint256 elapsedSeconds,
+        uint256 principal,
+        uint256 hwmDeficit
+    )
+        public
+        view
+        returns (uint256 hurdleAmount, uint256 vaultShare, uint256 depositorShare)
+    {
+        if (!isShariahTreasury) revert NotShariahTreasury();
+
+        hurdleAmount = (principal * hurdleRateBps * elapsedSeconds) / (10_000 * 365 days);
+
+        // Recovery of hwmDeficit comes before any profit share — depositors absorb losses first.
+        uint256 recoveryNeeded = hwmDeficit;
+        uint256 afterRecovery  = grossProfit > recoveryNeeded ? grossProfit - recoveryNeeded : 0;
+
+        uint256 surplus = afterRecovery > hurdleAmount ? afterRecovery - hurdleAmount : 0;
+        vaultShare     = (surplus * musharakahShareBps) / 10_000;
+        depositorShare = grossProfit - vaultShare;
+    }
+
     function recordMusharakahProfit(uint256 vaultShare) external onlyFeeSource {
         if (!isShariahTreasury) revert NotShariahTreasury();
 

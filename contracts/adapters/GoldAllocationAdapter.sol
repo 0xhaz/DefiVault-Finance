@@ -56,6 +56,8 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
     event GoldSold(uint256 xautIn, uint256 usdcOut, uint256 oraclePrice);
     event ParamChangeProposed(bytes32 indexed paramId, uint256 newValue, uint256 executeAfter);
     event ParamChangeExecuted(bytes32 indexed paramId, uint256 newValue);
+    /// @notice Emitted whenever lastGoodPrice is refreshed from the oracle.
+    event LastGoodPriceUpdated(uint256 price, uint256 timestamp);
 
     uint256 public constant MAX_SLIPPAGE_BPS = 200;
     uint256 public constant MAX_DEVIATION_BPS = 300;
@@ -80,6 +82,22 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
     uint256 public xautHeld;
     uint256 public totalDeployed;
 
+    /// @notice Last oracle price successfully validated (USDC per XAUT, usdc-decimal scaled).
+    ///         Updated on every successful deploy(), recall(), and pokePrice() call.
+    ///         Used as the conservative floor when the oracle goes stale (PR1).
+    uint256 public lastGoodPrice;
+
+    /// @notice Timestamp of the last successful oracle read.
+    uint256 public lastGoodPriceAt;
+
+    /// @notice Haircut applied to lastGoodPrice when oracle is stale (bps, default 500 = 5%).
+    ///         Board-settable via the standard propose/execute timelock.
+    ///         Hard cap: MAX_STALE_HAIRCUT_BPS = 2000.
+    uint256 public staleHaircutBps;
+
+    /// @notice Hard cap for the stale-price haircut.
+    uint256 public constant MAX_STALE_HAIRCUT_BPS = 2000;
+
     address public pool;
 
     struct PendingChange {
@@ -97,12 +115,13 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
     mapping(bytes32 => PendingChange) public pendingChanges;
     mapping(bytes32 => PendingAddressChange) public pendingAddressChanges;
 
-    bytes32 public constant PARAM_MAX_STALENESS = keccak256("maxStalenessSecs");
-    bytes32 public constant PARAM_MAX_SLIPPAGE = keccak256("maxSlippageBps");
-    bytes32 public constant PARAM_MAX_DEVIATION = keccak256("maxDeviationBps");
-    bytes32 public constant PARAM_POOL_FEE = keccak256("poolFee");
-    bytes32 public constant PARAM_SWAP_ROUTER = keccak256("swapRouter");
-    bytes32 public constant PARAM_GOLD_ORACLE = keccak256("goldOracle");
+    bytes32 public constant PARAM_MAX_STALENESS   = keccak256("maxStalenessSecs");
+    bytes32 public constant PARAM_MAX_SLIPPAGE    = keccak256("maxSlippageBps");
+    bytes32 public constant PARAM_MAX_DEVIATION   = keccak256("maxDeviationBps");
+    bytes32 public constant PARAM_POOL_FEE        = keccak256("poolFee");
+    bytes32 public constant PARAM_SWAP_ROUTER     = keccak256("swapRouter");
+    bytes32 public constant PARAM_GOLD_ORACLE     = keccak256("goldOracle");
+    bytes32 public constant PARAM_STALE_HAIRCUT   = keccak256("staleHaircutBps");
 
     constructor(
         address usdc_,
@@ -126,9 +145,10 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         vault = vault_;
         pool = swapRouter_;
 
-        maxSlippageBps = 50;
-        maxDeviationBps = 100;
+        maxSlippageBps   = 50;
+        maxDeviationBps  = 100;
         maxStalenessSecs = initialMaxStalenessSecs;
+        staleHaircutBps  = 500; // 5% default haircut on stale-price valuation
     }
 
     modifier onlyVault() {
@@ -178,6 +198,20 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         if (poolPriceUsdc == 0) {
             revert GoldPriceDeviation(poolPriceUsdc, oraclePriceUsdc, maxDeviationBps);
         }
+    }
+
+    /// @dev Called after every successful oracle read to cache the last known good price.
+    function _updateLastGoodPrice(uint256 price) internal {
+        lastGoodPrice   = price;
+        lastGoodPriceAt = block.timestamp;
+        emit LastGoodPriceUpdated(price, block.timestamp);
+    }
+
+    /// @notice Anyone may call this to refresh lastGoodPrice from the oracle.
+    ///         Useful to poke the cached price before the oracle goes stale.
+    function pokePrice() external {
+        uint256 oraclePrice = _getOraclePrice();
+        _updateLastGoodPrice(oraclePrice);
     }
 
     function isPriceSane() public view returns (bool) {
@@ -239,6 +273,7 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         xautHeld += xautReceived;
         totalDeployed += usdcAmount;
 
+        _updateLastGoodPrice(oraclePrice);
         emit GoldBought(usdcAmount, xautReceived, oraclePrice);
     }
 
@@ -259,7 +294,8 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         uint256 minUsdcOut;
 
         if (oracleOk) {
-            // Normal path: oracle fresh — apply deviation check and slippage floor.
+            // Normal path: oracle fresh — update cache, apply deviation check and slippage floor.
+            _updateLastGoodPrice(oraclePrice);
             uint256 poolPrice = _getPoolPrice(oraclePrice);
             uint256 diff = oraclePrice > poolPrice ? oraclePrice - poolPrice : poolPrice - oraclePrice;
             if ((diff * 10_000) / oraclePrice > maxDeviationBps) {
@@ -304,10 +340,61 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         emit GoldSold(xautToSell, usdcReturned, oraclePrice);
     }
 
+    /**
+     * @notice Returns the USDC value of the XAUT position. Never reverts (PR1).
+     *
+     * When the oracle is sane: `xautHeld * oraclePrice`.
+     * When not sane: `xautHeld * min(lastGoodPrice, poolPrice if readable) * (1 - staleHaircutBps)`.
+     *   - If lastGoodPrice is 0 (never deployed): returns 0 (nothing held).
+     *   - Pool read is wrapped in try/catch; if it also fails, lastGoodPrice alone is used.
+     *   - Haircut is applied as a conservative downward adjustment.
+     * Cost basis (totalDeployed) is NOT used — it may overstate value when gold has fallen.
+     */
     function currentValue() external view returns (uint256) {
-        if (!isPriceSane()) return totalDeployed;
-        uint256 oraclePrice = _getOraclePrice();
-        return (xautHeld * oraclePrice) / _pow10(xautDecimals);
+        if (xautHeld == 0) return 0;
+
+        // Try to get a fresh oracle price first.
+        (uint256 oraclePrice, bool oracleOk) = _getOraclePriceSafe();
+        if (oracleOk) {
+            // Cross-check with pool; use lower if deviated (conservative).
+            uint256 poolPrice = 0;
+            bool poolOk = false;
+            try IUniswapV3PoolSlot0(pool).slot0() returns (
+                uint160 sqrtPriceX96, int24, uint16, uint16, uint16, uint8, bool
+            ) {
+                uint256 raw = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) >> 192;
+                poolPrice = (raw * _pow10(usdcDecimals)) / _pow10(xautDecimals);
+                poolOk = poolPrice > 0;
+            } catch {}
+            uint256 effectivePrice = oraclePrice;
+            if (poolOk) {
+                // Use lower-of-two for conservative valuation.
+                uint256 diff = oraclePrice > poolPrice ? oraclePrice - poolPrice : poolPrice - oraclePrice;
+                if ((diff * 10_000) / oraclePrice > maxDeviationBps) {
+                    effectivePrice = oraclePrice < poolPrice ? oraclePrice : poolPrice;
+                }
+            }
+            return (xautHeld * effectivePrice) / _pow10(xautDecimals);
+        }
+
+        // Oracle not sane: use lastGoodPrice with pool cross-check if available, plus haircut.
+        if (lastGoodPrice == 0) return 0; // never been deployed
+        uint256 stalePriceBase = lastGoodPrice;
+
+        // Try pool price as a secondary sanity check.
+        try IUniswapV3PoolSlot0(pool).slot0() returns (
+            uint160 sqrtPriceX96, int24, uint16, uint16, uint16, uint8, bool
+        ) {
+            uint256 raw = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) >> 192;
+            uint256 poolPrice = (raw * _pow10(usdcDecimals)) / _pow10(xautDecimals);
+            if (poolPrice > 0 && poolPrice < stalePriceBase) {
+                stalePriceBase = poolPrice; // use lower of the two (conservative)
+            }
+        } catch {}
+
+        // Apply stale haircut: value = xautHeld * stalePriceBase * (1 - staleHaircutBps).
+        uint256 grossValue = (xautHeld * stalePriceBase) / _pow10(xautDecimals);
+        return (grossValue * (10_000 - staleHaircutBps)) / 10_000;
     }
 
     function protocolName() external pure returns (string memory) {
@@ -331,6 +418,10 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
             revert ParamAboveHardCap("poolFee", newValue, type(uint24).max);
         }
 
+        if (paramId == PARAM_STALE_HAIRCUT && newValue > MAX_STALE_HAIRCUT_BPS) {
+            revert ParamAboveHardCap("staleHaircutBps", newValue, MAX_STALE_HAIRCUT_BPS);
+        }
+
         uint256 executeAfter = block.timestamp + TIMELOCK_DELAY;
         pendingChanges[paramId] = PendingChange({newValue: newValue, executeAfter: executeAfter, pending: true});
 
@@ -348,6 +439,7 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         else if (paramId == PARAM_MAX_SLIPPAGE) maxSlippageBps = pc.newValue;
         else if (paramId == PARAM_MAX_DEVIATION) maxDeviationBps = pc.newValue;
         else if (paramId == PARAM_POOL_FEE) poolFee = uint24(pc.newValue);
+        else if (paramId == PARAM_STALE_HAIRCUT) staleHaircutBps = pc.newValue;
 
         emit ParamChangeExecuted(paramId, pc.newValue);
     }

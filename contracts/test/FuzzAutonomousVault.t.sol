@@ -190,7 +190,11 @@ contract FuzzAutonomousVault is Test {
         vm.prank(owner);
         vault.setTokenMessenger(address(messenger));
 
-        uint256 maxCross = (depositAmt * vault.maxAllocationBps()) / 10_000;
+        // PR3.3: cap cross-chain to both maxAllocationBps and maxPendingCrossChainBps
+        uint256 maxByAlloc  = (depositAmt * vault.maxAllocationBps()) / 10_000;
+        uint256 maxByPending = (depositAmt * vault.maxPendingCrossChainBps()) / 10_000;
+        uint256 maxCross = maxByAlloc < maxByPending ? maxByAlloc : maxByPending;
+        if (maxCross < 1e6) return; // not enough to cross
         uint256 crossAmt = bound(crossAmt_, 1e6, maxCross);
 
         bytes32 recipient = bytes32(uint256(uint160(makeAddr("remote"))));

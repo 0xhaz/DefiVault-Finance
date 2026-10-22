@@ -193,19 +193,31 @@ contract TaskGTest is Test {
 
     // ── G1-4 ─────────────────────────────────────────────────────────────────
 
-    /// @notice currentValue() returns totalDeployed (not 0, not revert) when oracle is stale.
+    /// @notice PR1: currentValue() uses lastGoodPrice * (1 - haircut) when oracle is stale.
+    ///         Cost basis (totalDeployed) is NEVER used (PR1 spec supersedes G1 fallback).
     function test_G1_currentValue_returns_totalDeployed_when_stale() public {
         _deployCapital(1_000e6);
 
-        uint256 totalDeployedSnap = adapter.totalDeployed();
-        assertGt(totalDeployedSnap, 0, "totalDeployed must be > 0 after deploy");
+        uint256 lastGoodPrice = adapter.lastGoodPrice();
+        assertGt(lastGoodPrice, 0, "lastGoodPrice must be set after deploy");
+
+        uint256 xautHeld = adapter.xautHeld();
+        assertGt(xautHeld, 0, "xautHeld must be > 0 after deploy");
 
         // Make oracle stale
         oracle.setUpdatedAt(0);
 
-        // currentValue() must NOT revert and must return totalDeployed
+        // PR1: currentValue() must NOT revert, and must use lastGoodPrice * haircut
         uint256 cv = adapter.currentValue();
-        assertEq(cv, totalDeployedSnap, "currentValue() must return totalDeployed when oracle stale");
+        assertGt(cv, 0, "currentValue() must return > 0 after deploy (lastGoodPrice set)");
+
+        // Verify it uses lastGoodPrice, not totalDeployed:
+        // grossValue = xautHeld * lastGoodPrice / 1e6
+        // haircutValue = grossValue * (10_000 - 500) / 10_000
+        uint256 grossValue = (xautHeld * lastGoodPrice) / 1e6;
+        uint256 haircutValue = (grossValue * 9_500) / 10_000;
+        assertApproxEqRel(cv, haircutValue, 0.01e18,
+            "PR1: currentValue() must use lastGoodPrice * (1-haircut) when stale");
     }
 
     // ── G1-5 ─────────────────────────────────────────────────────────────────

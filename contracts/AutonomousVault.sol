@@ -29,6 +29,10 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     error CrossChainNotConfigured();
     error SameDomainDeploy();
     error NonceMismatch(uint64 nonce);
+    /// @notice Thrown when a cross-chain deploy would push pending cross-chain > maxPendingCrossChainBps.
+    error PendingCrossChainCapExceeded();
+    /// @notice Thrown when profitUnlockPeriod is set above MAX_PROFIT_UNLOCK_PERIOD.
+    error InvalidUnlockPeriod();
 
     event ManagerUpdated(address indexed previousManager, address indexed newManager);
     event MaxAllocationBpsUpdated(uint256 previousBps, uint256 newBps);
@@ -42,8 +46,10 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         uint256 amount,
         uint64 nonce
     );
-    event CrossChainSettled(uint64 indexed nonce, uint256 amount);
+    event CrossChainSettled(uint64 indexed nonce, uint256 amount, uint256 shortfall);
     event TokenMessengerUpdated(address indexed previousMessenger, address indexed newMessenger);
+    event ProfitLocked(uint256 amount, uint256 unlockedAt);
+    event CrossChainCapUpdated(uint256 newBps);
 
     address public manager;
     bool public paused;
@@ -54,6 +60,22 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     uint32 public immutable sourceDomain;
     /// @dev Tracks pending crosschain positions: nonce => amount, for settlement accounting
     mapping(uint64 => uint256) public pendingCrossChain;
+    /// @dev Sum of all outstanding cross-chain positions (for cap enforcement — PR3.3).
+    uint256 public totalPendingCrossChain;
+    /// @notice Max fraction of totalAssets allowed in-flight cross-chain (default 2000 = 20%).
+    uint256 public maxPendingCrossChainBps = 2_000;
+    /// @notice Hard cap for maxPendingCrossChainBps.
+    uint256 public constant MAX_PENDING_CROSS_CHAIN_BPS = 5_000;
+
+    /// @notice Profit locked for linear unlock (PR3.2 — Yearn-style streaming).
+    ///         Locked profit is excluded from totalAssets until unlockedAt.
+    uint256 public lockedProfit;
+    /// @notice Timestamp when lockedProfit finishes unlocking linearly.
+    uint256 public unlockedAt;
+    /// @notice Duration over which profit is linearly streamed into NAV (default 3 days).
+    uint256 public profitUnlockPeriod = 3 days;
+    /// @notice Hard cap for profitUnlockPeriod.
+    uint256 public constant MAX_PROFIT_UNLOCK_PERIOD = 14 days;
 
     constructor(IERC20 asset_, address initialOwner, uint32 sourceDomain_)
         ERC4626(asset_)
@@ -75,8 +97,54 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         _;
     }
 
+    /// @notice Returns the current locked profit (linearly decreasing to 0 over profitUnlockPeriod).
+    function _currentLockedProfit() internal view returns (uint256) {
+        if (lockedProfit == 0 || block.timestamp >= unlockedAt) return 0;
+        uint256 elapsed  = block.timestamp - (unlockedAt - profitUnlockPeriod);
+        uint256 duration = profitUnlockPeriod;
+        // Linear: lockedProfit * (duration - elapsed) / duration
+        if (elapsed >= duration) return 0;
+        return (lockedProfit * (duration - elapsed)) / duration;
+    }
+
     function totalAssets() public view virtual override returns (uint256) {
-        return super.totalAssets() + totalDeployed;
+        uint256 base = super.totalAssets() + totalDeployed;
+        uint256 locked = _currentLockedProfit();
+        return base > locked ? base - locked : 0;
+    }
+
+    /**
+     * @dev Internal helper — stacks amount on top of any remaining locked profit.
+     *      Called by lockProfit (external) and by ShariahVault.claimMusharakahProfit (internal).
+     */
+    function _lockProfitInternal(uint256 amount) internal {
+        uint256 remaining = _currentLockedProfit();
+        lockedProfit = remaining + amount;
+        unlockedAt   = block.timestamp + profitUnlockPeriod;
+        emit ProfitLocked(amount, unlockedAt);
+    }
+
+    /**
+     * @notice Lock profit for linear streaming into NAV (PR3.2).
+     * @dev    Called by the manager/owner after profit is credited to the vault
+     *         (e.g. after claimMusharakahProfit deposits the depositorShare back).
+     *         New profit stacks on top of any remaining locked profit (Yearn pattern).
+     */
+    function lockProfit(uint256 amount) external onlyManagerOrOwner {
+        _lockProfitInternal(amount);
+    }
+
+    /// @notice Owner updates profit unlock period (board-settable; max 14 days).
+    function setProfitUnlockPeriod(uint256 period) external onlyOwner {
+        if (period > MAX_PROFIT_UNLOCK_PERIOD) revert InvalidUnlockPeriod();
+        profitUnlockPeriod = period;
+    }
+
+    /// @notice Owner updates max pending cross-chain cap.
+    function setMaxPendingCrossChainBps(uint256 bps) external onlyOwner {
+        if (bps > MAX_PENDING_CROSS_CHAIN_BPS) revert InvalidBps();
+        maxPendingCrossChainBps = bps;
+        emit CrossChainCapUpdated(bps);
     }
 
     function deployCapital(address strategy, uint256 amount, bytes calldata data) external virtual onlyManagerOrOwner {
@@ -108,6 +176,10 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         uint256 maxDeployable = (currentAssets * maxAllocationBps) / 10_000;
         if (totalDeployed + amount > maxDeployable) revert AllocationExceedsLimit();
 
+        // PR3.3: Enforce cross-chain pending cap BEFORE burning tokens so totalAssets() is correct.
+        uint256 maxPending = (totalAssets() * maxPendingCrossChainBps) / 10_000;
+        if (totalPendingCrossChain + amount > maxPending) revert PendingCrossChainCapExceeded();
+
         // Approve exact amount; always clear residual allowance after the call
         IERC20(asset()).forceApprove(tokenMessenger, amount);
         uint64 nonce = ITokenMessenger(tokenMessenger).depositForBurnWithCaller(
@@ -121,6 +193,7 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         IERC20(asset()).forceApprove(tokenMessenger, 0);
 
         totalDeployed += amount;
+        totalPendingCrossChain += amount;
         // Record pending position so settleCrossChain can decrement totalDeployed on return
         pendingCrossChain[nonce] = amount;
 
@@ -168,12 +241,30 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     ///         Decrements `totalDeployed` so ERC-4626 NAV remains accurate.
     ///         The corresponding USDC tokens must already be in this vault (minted here
     ///         by the destination's reverse CCTP burn + source attestation) before calling.
-    function settleCrossChain(uint64 nonce) external onlyManagerOrOwner {
-        uint256 amount = pendingCrossChain[nonce];
-        if (amount == 0) revert NonceMismatch(nonce);
+    /**
+     * @notice Settle a completed cross-chain position.
+     * @dev    PR3.3: caller passes the actual USDC amount received back (may be less than sent
+     *         due to bridge fees, slippage, or loss). Any shortfall is booked as an immediate
+     *         NAV loss by leaving totalDeployed reduced only by `received`, not `sent`.
+     *         `received` must be <= original amount; caller must have transferred the USDC back.
+     * @param nonce    The CCTP nonce from the original deployCrossChain call.
+     * @param received Actual USDC received (0 < received <= original amount).
+     */
+    function settleCrossChain(uint64 nonce, uint256 received) external onlyManagerOrOwner {
+        uint256 sent = pendingCrossChain[nonce];
+        if (sent == 0) revert NonceMismatch(nonce);
         delete pendingCrossChain[nonce];
-        totalDeployed -= amount;
-        emit CrossChainSettled(nonce, amount);
+
+        uint256 shortfall = sent > received ? sent - received : 0;
+        // Decrement totalDeployed by the full sent amount. The received USDC tokens are
+        // already minted to vault balance by CCTP (counted in ERC4626.totalAssets()),
+        // so we must NOT add `received` back to totalDeployed — that would double-count.
+        // Net effect on NAV: vault.balanceOf += received, totalDeployed -= sent.
+        // NAV change = received - sent = -shortfall (loss booked immediately).
+        totalDeployed          = totalDeployed >= sent ? totalDeployed - sent : 0;
+        totalPendingCrossChain = totalPendingCrossChain >= sent ? totalPendingCrossChain - sent : 0;
+
+        emit CrossChainSettled(nonce, received, shortfall);
     }
 
     function setManager(address newManager) external onlyOwner {
