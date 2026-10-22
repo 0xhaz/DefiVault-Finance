@@ -655,3 +655,6 @@
 {"level":"error","message":"Unhandled promise rejection: Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)","timestamp":1792655087344,"stack":"Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)"}
 {"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792656852394}
 {"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792662867341}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1792666143615}
+{"level":"error","message":"Unhandled promise rejection: Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)","timestamp":1792666146622,"stack":"Error: Could not establish connection. Receiving end does not exist.\n    at n (chrome-extension://dmkamcknogkgcdfhhbddcghachkejeap/injectedScript.bundle.js:2:84147)"}
+{"level":"debug","message":"[vite] connected.","timestamp":1792679047783}

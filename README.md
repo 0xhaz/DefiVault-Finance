@@ -371,7 +371,7 @@ Parallel aggregator for 6 Shariah strategies. Adds `strategyEnabled` bool per st
 enum ShariahStrategy {
     ETH_SPREAD,       // 0  S1-H USDC/ETH cross-chain spread      — enabled (testnet); SR-007 pending
     GOLD_SPREAD,      // 1  S2-H PAXG/USDC atomic swap             — enabled (testnet); SR-005 pending
-    HALAL_LP,         // 2  S3-H Uniswap V3 swap-fee income        — enabled (testnet); SR-011 pending
+    HALAL_LP,         // 2  S3-H Uniswap V3 swap-fee income        — enabled (testnet); SR-011 pending (contract file kept as HalalLPAdapter.sol — G9)
     MURABAHA,         // 3  S4-H Commodity Murabaha                 — enabled (testnet); SR-004 pending
     RESERVED_4,       // 4  S5-H (RWA/Sukuk) — DEPRECATED (SR-001); writeScore(4,...) reverts
     GOLD_ALLOCATION   // 5  S6-H XAUT spot position                 — disabled until SR-008 approved
@@ -617,7 +617,8 @@ graph LR
 | Wakala fee (Shariah) | 0.5% AUM / year | Pro-rated per second | On every Shariah `deployCapital` |
 | Musharakah profit share | 10% of profit above 4% hurdle | Applied via PurificationEscrow on `claimMusharakahProfit` | When manager claims |
 | Purification (disposal of non-compliant income) | Board-set `purificationBps` (default 0; max 10%) | Step 1 of waterfall; sent directly to charity wallet | Before any Musharakah split |
-| Charitable contribution (sadaqah) | Board-set `charityBps` (default 2.5%; max 5%) | Step 2 of waterfall; routed via CharityModule | After purification, before split |
+| Charitable contribution (sadaqah) | Board-set `charityBps` (default 2.5%; max 5%) | Step 2 of waterfall; routed via CharityModule | After purification, before split; **30-day timelock** via `proposeCharityRateChange` |
+| Purification rate setter | `PurificationEscrow.setPurificationBps` (default 0%; max 10%) | `onlyOwner`, **no timelock** (asymmetric with charityBps — see SR-G6 note) | Immediate; board should consider adding a timelock |
 
 ---
 
@@ -657,12 +658,14 @@ sequenceDiagram
     SV-->>Manager: MusharakahProfitClaimed(grossProfit, purified, charity, vaultShare, depositorShare)
 ```
 
-**All wallet and rate changes require a 30-day timelock:**
+**CharityModule wallet and rate changes require a 30-day timelock:**
 
 ```
 CharityModule.proposeCharityWalletChange(newWallet)  →  wait 30 days  →  confirmCharityWalletChange()
 CharityModule.proposeCharityRateChange(newBps)        →  wait 30 days  →  confirmCharityRateChange()
 ```
+
+Note: `PurificationEscrow.setPurificationBps` is `onlyOwner` with **no timelock** (asymmetric — see SR-G6 in `SHARIAH_REVIEW.md`).
 
 The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is not wired into any new vault. V1 redemptions remain available at NAV with no forced migration.
 
@@ -690,7 +693,8 @@ The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is 
 | Gold cap breach | `ShariahVault.deployCapital` sums `goldSpreadAdapter.currentValue() + goldAllocationAdapter.currentValue()` and reverts `GoldCapExceeded` when combined > `MAX_GOLD_BPS` (30%) |
 | Non-atomic gold cross-chain | `ShariahVault.deployCrossChain` reverts `NonAtomicGoldExchange` when `goldCrossChainBlocked = true` |
 | Stale Chainlink gold price | `GoldAllocationAdapter._getOraclePrice` checks `startedAt > 0`, `answeredInRound >= roundId`, `answer > 0`, and `block.timestamp - updatedAt <= maxStalenessSecs` |
-| Pool-oracle gold deviation | `GoldAllocationAdapter._getPoolPrice` reverts `GoldPriceDeviation` when pool price differs from oracle by more than `maxDeviationBps` (default 100 bps) |
+| Pool-oracle gold deviation (deploy) | `GoldAllocationAdapter.deploy()` checks `isPriceSane()` first; reverts `OracleNotSane` if oracle is stale or pool price deviates beyond `maxDeviationBps`. New gold buys are blocked; existing positions are unaffected. |
+| Pool-oracle gold deviation (recall) | `GoldAllocationAdapter.recall()` uses `_getOraclePriceSafe()` — never reverts on stale oracle. When stale, uses `totalDeployed` as conservative floor; when pool deviates, uses the lower of oracle/pool price. `vault.redeem()` always succeeds even when the gold oracle is down (G1). |
 | Parameter manipulation (gold adapter) | All numeric and address params on `GoldAllocationAdapter` require 30-day timelock via `proposeParamChange` / `executeParamChange`; hard caps enforced at proposal time |
 | Reentrancy in executor | `RiskTieredExecutor.executeWinner` uses `_executionLocked` guard; `lastExecutionTime` set before external calls |
 
@@ -698,9 +702,9 @@ The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is 
 
 ## Test Coverage
 
-**338 Foundry tests** (222 unit + 116 fuzz) across **25 test files**; **48 bun tests** in `server/screening/tests/`. Counts from `forge test --summary` — never hand-edited (G11).
+**338 Foundry tests** (249 unit + 89 fuzz) across **25 test files**; **48 bun tests** in `server/screening/tests/`. Counts from `forge test --summary` — never hand-edited (G11).
 
-**Foundry test suite (`forge test --fuzz-runs 256`):**
+**Foundry test suite (`forge test --fuzz-runs 512`):**
 
 | File | Tests | Type | Coverage |
 |---|---|---|---|
@@ -718,17 +722,17 @@ The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is 
 | `ShariahAdapterRegistryTest.t.sol` | 19 | Unit | Screening lifecycle, board-role timelock (G4), emergencyRevoke, all custom errors |
 | `ShariahVaultV2Test.t.sol` | 9 | Unit | NotScreened / ScreeningExpired, V1 compat, zero-zakatModule (G10) |
 | `TaskGTest.t.sol` | 19 | Unit + Fuzz | G1 recall-on-stale (6), G3 strategyEnabled (4), G4 board-role (8), G10 (1) |
-| `FuzzAutonomousVault.t.sol` | 10 | Fuzz (256 runs) | Round-trip, multi-depositor fairness, cap at all amounts |
-| `FuzzScoreAggregator.t.sol` | 9 | Fuzz (256 runs) | Winner invariant, ring-buffer, staleness, access control |
-| `FuzzRiskTieredExecutor.t.sol` | 10 | Fuzz (256 runs) | Score/cooldown/gas guards at all param values |
-| `FuzzTreasuryModule.t.sol` | 10 | Fuzz (256 runs) | Split invariant: vaultShare + depositorShare == grossProfit |
-| `FuzzZakatModule.t.sol` | 9 | Fuzz (256 runs) | Charity amount exactly 2.5%, timelock boundary, accumulation |
-| `FuzzCommodityMurabaha.t.sol` | 9 | Fuzz (256 runs) | Sale price math, O(1) removal, max-trade cap |
-| `FuzzGoldExchangeAdapter.t.sol` | 13 | Fuzz (256 runs) | Round-trip value, no PAXG stranded, cap invariant |
-| `FuzzGoldAllocationAdapter.t.sol` | 5 | Fuzz (256 runs) | `currentValue()` precision, round-trip, gold cap invariant, timelock |
-| `FuzzCharityModule.t.sol` | 6 | Fuzz (256 runs) | Arithmetic exactness, cap, timelock boundary, accumulator monotonicity |
-| `FuzzPurificationEscrow.t.sol` | 4 | Fuzz (256 runs) | Waterfall invariant, zero-purification, charity proportionality |
-| `FuzzShariahVaultV2.t.sol` | 4 | Fuzz (256 runs) | Migration round-trip NAV, timelock, screening expiry lifecycle, allocation cap |
+| `FuzzAutonomousVault.t.sol` | 10 | Fuzz (512 runs) | Round-trip, multi-depositor fairness, cap at all amounts |
+| `FuzzScoreAggregator.t.sol` | 9 | Fuzz (512 runs) | Winner invariant, ring-buffer, staleness, access control |
+| `FuzzRiskTieredExecutor.t.sol` | 10 | Fuzz (512 runs) | Score/cooldown/gas guards at all param values |
+| `FuzzTreasuryModule.t.sol` | 10 | Fuzz (512 runs) | Split invariant: vaultShare + depositorShare == grossProfit |
+| `FuzzZakatModule.t.sol` | 9 | Fuzz (512 runs) | Charity amount exactly 2.5%, timelock boundary, accumulation |
+| `FuzzCommodityMurabaha.t.sol` | 9 | Fuzz (512 runs) | Sale price math, O(1) removal, max-trade cap |
+| `FuzzGoldExchangeAdapter.t.sol` | 13 | Fuzz (512 runs) | Round-trip value, no PAXG stranded, cap invariant |
+| `FuzzGoldAllocationAdapter.t.sol` | 5 | Fuzz (512 runs) | `currentValue()` precision, round-trip, gold cap invariant, timelock |
+| `FuzzCharityModule.t.sol` | 6 | Fuzz (512 runs) | Arithmetic exactness, cap, timelock boundary, accumulator monotonicity |
+| `FuzzPurificationEscrow.t.sol` | 4 | Fuzz (512 runs) | Waterfall invariant, zero-purification, charity proportionality |
+| `FuzzShariahVaultV2.t.sol` | 4 | Fuzz (512 runs) | Migration round-trip NAV, timelock, screening expiry lifecycle, allocation cap |
 
 **Bun screening tests (`bun test server/screening/tests/`):**
 
@@ -737,7 +741,7 @@ The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is 
 Run the full Foundry suite:
 
 ```bash
-forge test --fuzz-runs 256
+forge test --fuzz-runs 512
 ```
 
 Run the screening engine bun tests:
@@ -781,10 +785,11 @@ All contracts deploy to **Arc Testnet** (chain ID 5042002) with USDC as the nati
 18. CharityModule                                  — needs asset + charityWallet + vault [script: DeployShariahV2.s.sol]
 19. PurificationEscrow                             — needs asset + charityModule + shariahTreasury
 20. setPurificationEscrow on ShariahVault (Conservative + Dynamic)
-21. ShariahAdapterRegistry                         — owner grants boardRole to board multisig
-22. ShariahVaultV2 (Conservative + Dynamic)        — needs TreasuryModule + ZakatModule + registry [script: DeployShariahV2.s.sol]
-23. board: proposeScreening per adapter            — wait 30 days → executeScreening (one per adapter per vault)
-24. setRegistry on ShariahVaultV2 if registry rotated — owner-only; 30-day timelock for re-screening
+21. ShariahAdapterRegistry                         — deployer address gets boardRole automatically in constructor; transfer deployer's board role to the real board multisig via proposeBoardRoleChange (board proposes, 30-day timelock, then execute); then emergencyRevokeBoardRole(deployer) to remove the hot key
+22. ShariahVaultV2 (Conservative + Dynamic)        — needs TreasuryModule + ZakatModule(address(0)) + registry [script: DeployShariahV2.s.sol]
+23. RiskTieredExecutor × 2 for V2                  — same masks (38 / 47) pointing at V2 vault addresses; without these the agent cannot autonomously deploy into V2
+24. board: proposeScreening per adapter            — wait 30 days → executeScreening (one per adapter per vault)
+25. setRegistry on ShariahVaultV2 if registry rotated — owner-only; 30-day timelock for re-screening
 ```
 
 **Constructor args quick reference:**
@@ -875,8 +880,8 @@ contracts/
 │   ├── DeployGoldAllocation.s.sol        # Deploy mocks + adapter + wire vaults (Task F)
 │   └── DeployShariahV2.s.sol             # Deploy CharityModule + PurificationEscrow + V2 vault + registry (Task E)
 └── test/
-    ├── *Test.t.sol              # 222 unit tests across 14 files (incl. TaskGTest.t.sol)
-    └── Fuzz*.t.sol              # 116 fuzz tests across 11 files (256 runs each)
+    ├── *Test.t.sol              # 249 unit tests across 14 files (incl. TaskGTest.t.sol)
+    └── Fuzz*.t.sol              # 89 fuzz tests across 11 files (512 runs each)
 
 server/
 ├── agent.ts                     # AI agent (scoring + execution + charity/apy endpoints)
