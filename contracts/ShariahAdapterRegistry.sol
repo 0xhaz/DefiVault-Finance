@@ -53,6 +53,8 @@ contract ShariahAdapterRegistry is Ownable {
 
     event BoardRoleGranted(address indexed account);
     event BoardRoleRevoked(address indexed account);
+    event BoardRoleChangeProposed(address indexed account, bool grant, uint256 executeAfter);
+    event BoardRoleChangeCancelled(address indexed account);
     event ScreeningProposed(address indexed adapter, bytes32 pronouncementHash, uint256 expiresAt, uint256 executeAfter);
     event ScreeningExecuted(address indexed adapter, bytes32 pronouncementHash, uint256 expiresAt);
     event ScreeningRemoved(address indexed adapter);
@@ -82,6 +84,17 @@ contract ShariahAdapterRegistry is Ownable {
 
     /// @notice Board members who can propose + execute screening changes.
     mapping(address => bool) public boardRole;
+
+    struct BoardRoleProposal {
+        bool grant;           // true = grant, false = revoke
+        uint256 executeAfter;
+        bool exists;
+    }
+
+    /// @notice Pending board-role change proposals. Proposed by board, executed after timelock.
+    /// @dev    G4 fix: owner cannot unilaterally grant/revoke board membership.
+    ///         A board member must propose; any board member (or proposer) can execute after delay.
+    mapping(address => BoardRoleProposal) public boardRoleProposals;
 
     /// @notice Active screenings — the live registry.
     mapping(address => Screening) public screenings;
@@ -114,12 +127,47 @@ contract ShariahAdapterRegistry is Ownable {
     // Role management
     // ─────────────────────────────────────────────────────────────
 
-    function grantBoardRole(address account) external onlyOwner {
-        boardRole[account] = true;
-        emit BoardRoleGranted(account);
+    // ─────────────────────────────────────────────────────────────
+    // Board role management — G4 fix
+    // ─────────────────────────────────────────────────────────────
+    // Grant and revoke require a board member to propose + 30-day timelock.
+    // The owner retains only pause-level rights and cannot self-appoint.
+    // ─────────────────────────────────────────────────────────────
+
+    error BoardRoleProposalExists(address account);
+    error NoBoardRoleProposal(address account);
+
+    /// @notice A board member proposes granting or revoking board membership.
+    ///         Owner alone cannot propose — only an existing board member can.
+    function proposeBoardRoleChange(address account, bool grant) external onlyBoard {
+        if (boardRoleProposals[account].exists) revert BoardRoleProposalExists(account);
+        uint256 executeAfter = block.timestamp + TIMELOCK_PERIOD;
+        boardRoleProposals[account] = BoardRoleProposal({grant: grant, executeAfter: executeAfter, exists: true});
+        emit BoardRoleChangeProposed(account, grant, executeAfter);
     }
 
-    function revokeBoardRole(address account) external onlyOwner {
+    /// @notice Any board member may execute a pending board-role change after the timelock.
+    function executeBoardRoleChange(address account) external onlyBoard {
+        BoardRoleProposal memory p = boardRoleProposals[account];
+        if (!p.exists) revert NoBoardRoleProposal(account);
+        if (block.timestamp < p.executeAfter) revert TimelockNotElapsed(p.executeAfter, block.timestamp);
+        delete boardRoleProposals[account];
+        boardRole[account] = p.grant;
+        if (p.grant) emit BoardRoleGranted(account);
+        else         emit BoardRoleRevoked(account);
+    }
+
+    /// @notice Cancel a pending board-role proposal.
+    function cancelBoardRoleChange(address account) external onlyBoard {
+        if (!boardRoleProposals[account].exists) revert NoBoardRoleProposal(account);
+        delete boardRoleProposals[account];
+        emit BoardRoleChangeCancelled(account);
+    }
+
+    /// @notice Owner-only emergency: revoke a board member immediately (pause power).
+    /// @dev    Intentionally asymmetric: owner can remove but not add without the board.
+    ///         This prevents a rogue board member from being impossible to remove.
+    function emergencyRevokeBoardRole(address account) external onlyOwner {
         boardRole[account] = false;
         emit BoardRoleRevoked(account);
     }

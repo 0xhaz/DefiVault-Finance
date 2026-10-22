@@ -263,21 +263,34 @@ contract ShariahAdapterRegistryTest is Test {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 15. Grant and revoke board role
+    // 15. Grant and revoke board role via propose/timelock/execute (G4)
     // ─────────────────────────────────────────────────────────────
 
     function test_grant_revoke_board_role() public {
         // Initially `other` has no board role
         assertFalse(registry.boardRole(other));
 
-        // Owner grants board role
+        // Board member (deployer) proposes granting board role to `other`
         vm.prank(deployer);
-        registry.grantBoardRole(other);
+        registry.proposeBoardRoleChange(other, true);
+
+        // Proposal exists but not executed yet — board role not granted
+        assertFalse(registry.boardRole(other));
+
+        // Warp past the 30-day timelock and execute
+        vm.warp(block.timestamp + TIMELOCK);
+        vm.prank(deployer);
+        registry.executeBoardRoleChange(other);
         assertTrue(registry.boardRole(other));
 
-        // Owner revokes board role
+        // Board member (deployer) proposes revoking board role from `other`
         vm.prank(deployer);
-        registry.revokeBoardRole(other);
+        registry.proposeBoardRoleChange(other, false);
+
+        // Warp past the 30-day timelock and execute
+        vm.warp(block.timestamp + TIMELOCK);
+        vm.prank(deployer);
+        registry.executeBoardRoleChange(other);
         assertFalse(registry.boardRole(other));
     }
 
@@ -301,14 +314,50 @@ contract ShariahAdapterRegistryTest is Test {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 17. Non-owner cannot grantBoardRole
+    // 17. Non-board address cannot proposeBoardRoleChange (G4)
     // ─────────────────────────────────────────────────────────────
 
     function test_board_role_not_nonOwner() public {
+        // `other` has no board role — proposeBoardRoleChange reverts NotBoardRole
         vm.prank(other);
         vm.expectRevert(
-            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, other)
+            abi.encodeWithSelector(ShariahAdapterRegistry.NotBoardRole.selector, other)
         );
-        registry.grantBoardRole(other);
+        registry.proposeBoardRoleChange(makeAddr("newMember"), true);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 18. emergencyRevokeBoardRole is owner-only and works instantly (G4)
+    // ─────────────────────────────────────────────────────────────
+
+    function test_emergencyRevoke_board_role() public {
+        // deployer has board role from constructor
+        assertTrue(registry.boardRole(deployer));
+
+        // Owner calls emergencyRevokeBoardRole — instant removal, no timelock
+        vm.prank(deployer);
+        registry.emergencyRevokeBoardRole(deployer);
+        assertFalse(registry.boardRole(deployer));
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 19. cancelBoardRoleChange clears a pending proposal (G4)
+    // ─────────────────────────────────────────────────────────────
+
+    function test_cancelBoardRoleChange_clears_proposal() public {
+        vm.prank(deployer);
+        registry.proposeBoardRoleChange(other, true);
+
+        // Proposal now exists
+        (,, bool exists) = registry.boardRoleProposals(other);
+        assertTrue(exists, "proposal should exist after propose");
+
+        // Cancel it
+        vm.prank(deployer);
+        registry.cancelBoardRoleChange(other);
+
+        // Proposal cleared
+        (,, bool existsAfter) = registry.boardRoleProposals(other);
+        assertFalse(existsAfter, "proposal should be gone after cancel");
     }
 }

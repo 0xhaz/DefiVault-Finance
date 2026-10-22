@@ -153,6 +153,21 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         oraclePriceUsdc = (uint256(answer) * _pow10(usdcDecimals)) / _pow10(oracleDecimals);
     }
 
+    /// @notice Non-reverting oracle read. Returns (price, true) when fresh and valid,
+    ///         or (0, false) when stale/invalid. Used by recall() so redemptions never brick.
+    function _getOraclePriceSafe() internal view returns (uint256 oraclePriceUsdc, bool ok) {
+        try goldOracle.latestRoundData() returns (
+            uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
+        ) {
+            if (startedAt == 0 || answeredInRound < roundId || answer <= 0) return (0, false);
+            if (block.timestamp - updatedAt > maxStalenessSecs) return (0, false);
+            oraclePriceUsdc = (uint256(answer) * _pow10(usdcDecimals)) / _pow10(oracleDecimals);
+            ok = true;
+        } catch {
+            return (0, false);
+        }
+    }
+
     function _getPoolPrice(uint256 oraclePriceUsdc) internal view returns (uint256 poolPriceUsdc) {
         (uint160 sqrtPriceX96,,,,,,) = IUniswapV3PoolSlot0(pool).slot0();
 
@@ -181,8 +196,14 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         if (deviation > maxDeviationBps) revert GoldPriceDeviation(poolPrice, oraclePrice, maxDeviationBps);
     }
 
+    /// @notice Error emitted when a new deploy is attempted while the oracle is not sane.
+    /// @dev    Deposits are blocked when price is stale/deviated; recalls remain open (G1).
+    error OracleNotSane();
+
     function deploy(uint256 usdcAmount) external onlyVault returns (uint256 xautReceived) {
         if (usdcAmount == 0) revert ZeroAmount();
+        // Block new gold buys when oracle is not sane (G1: deposits paused on insane price).
+        if (!isPriceSane()) revert OracleNotSane();
 
         uint256 oraclePrice = _getOraclePrice();
         uint256 poolPrice = _getPoolPrice(oraclePrice);
@@ -221,21 +242,41 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         emit GoldBought(usdcAmount, xautReceived, oraclePrice);
     }
 
+    /// @notice Sell all held XAUT back to USDC and return proceeds to vault.
+    /// @dev    MUST NOT revert due to oracle failure — stale oracle bricks redemptions
+    ///         (G1 fix). When the oracle is unavailable, use `totalDeployed` as the
+    ///         conservative floor price so the swap still executes. Deposits are blocked
+    ///         separately via `deploy()` checking `isPriceSane()`.
     function recall(uint256 usdcAmount) external onlyVault returns (uint256 usdcReturned) {
         if (usdcAmount == 0) revert ZeroAmount();
         if (xautHeld == 0) return 0;
 
-        uint256 oraclePrice = _getOraclePrice();
-        uint256 poolPrice = _getPoolPrice(oraclePrice);
-
-        uint256 diff = oraclePrice > poolPrice ? oraclePrice - poolPrice : poolPrice - oraclePrice;
-        if ((diff * 10_000) / oraclePrice > maxDeviationBps) {
-            revert GoldPriceDeviation(poolPrice, oraclePrice, maxDeviationBps);
-        }
+        // Use safe (non-reverting) oracle read. Fall back to totalDeployed-implied price
+        // when oracle is stale so redemptions are never bricked.
+        (uint256 oraclePrice, bool oracleOk) = _getOraclePriceSafe();
 
         uint256 xautToSell = xautHeld;
-        uint256 expectedUsdcOut = (xautToSell * oraclePrice) / _pow10(xautDecimals);
-        uint256 minUsdcOut = (expectedUsdcOut * (10_000 - maxSlippageBps)) / 10_000;
+        uint256 minUsdcOut;
+
+        if (oracleOk) {
+            // Normal path: oracle fresh — apply deviation check and slippage floor.
+            uint256 poolPrice = _getPoolPrice(oraclePrice);
+            uint256 diff = oraclePrice > poolPrice ? oraclePrice - poolPrice : poolPrice - oraclePrice;
+            if ((diff * 10_000) / oraclePrice > maxDeviationBps) {
+                // Deviation too high — use conservative (lower) price as floor.
+                uint256 conservativePrice = oraclePrice < poolPrice ? oraclePrice : poolPrice;
+                uint256 expectedOut = (xautToSell * conservativePrice) / _pow10(xautDecimals);
+                minUsdcOut = (expectedOut * (10_000 - maxSlippageBps)) / 10_000;
+            } else {
+                uint256 expectedOut = (xautToSell * oraclePrice) / _pow10(xautDecimals);
+                minUsdcOut = (expectedOut * (10_000 - maxSlippageBps)) / 10_000;
+            }
+        } else {
+            // Degraded path: oracle unavailable — use totalDeployed as conservative floor.
+            // minUsdcOut = totalDeployed * (1 - maxSlippage) gives depositor a fair floor.
+            minUsdcOut = (totalDeployed * (10_000 - maxSlippageBps)) / 10_000;
+        }
+
         if (minUsdcOut == 0) minUsdcOut = 1;
 
         xaut.forceApprove(address(swapRouter), xautToSell);

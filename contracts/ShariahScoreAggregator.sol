@@ -34,7 +34,9 @@ contract ShariahScoreAggregator is Ownable2Step {
         bytes32 dataHash,
         uint32 destinationDomain
     );
-    event StrategyCertified(ShariahStrategy indexed strategy, bool certified);
+    /// @dev Renamed from StrategyCertified — "certified" implies a board ruling that has
+    ///      not yet been recorded. Use "enabled" for testnet operation (G3).
+    event StrategyEnabledUpdated(ShariahStrategy indexed strategy, bool enabled);
     event StrategyFlaggedDeprecated(uint8 indexed strategyIndex);
 
     address public oracle;
@@ -42,7 +44,10 @@ contract ShariahScoreAggregator is Ownable2Step {
     mapping(ShariahStrategy => Score) public scores;
     mapping(ShariahStrategy => Score[]) public scoreHistory;
     mapping(ShariahStrategy => uint8) public historyIndex;
-    mapping(ShariahStrategy => bool) public shariahCertified;
+    /// @dev Renamed from shariahCertified — "certified" implies a board ruling.
+    ///      On testnet, set to true for demo purposes only ("enabled (testnet)").
+    ///      Do NOT set to true on any production chain without a recorded board pronouncement.
+    mapping(ShariahStrategy => bool) public strategyEnabled;
 
     constructor(address initialOwner) Ownable(initialOwner) {}
 
@@ -86,7 +91,7 @@ contract ShariahScoreAggregator is Ownable2Step {
 
         for (uint8 i = 0; i < 6; i++) {
             ShariahStrategy currentStrategy = ShariahStrategy(i);
-            if (!shariahCertified[currentStrategy]) {
+            if (!strategyEnabled[currentStrategy]) {
                 continue;
             }
 
@@ -128,7 +133,7 @@ contract ShariahScoreAggregator is Ownable2Step {
             values[i] = current.value;
             timestamps[i] = current.timestamp;
             destinationDomains[i] = current.destinationDomain;
-            certified[i] = shariahCertified[strategy];
+            certified[i] = strategyEnabled[strategy];
         }
     }
 
@@ -153,9 +158,19 @@ contract ShariahScoreAggregator is Ownable2Step {
         }
     }
 
+    /// @notice Enable or disable a strategy for winner selection.
+    /// @dev    On testnet: may be set true for demos. On production chains: requires a
+    ///         recorded board pronouncement before setting true (G3 deploy-script guard).
+    ///         Renamed from setCertified — "certified" is reserved for board rulings.
+    function setEnabled(ShariahStrategy strategy, bool enabled) external onlyOwner {
+        strategyEnabled[strategy] = enabled;
+        emit StrategyEnabledUpdated(strategy, enabled);
+    }
+
+    /// @notice Backward-compat alias for setEnabled (test suites may use old name).
     function setCertified(ShariahStrategy strategy, bool certified) external onlyOwner {
-        shariahCertified[strategy] = certified;
-        emit StrategyCertified(strategy, certified);
+        strategyEnabled[strategy] = certified;
+        emit StrategyEnabledUpdated(strategy, certified);
     }
 
     function setOracle(address newOracle) external onlyOwner {

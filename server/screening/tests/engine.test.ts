@@ -372,7 +372,9 @@ describe('known protocol fixtures', () => {
     expect(report.verdict).toBe('PASS');
   });
 
-  test('GoldExchangeAdapter PAXG PASSES', () => {
+  // G8: PAXG with fully-specified ratio data PASSES the engine rules.
+  // With no debtToAssets data (real profile), it yields REVIEW — see fixture test below.
+  test('GoldExchangeAdapter PAXG passes when all ratio data supplied', () => {
     const report = screen({
       protocolName: 'gold-exchange-paxg',
       debtToAssets: 0.0,
@@ -388,6 +390,25 @@ describe('known protocol fixtures', () => {
       lpIncomeIsSwapFeeOnly: null,
     });
     expect(report.verdict).toBe('PASS');
+  });
+
+  // G8: protocol-profile fixture for PAXG yields REVIEW (debtToAssets null = missing data)
+  test('GoldExchangeAdapter PAXG profile yields REVIEW (missing ratio data — SR-005/SR-006 open)', () => {
+    const report = screen({
+      protocolName: 'gold-exchange-paxg',
+      debtToAssets: null,           // not available from DefiLlama
+      nonCompliantRevenueRatio: 0.0,
+      interestBearingAssetsRatio: 0.0,
+      hasRibaLending: false,
+      hasFundingRateIncome: false,
+      hasFrontRunning: false,
+      hasRibaSecurities: false,
+      hasMaisir: false,
+      primaryActivityIsHalal: true,
+      goldExchangeIsAtomic: true,
+      lpIncomeIsSwapFeeOnly: null,
+    });
+    expect(report.verdict).toBe('REVIEW');
   });
 
   test('Hyperliquid ETH-PERP FAILS (HX-002 + HX-005)', () => {

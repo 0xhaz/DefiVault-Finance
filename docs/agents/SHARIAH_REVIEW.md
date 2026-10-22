@@ -232,6 +232,27 @@ Before `GoldAllocationAdapter` can be used in production:
 
 ---
 
+## SR-G6 — Purification rate: global blended rate vs per-adapter taint ratio
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-22 |
+| Task | G (G6) |
+| Affects | `PurificationEscrow.purificationBps`, `CharityModule`, profit waterfall |
+
+**Issue.** Task B's original spec called for a per-adapter `taintedRatioBps` — each adapter would report its own non-compliant income fraction, and the purification step would deduct only the tainted portion. The current implementation uses a single global `purificationBps` applied to all Musharakah profit regardless of source.
+
+The board must confirm whether a single blended purification rate is acceptable, or whether the vault must track per-adapter taint and apply individualized rates. The implications are:
+
+(a) **If blended rate is acceptable:** The current implementation is sufficient. The board sets `purificationBps` to a conservative rate that covers any plausible taint from the strategy mix (e.g., 0–2% for swap-fee strategies, 0% for atomic gold swaps). The rate must be explicitly reviewed at every strategy configuration change.
+
+(b) **If per-adapter rates are required:** `PurificationEscrow.executeWaterfall` must accept an array of `(adapterAddress, taintedRatioBps, grossProfit)` tuples. Each strategy adapter must implement a `reportedTaintRatio()` view function. This is a significant architecture change that would also require updates to `ShariahVault.claimMusharakahProfit`.
+
+**Current code action (pending ruling):** Global `purificationBps` defaulting to 0. No USDC is routed to purification until the board sets a rate AND SR-002 is resolved. `CharityTracker.tsx` tracks charity (sadaqah) and purification as separate line items.
+
+---
+
 ## SR-011 — S3-H Halal LP disclosure: USDC/XAUT pool consideration
 
 | Field | Value |

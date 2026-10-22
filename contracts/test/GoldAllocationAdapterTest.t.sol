@@ -292,7 +292,8 @@ contract GoldAllocationAdapterTest is Test {
     //  ORACLE STALENESS TESTS
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Stale oracle (updatedAt > maxStalenessSecs ago) causes deploy to revert StaleGoldPrice.
+    /// @notice Stale oracle (updatedAt > maxStalenessSecs ago) causes deploy to revert OracleNotSane
+    ///         (G1: deploy() now checks isPriceSane() first, which returns false on stale oracle).
     function test_stale_oracle_reverts() public {
         // Push USDC to adapter first (vault accounting step)
         vm.prank(owner);
@@ -301,12 +302,14 @@ contract GoldAllocationAdapterTest is Test {
         // Make oracle stale
         oracle.setUpdatedAt(block.timestamp - MAX_STALENESS - 1);
 
+        // G1: deploy() now calls isPriceSane() first which returns false on stale oracle,
+        // so the revert is OracleNotSane() (not StaleGoldPrice()).
         vm.prank(address(vault));
-        vm.expectRevert(GoldAllocationAdapter.StaleGoldPrice.selector);
+        vm.expectRevert(GoldAllocationAdapter.OracleNotSane.selector);
         adapter.deploy(3_300e6);
     }
 
-    /// @notice Negative oracle price causes deploy to revert StaleGoldPrice.
+    /// @notice Negative oracle price causes deploy to revert OracleNotSane (G1).
     function test_negative_oracle_price_reverts() public {
         // Push USDC to adapter
         vm.prank(owner);
@@ -315,8 +318,10 @@ contract GoldAllocationAdapterTest is Test {
         // Set negative price
         oracle.setPrice(-1);
 
+        // G1: deploy() now calls isPriceSane() first which returns false on negative price,
+        // so the revert is OracleNotSane() (not StaleGoldPrice()).
         vm.prank(address(vault));
-        vm.expectRevert(GoldAllocationAdapter.StaleGoldPrice.selector);
+        vm.expectRevert(GoldAllocationAdapter.OracleNotSane.selector);
         adapter.deploy(3_300e6);
     }
 
@@ -324,32 +329,21 @@ contract GoldAllocationAdapterTest is Test {
     //  DEVIATION CHECK TESTS
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// @notice Pool price 5% above oracle (5% > maxDeviationBps=100 = 1%) reverts GoldPriceDeviation.
+    /// @notice Pool price 5% above oracle (5% > maxDeviationBps=100 = 1%) reverts OracleNotSane (G1).
+    /// @dev    G1: deploy() now calls isPriceSane() first. When pool deviates > maxDeviationBps,
+    ///         isPriceSane() returns false, so deploy() reverts OracleNotSane() (not GoldPriceDeviation).
     function test_pool_deviation_too_high_reverts() public {
         vm.prank(owner);
         vault.deployCapital(address(adapter), 3_300e6, "");
 
         // Set pool price 5% above oracle (105% of oraclePriceUsdc).
-        // Note: the pool's integer sqrt/square arithmetic rounds down by 1 unit,
-        // so we compute the expected recovered poolPrice here directly.
         uint256 deviatedPrice = ORACLE_USDC * 21 / 20; // 3_465_000_000
-
-        // Compute what poolPriceUsdc the adapter will actually recover:
-        // sqrtPriceX96 = sqrt(deviatedPrice * 2^192), then
-        // poolPriceRaw = sqrtPriceX96^2 >> 192. Integer sqrt floors, so
-        // poolPriceRaw may be (deviatedPrice - 1). We don't hard-code it here;
-        // instead just verify the selector fires (not a data match).
         pool.setPrice(deviatedPrice);
 
-        // Use bytes4-encoded selector via abi encoding to allow prefix-match.
-        // The cheapest correct approach: just catch any GoldPriceDeviation revert.
+        // G1: isPriceSane() returns false → deploy() reverts OracleNotSane (not GoldPriceDeviation).
         vm.prank(address(vault));
-        try adapter.deploy(3_300e6) {
-            fail("Expected GoldPriceDeviation revert");
-        } catch (bytes memory data) {
-            bytes4 sel = bytes4(data);
-            assertEq(sel, GoldAllocationAdapter.GoldPriceDeviation.selector, "wrong revert selector");
-        }
+        vm.expectRevert(GoldAllocationAdapter.OracleNotSane.selector);
+        adapter.deploy(3_300e6);
     }
 
     /// @notice Pool price within 0.5% of oracle (< maxDeviationBps=100) — deploy succeeds.

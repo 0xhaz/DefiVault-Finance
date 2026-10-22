@@ -76,10 +76,10 @@ contract ShariahVault is AutonomousVault {
         address initialOwner,
         uint32 sourceDomain_,
         address shariahTreasury_,
-        address zakatModule_
+        address zakatModule_ // pass address(0) for V2 deployments (ZakatModule is deprecated)
     ) AutonomousVault(asset_, initialOwner, sourceDomain_) {
         shariahTreasury = TreasuryModule(shariahTreasury_);
-        zakatModule = ZakatModule(zakatModule_);
+        zakatModule = ZakatModule(zakatModule_); // zero address is valid — v2 uses PurificationEscrow
 
         shariahScreeningEnabled = true;
         lastFeeAccrualTime = block.timestamp;

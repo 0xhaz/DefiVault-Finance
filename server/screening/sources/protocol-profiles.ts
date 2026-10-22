@@ -47,11 +47,16 @@ export const PROTOCOL_PROFILES: Record<string, ProfileOverrides> = {
     lpIncomeIsSwapFeeOnly:      true,
   },
 
+  // G8: PAXG has no Shariah certification on record — screening engine yields REVIEW.
+  // S2-H may be enabled (testnet) but SR-005 and SR-006 are open; update to PASS only
+  // after the board records a pronouncement and all ratio screens are satisfied.
   'gold-exchange-paxg': {
     ...BASE_CLEAN_PROFILE,
     nonCompliantRevenueRatio:   0.0,
     interestBearingAssetsRatio: 0.0,
     goldExchangeIsAtomic:       true,
+    // Note: allocation/custody ratio data not available from DefiLlama — will trigger REVIEW.
+    // Production: supply qabd and custody documentation to resolve the REVIEW items.
   },
 
   'gold-allocation-xaut': {
