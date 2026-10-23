@@ -140,12 +140,22 @@ contract TaskITest_I2 is TaskITestBase {
     // ─────────────────────────────────────────────────────────────────────────
     // Test 12 — maxDeposit(alice) == 0 when S2-H (goldSpreadAdapter) is stale
     // ─────────────────────────────────────────────────────────────────────────
+    // The GoldExchangeAdapter with the 1:1 mock router produces currentValue()=0
+    // because the degenerate price (USDC units ≈ 0 in PAXG's 18-dec math) truncates
+    // to zero.  The vault's _goldPriceInsane() only blocks when
+    //   !isPriceSane() AND currentValue() > dustThreshold.
+    // To test the blocking logic we replace goldSpreadAdapter with the controllable
+    // mock (goldAllocAdapter) that has explicit setSane / setValue, giving a real
+    // non-zero position for the dust-threshold check.
     function test_I2_maxDeposit_zero_when_S2H_stale() public {
-        _deployAndSwapGold(1_000e6);
+        // Wire goldAllocAdapter as S2-H mock (goldSpreadAdapter) with a non-zero position
+        goldAllocAdapter.setValue(10_000e6); // 10 000 USDC equivalent — above dustThreshold
+        goldAllocAdapter.setSane(false);     // simulate stale S2-H
 
-        uint256 maxStaleness = goldAdapter.maxStalenessSecs();
-        vm.warp(block.timestamp + maxStaleness + 1);
+        vm.prank(owner);
+        svault.setGoldSpreadAdapter(address(goldAllocAdapter));
 
+        assertFalse(goldAllocAdapter.isPriceSane(), "S2-H should be insane");
         assertEq(svault.maxDeposit(alice), 0, "maxDeposit should be 0 when S2-H stale");
         assertEq(svault.maxMint(alice), 0, "maxMint should be 0 when S2-H stale");
     }
@@ -154,16 +164,21 @@ contract TaskITest_I2 is TaskITestBase {
     // Test 13 — S6-H sane, S2-H stale → maxDeposit still 0
     // ─────────────────────────────────────────────────────────────────────────
     function test_I2_maxDeposit_normal_when_S6H_sane_and_S2H_stale() public {
-        // Set S6-H adapter (sane = true)
-        vm.prank(owner);
-        svault.setGoldAllocationAdapter(address(goldAllocAdapter));
-        goldAllocAdapter.setSane(true);
+        // goldAdapter (GoldExchangeAdapter) is sane by default (no position open → lastGoodPriceAt=0).
+        // Use it as S6-H (goldAllocationAdapter) — it will report isPriceSane=true.
+        // Use goldAllocAdapter as S2-H (goldSpreadAdapter) — set stale with a real position.
+        goldAllocAdapter.setValue(10_000e6); // above dustThreshold
+        goldAllocAdapter.setSane(false);     // S2-H stale
 
-        _deployAndSwapGold(1_000e6);
-        uint256 maxStaleness = goldAdapter.maxStalenessSecs();
-        vm.warp(block.timestamp + maxStaleness + 1);
+        vm.startPrank(owner);
+        svault.setGoldSpreadAdapter(address(goldAllocAdapter)); // S2-H stale mock
+        svault.setGoldAllocationAdapter(address(goldAdapter));  // S6-H sane (no position yet)
+        vm.stopPrank();
 
-        // S2-H is stale → maxDeposit should still be 0 (either adapter stale blocks deposits)
+        assertTrue(goldAdapter.isPriceSane(), "S6-H should be sane (no position open)");
+        assertFalse(goldAllocAdapter.isPriceSane(), "S2-H should be stale");
+
+        // S2-H is stale → maxDeposit must still be 0 (either adapter stale blocks deposits)
         assertEq(svault.maxDeposit(alice), 0, "stale S2-H blocks even when S6-H sane");
     }
 
@@ -171,15 +186,17 @@ contract TaskITest_I2 is TaskITestBase {
     // Test 14 — same as 13: both adapters needed to be sane for deposits
     // ─────────────────────────────────────────────────────────────────────────
     function test_I2_S6H_sane_S2H_stale_blocks_deposits() public {
-        vm.prank(owner);
-        svault.setGoldAllocationAdapter(address(goldAllocAdapter));
-        goldAllocAdapter.setSane(true);
+        // Same wiring as test 13: S6-H = goldAdapter (sane), S2-H = goldAllocAdapter (stale).
+        goldAllocAdapter.setValue(8_000e6); // above dustThreshold
+        goldAllocAdapter.setSane(false);
 
-        _deployAndSwapGold(500e6);
-        vm.warp(block.timestamp + goldAdapter.maxStalenessSecs() + 100);
+        vm.startPrank(owner);
+        svault.setGoldSpreadAdapter(address(goldAllocAdapter));
+        svault.setGoldAllocationAdapter(address(goldAdapter));
+        vm.stopPrank();
 
-        assertFalse(goldAdapter.isPriceSane(), "S2-H stale");
-        assertTrue(goldAllocAdapter.isPriceSane(), "S6-H still sane");
+        assertFalse(goldAllocAdapter.isPriceSane(), "S2-H stale");
+        assertTrue(goldAdapter.isPriceSane(), "S6-H still sane (no position open)");
         assertEq(svault.maxDeposit(alice), 0, "deposits blocked because S2-H stale");
     }
 

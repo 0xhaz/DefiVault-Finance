@@ -61,6 +61,8 @@ contract PurificationEscrow is Ownable2Step {
     error NoPendingProposal();
     /// @dev A proposal already exists; cancel it first.
     error ProposalAlreadyExists();
+    /// @dev Thrown when deployed without a registry (J3).
+    error RegistryRequired();
 
     // ── Events ──────────────────────────────────────────────────────────────
 
@@ -119,19 +121,16 @@ contract PurificationEscrow is Ownable2Step {
         address charityModule_,
         address shariahTreasury_,
         address initialOwner,
-        address boardRegistry_ // pass address(0) to keep local boardRole; pass registry for I4
+        address boardRegistry_ // J3: must be non-zero for Shariah deploys
     ) Ownable(initialOwner) {
+        if (boardRegistry_ == address(0)) revert RegistryRequired();
         vault           = vault_;
         asset           = asset_;
         charityModule   = CharityModule(charityModule_);
         shariahTreasury = TreasuryModule(shariahTreasury_);
         boardRegistry   = boardRegistry_;
         purificationBps = 0; // no impure income identified at deploy
-        // When no registry: grant deployer local board membership so propose/confirm work out-of-box.
-        // When registry is provided: board membership is managed entirely by the registry.
-        if (boardRegistry_ == address(0)) {
-            boardRole[initialOwner] = true;
-        }
+        // Board membership is managed entirely by the registry (boardRegistry always set).
     }
 
     // ── Waterfall ────────────────────────────────────────────────────────────

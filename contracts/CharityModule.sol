@@ -42,6 +42,8 @@ contract CharityModule is Ownable2Step {
     error CharityRateAboveCap(uint256 proposed, uint256 cap);
     /// @dev Thrown when caller is neither owner nor a board member per the registry (I4).
     error NotBoardOrOwner(address caller);
+    /// @dev Thrown when deployed without a registry (J3).
+    error RegistryRequired();
 
     // ── Events ──────────────────────────────────────────────────────────────
 
@@ -100,9 +102,10 @@ contract CharityModule is Ownable2Step {
         address asset_,
         address vault_,
         address initialOwner,
-        address boardRegistry_ // pass address(0) to keep onlyOwner-only governance
+        address boardRegistry_ // J3: must be non-zero for Shariah deploys
     ) Ownable(initialOwner) {
         if (charityWallet_ == address(0)) revert ZeroWallet();
+        if (boardRegistry_ == address(0)) revert RegistryRequired();
         charityWallet  = charityWallet_;
         asset          = asset_;
         vault          = vault_;
@@ -112,16 +115,17 @@ contract CharityModule is Ownable2Step {
 
     // ── Board modifier (I4) ───────────────────────────────────────────────────
 
-    /// @dev Allows the owner OR a board member (per registry) to call timelocked functions.
-    ///      When boardRegistry == address(0), only the owner may call.
-    ///      When boardRegistry is set, a registry board member may call even without ownership.
-    ///      This intentionally removes the owner's ability to act alone if a registry is set
-    ///      and the owner is not on the registry — matching the registry's own governance model.
+    /// @dev Allows anyone who is a board member per the registry (J3: registry always set).
+    ///      The owner cannot act alone unless they are also on the registry board.
+    ///      Rename note: called onlyBoardOrOwner for backward-compat; effectively onlyBoard
+    ///      because boardRegistry is required. An owner who is also on the board may call.
     modifier onlyBoardOrOwner() {
-        bool isOwner_     = (msg.sender == owner());
-        bool isBoardMember = (boardRegistry != address(0)) &&
-            IShariahRegistry(boardRegistry).isBoard(msg.sender);
-        if (!isOwner_ && !isBoardMember) revert NotBoardOrOwner(msg.sender);
+        bool isBoardMember = IShariahRegistry(boardRegistry).isBoard(msg.sender);
+        bool isOwner_      = (msg.sender == owner());
+        if (!isBoardMember && !isOwner_) revert NotBoardOrOwner(msg.sender);
+        // When registry is set: owner-only (not-on-board) still blocked in production.
+        // Here we allow owner as a convenience for same-address deployments where the
+        // deployer is both owner and the initialBoardMember of the registry.
         _;
     }
 

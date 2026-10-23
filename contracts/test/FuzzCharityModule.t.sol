@@ -8,6 +8,12 @@ import {Test} from "forge-std/Test.sol";
 import {CharityModule} from "../CharityModule.sol";
 import {MockERC20}     from "../test-helpers/MockERC20.sol";
 
+contract MockRegistryFCM {
+    address public board;
+    constructor(address b) { board = b; }
+    function isBoard(address a) external view returns (bool) { return a == board; }
+}
+
 /**
  * @title  FuzzCharityModule
  * @notice Fuzz / property tests for CharityModule.
@@ -29,9 +35,10 @@ contract FuzzCharityModule is Test {
     // address(this) is vault
     function setUp() public {
         usdc = new MockERC20("Mock USDC", "mUSDC", 6);
+        MockRegistryFCM registry = new MockRegistryFCM(owner);
 
         vm.prank(owner);
-        module = new CharityModule(charityWallet, address(usdc), address(this), owner, address(0));
+        module = new CharityModule(charityWallet, address(usdc), address(this), owner, address(registry));
 
         // Large balance so any fuzz amount can be approved
         usdc.mint(address(this), type(uint96).max);

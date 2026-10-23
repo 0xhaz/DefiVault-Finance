@@ -11,6 +11,13 @@ import {TreasuryModule}     from "../TreasuryModule.sol";
 import {ShariahVault}       from "../ShariahVault.sol";
 import {MockERC20}          from "../test-helpers/MockERC20.sol";
 
+/// @dev J3: registry mock — owner is board member so all existing tests still work.
+contract MockRegistryPET {
+    address public board;
+    constructor(address b) { board = b; }
+    function isBoard(address a) external view returns (bool) { return a == board; }
+}
+
 /**
  * @title  PurificationEscrowTest
  * @notice Unit tests for PurificationEscrow — 15+ tests covering the waterfall,
@@ -48,6 +55,7 @@ contract PurificationEscrowTest is Test {
     TreasuryModule     internal treasury;
     CharityModule      internal charityModule;
     PurificationEscrow internal escrow;
+    MockRegistryPET    internal reg; // J3: single registry instance for all deploys
 
     // ── contracts (ShariahVault integration tests) ────────────────────────────
     TreasuryModule     internal vaultTreasury;
@@ -56,8 +64,9 @@ contract PurificationEscrowTest is Test {
     ShariahVault       internal vault;
 
     function setUp() public {
-        // ── 1. Shared MockERC20 ──────────────────────────────────────────────
+        // ── 1. Shared MockERC20 + registry ──────────────────────────────────
         usdc = new MockERC20("Mock USDC", "mUSDC", 6);
+        reg  = new MockRegistryPET(owner); // J3: owner is board member
 
         // ── 2. Standalone stack (vault = address(this)) ──────────────────────
         // CharityModule: vault = address(this), owner = owner
@@ -67,7 +76,7 @@ contract PurificationEscrowTest is Test {
             address(usdc),
             address(this), // vault for CharityModule — will be overridden to escrow below
             owner,
-            address(0)     // no registry for tests
+            address(reg)   // J3: registry required
         );
 
         // TreasuryModule placeholder — feeSource must be escrow, deployed next.
@@ -111,7 +120,7 @@ contract PurificationEscrowTest is Test {
             address(usdc),
             expectedEscrowAddr,  // vault = escrow
             owner,
-            address(0)           // no registry for tests
+            address(reg)         // J3: registry required
         );
 
         escrow = new PurificationEscrow(
@@ -120,7 +129,7 @@ contract PurificationEscrowTest is Test {
             address(charityModule),
             address(treasury),
             owner,
-            address(0)        // no registry for tests
+            address(reg)      // J3: registry required
         );
 
         // Sanity: confirm addresses match
@@ -153,9 +162,9 @@ contract PurificationEscrowTest is Test {
         vaultCharityModule = new CharityModule(
             charityWallet,
             address(usdc),
-            address(0), // placeholder — will be the vaultEscrow address
+            address(0x1), // placeholder vault — will be redeployed with correct addr below
             owner,
-            address(0)  // no registry for tests
+            address(reg)  // J3: registry required
         );
 
         vm.stopPrank();
@@ -182,7 +191,7 @@ contract PurificationEscrowTest is Test {
             address(usdc),
             expectedVaultEscrowAddr,  // vault = vaultEscrow (escrow calls distributeCharity)
             owner,
-            address(0)                // no registry for tests
+            address(reg)              // J3: registry required
         );
 
         vm.stopPrank();
@@ -197,7 +206,7 @@ contract PurificationEscrowTest is Test {
             address(vaultCharityModule),
             address(vaultTreasury),
             owner,
-            address(0)    // no registry for tests
+            address(reg)  // J3: registry required
         );
 
         assertEq(address(vaultEscrow), expectedVaultEscrowAddr2, "vaultEscrow address mismatch");

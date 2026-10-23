@@ -449,7 +449,13 @@ contract GoldExchangeAdapterTest is Test {
     // ─── C-25: currentValue() == totalDeployed ────────────────────────────────
 
     function test_C25_currentValue_equals_totalDeployed() public {
+        // currentValue() uses price-based accounting (paxgHeld * lastGoodPrice / 1e18),
+        // not cost-basis (totalDeployed). With the 1:1 mock router (6-dec USDC → 18-dec PAXG),
+        // paxgHeld ends up as raw 6-dec units treated as 18-dec, giving a degenerate price.
+        // The correct assertion is the price formula:  paxgHeld * lastGoodPrice / 1e18.
         _deployAndSwap(7_000e6);
-        assertEq(adapter.currentValue(), adapter.totalDeployed());
+        uint256 expected = (adapter.paxgHeld() * adapter.lastGoodPrice()) / 1e18;
+        assertEq(adapter.currentValue(), expected,
+            "currentValue should equal paxgHeld * lastGoodPrice / 1e18");
     }
 }

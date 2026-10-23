@@ -25,6 +25,34 @@ contract MockTokenMessenger {
 }
 
 // ---------------------------------------------------------------------------
+// Mock MessageTransmitter — mints a fixed amount of USDC to the vault on receiveMessage (J1)
+// ---------------------------------------------------------------------------
+contract MockMessageTransmitterAVT {
+    address public usdc;
+    address public vault;
+    uint256 public mintAmount;
+    constructor(address usdc_, address vault_, uint256 amount_) { usdc = usdc_; vault = vault_; mintAmount = amount_; }
+    function receiveMessage(bytes calldata, bytes calldata) external returns (bool) {
+        MockERC20(usdc).mint(vault, mintAmount);
+        return true;
+    }
+}
+
+// Helper to build a minimal CCTP message for tests (matches CctpMessageDecoder offsets)
+library TestCctpMsg {
+    function build(uint64 nonce_, uint256 amount_, address recipient_) internal pure returns (bytes memory) {
+        bytes memory header = new bytes(116);
+        for (uint256 i = 0; i < 8; i++) header[19 - i] = bytes1(uint8(nonce_ >> (i * 8)));
+        bytes memory body = new bytes(132);
+        bytes32 rw = bytes32(uint256(uint160(recipient_)));
+        for (uint256 i = 0; i < 32; i++) body[36 + i] = rw[i];
+        bytes32 aw = bytes32(amount_);
+        for (uint256 i = 0; i < 32; i++) body[68 + i] = aw[i];
+        return abi.encodePacked(header, body);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mock adapter that holds USDC and can be recalled
 // ---------------------------------------------------------------------------
 contract MockAdapter is IStrategyAdapter {
@@ -252,7 +280,7 @@ contract AutonomousVaultTest is Test {
     }
 
     // -----------------------------------------------------------------------
-    // test_settleCrossChain
+    // test_settleCrossChain — J1: uses settleCrossChainWithMessage (atomic path)
     // -----------------------------------------------------------------------
     function test_settleCrossChain() public {
         _fund(alice, 1_000e6);
@@ -268,17 +296,21 @@ contract AutonomousVaultTest is Test {
         vault.deployCrossChain(DEST_DOMAIN, recipient, 150e6);
         assertEq(vault.totalDeployed(), 150e6);
 
-        // Simulate USDC bridged back: mint 150e6 to vault
-        usdc.mint(address(vault), 150e6);
-
+        // J1: deploy a mock transmitter that mints 150e6 on receiveMessage.
+        MockMessageTransmitterAVT transmitter =
+            new MockMessageTransmitterAVT(address(usdc), address(vault), 150e6);
         vm.prank(owner);
-        vault.settleCrossChain(1, 150e6); // PR3.3: pass received=amount (no shortfall)
+        vault.setMessageTransmitter(address(transmitter));
+
+        bytes memory msg_  = TestCctpMsg.build(1, 150e6, address(vault));
+        vm.prank(owner);
+        vault.settleCrossChainWithMessage(1, msg_, "");
 
         assertEq(vault.pendingCrossChain(1), 0, "pending should be cleared");
     }
 
     // -----------------------------------------------------------------------
-    // test_settleCrossChain_wrong_nonce
+    // test_settleCrossChain_wrong_nonce — J1: write-off path with wrong nonce
     // -----------------------------------------------------------------------
     function test_settleCrossChain_wrong_nonce() public {
         _fund(alice, 1_000e6);
@@ -293,9 +325,10 @@ contract AutonomousVaultTest is Test {
         // PR3.3: use 150e6 (within 20% cap of 1000e6)
         vault.deployCrossChain(DEST_DOMAIN, recipient, 150e6);
 
+        // Write-off with unused nonce 99 reverts NonceMismatch.
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(AutonomousVault.NonceMismatch.selector, uint64(99)));
-        vault.settleCrossChain(99, 0); // PR3.3: signature changed
+        vault.settleCrossChain(99, 0); // J1: write-off only; received must be 0
     }
 
     // -----------------------------------------------------------------------

@@ -48,6 +48,47 @@ contract MockTokenMessengerH {
 }
 
 // ---------------------------------------------------------------------------
+//  Mock MessageTransmitter for J1 atomic settle tests.
+//  Mints mintAmount of USDC to the vault on receiveMessage.
+// ---------------------------------------------------------------------------
+contract MockMessageTransmitterH {
+    address public usdc;
+    address public vault;
+    uint256 public mintAmount;
+    constructor(address usdc_, address vault_, uint256 amount_) {
+        usdc = usdc_; vault = vault_; mintAmount = amount_;
+    }
+    function setMintAmount(uint256 a) external { mintAmount = a; }
+    function receiveMessage(bytes calldata, bytes calldata) external returns (bool) {
+        MockERC20(usdc).mint(vault, mintAmount);
+        return true;
+    }
+}
+
+// Helper library: build a minimal CCTP message for J1 tests.
+library TestCctpMsgH {
+    function build(uint64 nonce_, uint256 amount_, address recipient_) internal pure returns (bytes memory) {
+        bytes memory header = new bytes(116);
+        for (uint256 i = 0; i < 8; i++) header[19 - i] = bytes1(uint8(nonce_ >> (i * 8)));
+        bytes memory body = new bytes(132);
+        bytes32 rw = bytes32(uint256(uint160(recipient_)));
+        for (uint256 i = 0; i < 32; i++) body[36 + i] = rw[i];
+        bytes32 aw = bytes32(amount_);
+        for (uint256 i = 0; i < 32; i++) body[68 + i] = aw[i];
+        return abi.encodePacked(header, body);
+    }
+}
+
+// ---------------------------------------------------------------------------
+//  Registry mock for J3 (J3: registry required by CharityModule + PurificationEscrow)
+// ---------------------------------------------------------------------------
+contract MockRegistryH {
+    address public board;
+    constructor(address b) { board = b; }
+    function isBoard(address a) external view returns (bool) { return a == board; }
+}
+
+// ---------------------------------------------------------------------------
 //  Mock IStrategyAdapter for PR3.1 proportional-loss test
 // ---------------------------------------------------------------------------
 interface IStrategyAdapter {
@@ -113,6 +154,7 @@ contract TaskHTest is Test {
     CharityModule         internal charityModule;
     PurificationEscrow    internal escrow;
     TreasuryModule        internal escrowTreasury;
+    MockRegistryH         internal reg;
 
     // ── Constants ───────────────────────────────────────────────────────────
     uint32  internal constant SOURCE_DOMAIN       = 26;
@@ -132,11 +174,12 @@ contract TaskHTest is Test {
         // Warp to a realistic timestamp to avoid staleness underflow
         vm.warp(1_700_000_000);
 
-        // 1. Tokens and oracle
+        // 1. Tokens, oracle, and registry (J3: CharityModule + PurificationEscrow require registry)
         usdc   = new MockERC20("Mock USDC", "mUSDC", 6);
         xaut   = new MockXAUT();
         oracle = new MockXauUsdAggregator();
         pool   = new MockUniswapV3PoolXAUT(address(usdc), address(xaut), POOL_USDC_PER_XAUT);
+        reg    = new MockRegistryH(owner); // owner is board member
 
         vm.startPrank(owner);
 
@@ -222,7 +265,7 @@ contract TaskHTest is Test {
             address(usdc),
             expectedEscrowAddr, // vault = escrow
             owner,
-            address(0)          // no registry for tests — local board only
+            address(reg)        // J3: registry required
         );
 
         escrow = new PurificationEscrow(
@@ -231,7 +274,7 @@ contract TaskHTest is Test {
             address(charityModule),
             address(escrowTreasury),
             owner,
-            address(0)            // no registry for tests — local board only
+            address(reg)          // J3: registry required
         );
 
         require(address(escrow) == expectedEscrowAddr, "TaskHTest: escrow addr mismatch");
@@ -368,8 +411,11 @@ contract TaskHTest is Test {
     }
 
     // ─── Test 5 ─────────────────────────────────────────────────────────────
-    // maxDeposit returns 0 when oracle is stale (gold adapter set).
+    // maxDeposit returns 0 when oracle is stale (gold adapter set, position open).
+    // _goldPriceInsane() only blocks when currentValue() > dustThreshold, so a
+    // real position must be open before going stale.
     function test_PR1_maxDeposit_zero_when_oracle_stale() public {
+        _deployCapital(3_300e6); // open a position so currentValue() > dustThreshold
         _makeOracleStale();
         assertEq(vault.maxDeposit(alice), 0, "maxDeposit should be 0 when oracle stale");
     }
@@ -377,6 +423,7 @@ contract TaskHTest is Test {
     // ─── Test 6 ─────────────────────────────────────────────────────────────
     // maxMint returns 0 when oracle is stale.
     function test_PR1_maxMint_zero_when_oracle_stale() public {
+        _deployCapital(3_300e6); // open a position so currentValue() > dustThreshold
         _makeOracleStale();
         assertEq(vault.maxMint(alice), 0, "maxMint should be 0 when oracle stale");
     }
@@ -909,22 +956,23 @@ contract TaskHTest is Test {
         uint256 navBefore = avault.totalAssets();
         assertEq(navBefore, 1_000e6, "NAV should be 1000e6 before settle");
 
-        // Bridge returns only 90e6 (10e6 shortfall)
-        testUsdc2.mint(address(avault), 90e6);
-
+        // J1: atomic settle path — transmitter mints only 90e6 (shortfall=10e6).
+        MockMessageTransmitterH transmitter =
+            new MockMessageTransmitterH(address(testUsdc2), address(avault), 90e6);
         vm.prank(owner);
-        avault.settleCrossChain(1, 90e6);
+        avault.setMessageTransmitter(address(transmitter));
+
+        bytes memory msg_ = TestCctpMsgH.build(1, 90e6, address(avault));
+        vm.prank(owner);
+        avault.settleCrossChainWithMessage(1, msg_, "");
 
         uint256 navAfter = avault.totalAssets();
-
-        // Fixed (PR3.3): totalDeployed -= sent only (no += received).
         // vault.balance = 900 + 90 = 990, totalDeployed = 0. NAV = 990e6.
-        // Shortfall of 10e6 is immediately reflected in NAV.
         assertEq(navAfter, 990e6, "NAV should drop by 10e6 shortfall to 990e6");
     }
 
     // ─── Test 26 ────────────────────────────────────────────────────────────
-    // settleCrossChain with shortfall emits CrossChainSettled(nonce, received, shortfall=10e6).
+    // J1: settleCrossChainWithMessage with shortfall emits CrossChainSettled(nonce, 90e6, 10e6).
     function test_PR3_settle_emits_shortfall_event() public {
         MockERC20 testUsdc2 = new MockERC20("Test USDC2", "tUSDC2", 6);
         vm.prank(owner);
@@ -945,12 +993,18 @@ contract TaskHTest is Test {
         vm.prank(owner);
         avault.deployCrossChain(2, recipient, 100e6);
 
-        testUsdc2.mint(address(avault), 90e6);
+        // J1: transmitter mints 90e6 (shortfall=10e6).
+        MockMessageTransmitterH transmitter =
+            new MockMessageTransmitterH(address(testUsdc2), address(avault), 90e6);
+        vm.prank(owner);
+        avault.setMessageTransmitter(address(transmitter));
+
+        bytes memory msg_ = TestCctpMsgH.build(1, 90e6, address(avault));
 
         vm.expectEmit(true, false, false, true, address(avault));
         emit AutonomousVault.CrossChainSettled(uint64(1), 90e6, 10e6);
 
         vm.prank(owner);
-        avault.settleCrossChain(1, 90e6);
+        avault.settleCrossChainWithMessage(1, msg_, "");
     }
 }

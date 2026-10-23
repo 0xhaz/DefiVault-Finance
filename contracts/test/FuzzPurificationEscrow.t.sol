@@ -10,6 +10,12 @@ import {CharityModule}      from "../CharityModule.sol";
 import {TreasuryModule}     from "../TreasuryModule.sol";
 import {MockERC20}          from "../test-helpers/MockERC20.sol";
 
+contract MockRegistryFPE {
+    address public board;
+    constructor(address b) { board = b; }
+    function isBoard(address a) external view returns (bool) { return a == board; }
+}
+
 /**
  * @title  FuzzPurificationEscrow
  * @notice Fuzz / property tests for PurificationEscrow.
@@ -41,6 +47,7 @@ contract FuzzPurificationEscrow is Test {
 
     function setUp() public {
         usdc = new MockERC20("Mock USDC", "mUSDC", 6);
+        MockRegistryFPE reg = new MockRegistryFPE(owner); // J3
 
         // Pre-compute escrow address to wire feeSource correctly.
         // Deployment order from address(this):
@@ -66,7 +73,7 @@ contract FuzzPurificationEscrow is Test {
             address(usdc),
             expectedEscrowAddr,      // vault = escrow (escrow calls distributeCharity)
             owner,
-            address(0)               // no registry for tests
+            address(reg)             // J3: registry required
         );
 
         escrow = new PurificationEscrow(
@@ -75,7 +82,7 @@ contract FuzzPurificationEscrow is Test {
             address(charityModule),
             address(treasury),
             owner,
-            address(0)               // no registry for tests
+            address(reg)             // J3: registry required
         );
 
         assertEq(address(escrow), expectedEscrowAddr, "escrow address mismatch");

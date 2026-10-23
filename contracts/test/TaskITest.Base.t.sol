@@ -29,7 +29,7 @@ contract MockTokenMessengerI is Test {
         nonce = nextNonce++;
         // NOTE: tokens are NOT burned here — they stay in the vault.
         // The vault computed balBefore BEFORE calling this, so
-        // balanceBeforeDeploy[nonce] = balBefore - amount.
+        // pendingCrossChain[nonce] = amount.
         // Because no burn occurred, vault.balanceOf == balBefore still.
         // That means: arrived = balNow - snapBase = balBefore - (balBefore - amount) = amount.
         // Tests must sim CCTP mint by minting extra USDC on top.

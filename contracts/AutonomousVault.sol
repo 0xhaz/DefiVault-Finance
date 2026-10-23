@@ -19,6 +19,41 @@ interface ITokenMessenger {
     ) external returns (uint64 nonce);
 }
 
+/// @notice CCTP V2 MessageTransmitter — only the function needed for atomic settle.
+interface IMessageTransmitterV2 {
+    function receiveMessage(bytes calldata message, bytes calldata attestation) external returns (bool success);
+}
+
+/// @notice Minimal decoder for the CCTP burn message to extract nonce, amount, and mintRecipient.
+///         Layout (all big-endian, byte offsets from start of `messageBody`):
+///           [0..3]   version (uint32)
+///           [4..35]  burnToken (bytes32)
+///           [36..67] mintRecipient (bytes32)
+///           [68..99] amount (uint256)
+///           [100..131] messageSender (bytes32)
+library CctpMessageDecoder {
+    /// @dev Returns the `nonce` embedded in the outer CCTP message header.
+    ///      Header layout (bytes):
+    ///        [0..3]   version
+    ///        [4..7]   sourceDomain
+    ///        [8..11]  destinationDomain
+    ///        [12..19] nonce (uint64)
+    ///        ... (rest unused here)
+    function decodeNonce(bytes calldata message) internal pure returns (uint64 nonce) {
+        require(message.length >= 20, "CCTP: message too short");
+        nonce = uint64(bytes8(bytes20(message[12:20])));
+    }
+
+    /// @dev Returns the `amount` and `mintRecipient` from the BurnMessage body.
+    ///      The outer message header is 116 bytes; the body starts at offset 116.
+    function decodeBody(bytes calldata message) internal pure returns (uint256 amount, bytes32 mintRecipient) {
+        require(message.length >= 116 + 132, "CCTP: message body too short");
+        // body offset 36..67 = mintRecipient, body offset 68..99 = amount
+        mintRecipient = bytes32(message[116 + 36 : 116 + 68]);
+        amount        = uint256(bytes32(message[116 + 68 : 116 + 100]));
+    }
+}
+
 contract AutonomousVault is ERC4626, Ownable2Step {
     using SafeERC20 for IERC20;
 
@@ -33,9 +68,12 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     error PendingCrossChainCapExceeded();
     /// @notice Thrown when profitUnlockPeriod is set above MAX_PROFIT_UNLOCK_PERIOD.
     error InvalidUnlockPeriod();
-    /// @notice Thrown by settleCrossChain when the caller claims more was received than
-    ///         actually arrived in the vault since the matching deployCrossChain (I1).
-    error ReceivedExceedsArrived(uint256 claimed, uint256 arrived);
+    /// @notice Thrown by settleCrossChainWithMessage when the decoded mintRecipient is not this vault.
+    error WrongMintRecipient(bytes32 recipient);
+    /// @notice Thrown by settleCrossChainWithMessage when the message amount != received balance delta.
+    error MessageAmountMismatch(uint256 messageAmount, uint256 balanceDelta);
+    /// @notice Thrown by the write-off path when received > 0 (write-off must book a full loss).
+    error WriteOffMustBeZero();
 
     event ManagerUpdated(address indexed previousManager, address indexed newManager);
     event MaxAllocationBpsUpdated(uint256 previousBps, uint256 newBps);
@@ -51,6 +89,7 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     );
     event CrossChainSettled(uint64 indexed nonce, uint256 amount, uint256 shortfall);
     event TokenMessengerUpdated(address indexed previousMessenger, address indexed newMessenger);
+    event MessageTransmitterUpdated(address indexed previous, address indexed updated);
     event ProfitLocked(uint256 amount, uint256 unlockedAt);
     event CrossChainCapUpdated(uint256 newBps);
 
@@ -70,11 +109,9 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     /// @notice Hard cap for maxPendingCrossChainBps.
     uint256 public constant MAX_PENDING_CROSS_CHAIN_BPS = 5_000;
 
-    /// @notice USDC balance snapshot taken just before each deployCrossChain call (I1).
-    ///         Used by settleCrossChain to verify that `received` does not exceed the
-    ///         actual balance increase since the deploy, preventing NAV inflation by
-    ///         an over-reporting caller.  Keyed by CCTP nonce.
-    mapping(uint64 => uint256) public balanceBeforeDeploy;
+    /// @notice CCTP V2 MessageTransmitter used by settleCrossChainWithMessage.
+    ///         Set via setMessageTransmitter(). Optional — only needed for atomic settle.
+    address public messageTransmitter;
 
     /// @notice Profit locked for linear unlock (PR3.2 — Yearn-style streaming).
     ///         Locked profit is excluded from totalAssets until unlockedAt.
@@ -189,10 +226,6 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         uint256 maxPending = (totalAssets() * maxPendingCrossChainBps) / 10_000;
         if (totalPendingCrossChain + amount > maxPending) revert PendingCrossChainCapExceeded();
 
-        // I1: Snapshot USDC balance before the burn so settleCrossChain can verify
-        //     that `received` does not exceed what actually arrived in the vault.
-        uint256 _balBefore = IERC20(asset()).balanceOf(address(this));
-
         // Approve exact amount; always clear residual allowance after the call
         IERC20(asset()).forceApprove(tokenMessenger, amount);
         uint64 nonce = ITokenMessenger(tokenMessenger).depositForBurnWithCaller(
@@ -207,10 +240,8 @@ contract AutonomousVault is ERC4626, Ownable2Step {
 
         totalDeployed += amount;
         totalPendingCrossChain += amount;
-        // Record pending position so settleCrossChain can decrement totalDeployed on return
+        // Record pending position so settle can decrement totalDeployed on return.
         pendingCrossChain[nonce] = amount;
-        // I1: Record balance after burn (== balBefore - amount) for arrival verification.
-        balanceBeforeDeploy[nonce] = _balBefore - amount; // vault balance after the outbound burn
 
         emit CapitalDeployedCrossChain(destinationDomain, recipient, amount, nonce);
     }
@@ -249,48 +280,64 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         emit CapitalRecalledFromAdapter(adapter, amount, actualReturn);
     }
 
-    /// @notice Called by the manager/owner once the crosschain USDC has been bridged BACK
-    ///         to this vault on the source chain (attested by the CCTP attestation service
-    ///         and received via a MessageTransmitter.receiveMessage call).
-    /// @dev    The matching CCTP burn nonce tracks the original outbound position.
-    ///         Decrements `totalDeployed` so ERC-4626 NAV remains accurate.
-    ///         The corresponding USDC tokens must already be in this vault (minted here
-    ///         by the destination's reverse CCTP burn + source attestation) before calling.
     /**
-     * @notice Settle a completed cross-chain position.
-     * @dev    PR3.3: caller passes the actual USDC amount received back (may be less than sent
-     *         due to bridge fees, slippage, or loss). Any shortfall is booked as an immediate
-     *         NAV loss by leaving totalDeployed reduced only by `received`, not `sent`.
-     *         `received` must be <= original amount; caller must have transferred the USDC back.
-     * @param nonce    The CCTP nonce from the original deployCrossChain call.
-     * @param received Actual USDC received (0 < received <= original amount).
+     * @notice Atomic cross-chain settle: calls MessageTransmitter.receiveMessage in the same
+     *         transaction, measures the exact USDC balance delta, and books the result.
+     * @dev    J1: Replaces the old snapshot-based approach. Nothing else can move the USDC
+     *         balance inside a single call, so `received` is always exact.
+     *         Also verifies that the decoded mintRecipient is this vault and that the
+     *         message-encoded amount matches the actual balance delta.
+     * @param nonce        CCTP burn nonce from the original deployCrossChain.
+     * @param message      Attested CCTP message bytes (returned by the CCTP attestation API).
+     * @param attestation  Corresponding attestation bytes.
      */
-    function settleCrossChain(uint64 nonce, uint256 received) external onlyManagerOrOwner {
+    function settleCrossChainWithMessage(
+        uint64 nonce,
+        bytes calldata message,
+        bytes calldata attestation
+    ) external onlyManagerOrOwner {
         uint256 sent = pendingCrossChain[nonce];
         if (sent == 0) revert NonceMismatch(nonce);
 
-        // I1: Verify that the caller's `received` claim does not exceed what actually
-        //     arrived on-chain.  We compare the current vault balance against the
-        //     snapshot taken when the outbound burn fired.  CCTP mints the inbound USDC
-        //     to this vault BEFORE the operator calls settleCrossChain, so the balance
-        //     delta equals the real arrived amount.
-        //     Any other tokens that arrived between deploy and settle (e.g. from unrelated
-        //     sources) would also count here — acceptable: they make the bound looser, not
-        //     tighter, so a legitimate settle always passes.
-        uint256 balNow   = IERC20(asset()).balanceOf(address(this));
-        uint256 snapBase = balanceBeforeDeploy[nonce];
-        uint256 arrived  = balNow >= snapBase ? balNow - snapBase : 0;
-        if (received > arrived) revert ReceivedExceedsArrived(received, arrived);
+        // Decode and validate the message before minting.
+        (uint256 msgAmount, bytes32 mintRecipient) = CctpMessageDecoder.decodeBody(message);
+        if (mintRecipient != bytes32(uint256(uint160(address(this))))) {
+            revert WrongMintRecipient(mintRecipient);
+        }
 
+        // Snapshot balance, call receiveMessage (mints USDC to this vault), measure delta.
+        uint256 balBefore = IERC20(asset()).balanceOf(address(this));
+        IMessageTransmitterV2(messageTransmitter).receiveMessage(message, attestation);
+        uint256 balAfter  = IERC20(asset()).balanceOf(address(this));
+        uint256 received  = balAfter > balBefore ? balAfter - balBefore : 0;
+
+        // Cross-check: message-encoded amount must equal actual minted amount.
+        if (msgAmount != received) revert MessageAmountMismatch(msgAmount, received);
+
+        _doSettle(nonce, sent, received);
+    }
+
+    /**
+     * @notice Write off a lost cross-chain transfer (USDC never arrives or is unrecoverable).
+     * @dev    J1: Degraded path — `received` MUST be 0. Books the full sent amount as a loss.
+     *         Only callable by the owner (not the manager) to prevent accidental write-offs.
+     * @param nonce  CCTP burn nonce from the original deployCrossChain.
+     */
+    function settleCrossChain(uint64 nonce, uint256 received) external onlyOwner {
+        if (received != 0) revert WriteOffMustBeZero();
+        uint256 sent = pendingCrossChain[nonce];
+        if (sent == 0) revert NonceMismatch(nonce);
+        _doSettle(nonce, sent, 0);
+    }
+
+    /// @dev Shared accounting for both settle paths.
+    function _doSettle(uint64 nonce, uint256 sent, uint256 received) internal {
         delete pendingCrossChain[nonce];
-        delete balanceBeforeDeploy[nonce];
 
         uint256 shortfall = sent > received ? sent - received : 0;
         // Decrement totalDeployed by the full sent amount. The received USDC tokens are
-        // already minted to vault balance by CCTP (counted in ERC4626.totalAssets()),
-        // so we must NOT add `received` back to totalDeployed — that would double-count.
-        // Net effect on NAV: vault.balanceOf += received, totalDeployed -= sent.
-        // NAV change = received - sent = -shortfall (loss booked immediately).
+        // already in vault balance (minted by CCTP). Do NOT add received back — that would
+        // double-count. Net NAV change = received - sent = -shortfall (immediate loss).
         totalDeployed          = totalDeployed >= sent ? totalDeployed - sent : 0;
         totalPendingCrossChain = totalPendingCrossChain >= sent ? totalPendingCrossChain - sent : 0;
 
@@ -315,6 +362,12 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         address previous = tokenMessenger;
         tokenMessenger = messenger;
         emit TokenMessengerUpdated(previous, messenger);
+    }
+
+    function setMessageTransmitter(address transmitter) external onlyOwner {
+        address previous = messageTransmitter;
+        messageTransmitter = transmitter;
+        emit MessageTransmitterUpdated(previous, transmitter);
     }
 
     function setPaused(bool newPaused) external onlyOwner {

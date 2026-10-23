@@ -7,6 +7,13 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {CharityModule} from "../CharityModule.sol";
 import {MockERC20}     from "../test-helpers/MockERC20.sol";
 
+/// @dev Minimal registry mock for J3: always returns isBoard=true for the configured member.
+contract MockRegistryCMT {
+    address public board;
+    constructor(address board_) { board = board_; }
+    function isBoard(address a) external view returns (bool) { return a == board; }
+}
+
 /**
  * @title  CharityModuleTest
  * @notice Unit tests for CharityModule — 20+ tests covering distribution,
@@ -23,18 +30,20 @@ contract CharityModuleTest is Test {
     address internal other        = makeAddr("other");
 
     // ── contracts ─────────────────────────────────────────────────────────────
-    MockERC20     internal usdc;
-    CharityModule internal module;
+    MockERC20         internal usdc;
+    CharityModule     internal module;
+    MockRegistryCMT   internal registry;
 
     // ── helpers ───────────────────────────────────────────────────────────────
     uint256 internal constant INITIAL_BALANCE = 1_000_000e6;
 
     function setUp() public {
-        usdc = new MockERC20("Mock USDC", "mUSDC", 6);
+        usdc     = new MockERC20("Mock USDC", "mUSDC", 6);
+        registry = new MockRegistryCMT(owner); // J3: owner is also board member
 
         // address(this) is vault; owner is the Ownable owner
         vm.prank(owner);
-        module = new CharityModule(charityWallet, address(usdc), address(this), owner, address(0));
+        module = new CharityModule(charityWallet, address(usdc), address(this), owner, address(registry));
 
         // Fund this contract (acting as vault) with USDC
         usdc.mint(address(this), INITIAL_BALANCE);
@@ -152,9 +161,11 @@ contract CharityModuleTest is Test {
 
     /// @notice Non-owner cannot propose wallet change — reverts OwnableUnauthorizedAccount
     function test_proposeWalletChange_nonOwner_reverts() public {
+        // proposeCharityWalletChange uses onlyBoardOrOwner — a non-board, non-owner caller
+        // receives NotBoardOrOwner, not OwnableUnauthorizedAccount.
         vm.prank(other);
         vm.expectRevert(
-            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, other)
+            abi.encodeWithSelector(CharityModule.NotBoardOrOwner.selector, other)
         );
         module.proposeCharityWalletChange(makeAddr("x"));
     }

@@ -5,7 +5,7 @@ Live at [defivault.finance](https://defivault.finance) · USDC-native
 
 DeFiVault is an ERC-4626 vault protocol with four risk tiers across two communities — Conventional and Shariah. An on-chain AI agent continuously scores strategies, routes capital through protocol adapters, and executes the winning strategy on every cycle. All fees are transparent and on-chain; Shariah vaults auto-route charitable contributions before any profit split.
 
-**Current revision (Oct 2026):** Phases 2 and 3 complete (Tasks A–F, B, D, E; G1–G4 safety fixes; H PR1–PR3; I I1–I5). OUSG/BUIDL removed from Shariah tier (SR-001); gold exchanges enforced as atomic single-transaction swaps for yad bi yad compliance (S2-H); S6-H XAUT Gold Allocation adapter with Chainlink oracle, pool deviation guard, and 30-day timelock on all board-settable parameters; combined gold cap 30%; `currentValue()` never reverts — stale oracle falls back to `lastGoodPrice × (1 − staleHaircutBps)` (PR1 / I2 applied to both S2-H and S6-H). PurificationEscrow rate requires board propose + 30-day timelock (PR2). High-water mark loss carry-forward; profit unlock streaming (3-day default); cross-chain pending cap (20% default) with on-chain arrival verification on settle (I1). Single-source board role: `CharityModule` and `PurificationEscrow` delegate board membership to `ShariahAdapterRegistry.isBoard()` (I4); registry constructor separates owner from initial board member (I5). SR-G6 renumbered SR-012. 393 tests green. Open board review items SR-001 to SR-018 (none yet approved) in `docs/agents/SHARIAH_REVIEW.md`.
+**Current revision (Oct 2026):** Phases 2 and 3 complete (Tasks A–F, B, D, E; G1–G4 safety fixes; H PR1–PR3; I I1–I5, J J1–J4). OUSG/BUIDL removed from Shariah tier (SR-001); gold exchanges enforced as atomic single-transaction swaps for yad bi yad compliance (S2-H); S6-H XAUT Gold Allocation adapter with Chainlink oracle, pool deviation guard, and 30-day timelock on all board-settable parameters; combined gold cap 30%; `currentValue()` never reverts — stale oracle falls back to `lastGoodPrice × (1 − staleHaircutBps)` (PR1 / I2 applied to both S2-H and S6-H). PurificationEscrow rate requires board propose + 30-day timelock (PR2). High-water mark loss carry-forward; profit unlock streaming (3-day default); cross-chain pending cap (20% default). **J1:** cross-chain settle replaced with `settleCrossChainWithMessage(nonce, message, attestation)` — atomic CCTP V2 message reception with balance-delta verification; old `settleCrossChain(nonce, 0)` demoted to owner-only write-off path (SR-019). **J2:** deposit pause only when gold adapter holds material position (`currentValue > dustThreshold`); S2-H uses XAU/USD oracle for freshness when `goldOracle` is set (SR-020). **J3:** `CharityModule` and `PurificationEscrow` revert `RegistryRequired()` when constructed without a registry — address(0) fallback removed (SR-021). **J4:** six protocol invariants (redeem safety, totalAssets accounting, gold cap, share-price monotonicity, HWM vaultShare, locked-profit decay) machine-verified at 256 invariant runs × depth 50 (SR-022). Single-source board role: `CharityModule` and `PurificationEscrow` delegate board membership to `ShariahAdapterRegistry.isBoard()` (I4); registry constructor separates owner from initial board member (I5). SR-G6 renumbered SR-012. 399 tests green. Open board review items SR-001 to SR-022 (none yet approved) in `docs/agents/SHARIAH_REVIEW.md`.
 
 ---
 
@@ -712,7 +712,7 @@ The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is 
 | Over-allocation | `maxAllocationBps` cumulative cap (default 80%) enforced on every deployment |
 | Stale oracle execution | 5-minute staleness guard in both score aggregators |
 | Gas price manipulation | `maxGasPrice` guard per tier in `RiskTieredExecutor` |
-| Cross-chain double-settle | `settleCrossChain` deletes `pendingCrossChain[nonce]` atomically; shortfall booked immediately as NAV loss |
+| Cross-chain double-settle | `settleCrossChainWithMessage` / `settleCrossChain` both delete `pendingCrossChain[nonce]` atomically on first use; nonce can never be settled twice (J1) |
 | Same-domain CCTP loop | `deployCrossChain` reverts `SameDomainDeploy` if `destDomain == sourceDomain` |
 | Charitable wallet rug | 30-day timelock on all `CharityModule` wallet + rate changes; `ZakatModule` also timelocked for v1 compat |
 | RWA lending exposure | `RwaYieldAdapter` has no approve-for-lending function by design |
@@ -731,18 +731,27 @@ The deprecated `ZakatModule` remains deployed for v1 vault compatibility and is 
 | Flash-claim-redeem profit extraction | `_lockProfitInternal` locks new `depositorShare` for `profitUnlockPeriod` (default 3 days); `totalAssets()` subtracts `_currentLockedProfit()` — a deposit-claim-redeem in the same block extracts ~0 |
 | Loss carry-forward (Musharakah HWM) | `TreasuryModule.calculateMusharakahSplitHWM`: `vaultShare = 0` until cumulative losses (`hwmDeficit`) are recovered above `highWaterMark`; depositors bear losses pro-rata, vault takes no profit during recovery (PR3 / SR-004) |
 | Cross-chain over-exposure | `deployCrossChain` reverts `PendingCrossChainCapExceeded` when `totalPendingCrossChain + amount > totalAssets() × maxPendingCrossChainBps / 10_000` (default cap 20%); cap enforced against pre-burn NAV (bug fix — previously checked post-burn) |
-| `settleCrossChain` NAV manipulation | `deployCrossChain` snapshots post-burn vault balance in `balanceBeforeDeploy[nonce]`. `settleCrossChain(nonce, received)` computes `arrived = currentBalance − snapshot` and reverts `ReceivedExceedsArrived` if `received > arrived` — prevents manager from inflating NAV by over-reporting inbound USDC (I1 / SR-017) |
+| Cross-chain NAV manipulation | J1: `settleCrossChainWithMessage` calls `MessageTransmitter.receiveMessage` atomically, measures USDC balance delta, and reverts `MessageAmountMismatch` if mint amount != message-encoded amount. `WrongMintRecipient` prevents intercepted messages. Write-off path (`settleCrossChain(nonce, 0)`, owner-only) is the only way to book a zero-recovery loss (J1 / SR-019) |
 | S2-H stale-price valuation | `GoldExchangeAdapter.currentValue()` now uses `lastGoodPrice` (set at each atomic swap) rather than `totalDeployed`. Stale detection: `block.timestamp − lastGoodPriceAt > maxStalenessSecs` (default 1 day, max 7 days). Stale: `grossValue × (1 − staleHaircutBps)`. `isPriceSane()` returns false when stale; `ShariahVault.maxDeposit/maxMint` return 0 when either gold adapter is not sane (I2 / SR-016) |
 | Governance divergence (board membership) | `CharityModule` and `PurificationEscrow` both delegate board membership to `ShariahAdapterRegistry.isBoard()` via immutable `boardRegistry`. A single registry board change immediately propagates to both contracts. `ShariahAdapterRegistry` constructor now separates owner (emergency powers only) from `initialBoardMember` (receives boardRole — should be Safe multisig in production) (I4/I5 / SR-018) |
+| Registry-free deploy | J3: both `CharityModule` and `PurificationEscrow` revert `RegistryRequired()` at construction when `boardRegistry = address(0)`. The address(0) local-fallback path is gone — every Shariah deploy must provide a live registry address (J3 / SR-021) |
+| Empty-adapter deposit block | J2: `ShariahVault.maxDeposit/maxMint` block deposits only when a gold adapter is stale AND holds `currentValue > dustThreshold` (default 1 USDC). A freshly deployed adapter with no capital never blocks new deposits (J2 / SR-020) |
+| Protocol invariants (machine-verified) | J4: six Foundry invariant properties (redeem safety, totalAssets accounting, gold cap, share-price monotonicity, HWM vaultShare, locked-profit decay) verified at 256 runs × depth 50 (J4 / SR-022) |
 
 ---
 
 ## Test Coverage
 
-**393 Foundry tests** across **31 test files** (5 new in Task I); **48 bun tests** in `server/screening/tests/`. Counts from `forge test --summary` — never hand-edited (G11).
+**399 Foundry tests** across **34 test files** (3 new in Task J invariant suite); **48 bun tests** in `server/screening/tests/`. Counts from `forge test --summary` — never hand-edited (G11).
+
+Run the invariant suite with:
+```
+forge test --match-path 'contracts/test/invariant/*' --invariant-runs 256 --invariant-depth 50
+```
 
 New in Task H: `TaskHTest.t.sol` (26 tests) covering PR1 gold haircut, PR2 purification timelock, PR3.1 HWM, PR3.2 profit unlock, PR3.3 cross-chain cap.
 New in Task I: 5 test files (`TaskITest.Base`, `I1`, `I2`, `I3`, `I4I5`) — 29 tests covering I1 settle verification, I2 S2-H stale pricing, I3 HWM excess rule, I4 single-source board role, I5 registry constructor.
+New in Task J: `TaskITest.I1.t.sol` rewritten for J1 API (5 tests); `AutonomousVaultTest` + `TaskHTest` settle tests updated for J1 atomic path; 3 invariant files (`VaultInvariant.Base`, `VaultInvariant.Handler`, `VaultInvariant.t.sol`) with 6 invariant properties.
 
 **Foundry test suite (`forge test --fuzz-runs 512`):**
 
@@ -774,10 +783,11 @@ New in Task I: 5 test files (`TaskITest.Base`, `I1`, `I2`, `I3`, `I4I5`) — 29 
 | `FuzzPurificationEscrow.t.sol` | 4 | Fuzz (512 runs) | Waterfall invariant, zero-purification, charity proportionality |
 | `FuzzShariahVaultV2.t.sol` | 4 | Fuzz (512 runs) | Migration round-trip NAV, timelock, screening expiry lifecycle, allocation cap |
 | `TaskHTest.t.sol` | 26 | Unit + Fuzz | PR1 gold haircut (11), PR2 purification timelock (5), PR3.1 HWM (3), PR3.2 profit unlock (3), PR3.3 cross-chain cap + shortfall (4) |
-| `TaskITest.I1.t.sol` | 5 | Unit | I1 settleCrossChain arrival verification (over-report revert, exact, under-report, snapshot cleared, wrong nonce) |
+| `TaskITest.I1.t.sol` | 5 | Unit | J1: atomic `settleCrossChainWithMessage` (exact settle, wrong recipient, amount mismatch, replay, write-off) — replaces old I1 snapshot tests |
 | `TaskITest.I2.t.sol` | 10 | Unit + Fuzz | I2 GoldExchangeAdapter stale-price valuation, isPriceSane, maxDeposit/maxMint block when S2-H stale |
 | `TaskITest.I3.t.sol` | 5 | Unit + Fuzz | I3 HWM excess split: vaultShare on afterRecovery only, hurdle on excess, fuzz invariant |
 | `TaskITest.I4I5.t.sol` | 9 | Unit | I4 single-source board (CharityModule + PurificationEscrow read registry), I5 owner≠board constructor |
+| `VaultInvariant.t.sol` | 6 | Invariant (256×50) | redeem safety, totalAssets accounting, gold cap, share-price monotonicity, HWM vaultShare, locked-profit decay |
 
 **Bun screening tests (`bun test server/screening/tests/`):**
 
@@ -953,7 +963,7 @@ src/
 
 docs/
 ├── agents/
-│   ├── SHARIAH_REVIEW.md            # Open board review items SR-001 through SR-018 (none approved)
+│   ├── SHARIAH_REVIEW.md            # Open board review items SR-001 through SR-022 (none approved)
 │   ├── deployed-addresses.md        # Contract addresses filled after each deploy run
 │   └── shariah-vault-revision-plan.md
 └── migration-v1-to-v2.md           # V1 → V2 migration guide (no forced migration)

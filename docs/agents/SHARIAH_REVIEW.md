@@ -411,3 +411,78 @@ The 4% hurdle is applied to `afterRecovery` (not the full gross), and the manage
 (a) Confirm the production `BOARD_MULTISIG` address to use as `initialBoardMember` in the registry constructor.
 (b) Confirm that the deployer-as-owner-but-not-board separation is acceptable for testnet (documented risk: testnet board == deployer EOA).
 (c) Confirm the asymmetric emergency power: owner can `emergencyRevokeBoardRole` (instant, no timelock); owner cannot grant board membership without the board itself proposing (30-day timelock).
+
+---
+
+## SR-019 — Atomic cross-chain settle: MessageTransmitter trust (Task J, J1)
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-23 |
+| Task | J (J1) |
+| Affects | `AutonomousVault.settleCrossChainWithMessage`, `IMessageTransmitterV2`, `CctpMessageDecoder` |
+
+**Change.** The old snapshot-based `settleCrossChain(nonce, received)` is replaced by `settleCrossChainWithMessage(nonce, message, attestation)` which calls `MessageTransmitter.receiveMessage` atomically, measures the USDC balance delta, and verifies it against the message-encoded amount. The old `settleCrossChain(nonce, 0)` remains as a write-off-only path (`onlyOwner`, `received` must be 0).
+
+**Residual risks.**
+(a) The `CctpMessageDecoder` library hard-codes CCTP V2 message offsets. If Circle changes the message format in a future protocol version, decoding silently produces wrong values. Board to confirm the production Circle deployment uses the same V2 layout.
+(b) `setMessageTransmitter` is `onlyOwner` (instant). An owner key compromise enables substitution of a malicious transmitter that mints arbitrary USDC to the vault. Board to confirm this is acceptable for testnet (no production funds) and to plan a timelock for mainnet.
+
+**Board action required.** Confirm the CCTP V2 message layout assumption and the `setMessageTransmitter` key-management risk.
+
+---
+
+## SR-020 — Dust threshold for deposit pause: empty adapter does not block deposits (Task J, J2)
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-23 |
+| Task | J (J2) |
+| Affects | `ShariahVault._goldPriceInsane()`, `ShariahVault.dustThreshold`, `ShariahVault.setDustThreshold()` |
+
+**Change.** `maxDeposit`/`maxMint` now block deposits only when an adapter is both stale AND holds more than `dustThreshold` USDC of value (default 1 USDC). An idle adapter with zero position never blocks deposits even if its last-swap timestamp is stale. `dustThreshold` is board-settable via `setDustThreshold()` (no timelock — owner-immediate).
+
+**GoldExchangeAdapter oracle integration (J2).** `GoldExchangeAdapter.isPriceSane()` now checks the XAU/USD oracle's `updatedAt` age (when `goldOracle` is set) instead of last-swap age. A 3-day idle S2-H with a fresh oracle stays sane.
+
+**Board action required.**
+(a) Confirm the 1 USDC dust threshold is acceptable as the minimum position size that triggers deposit blocking.
+(b) Confirm `setDustThreshold` may be owner-immediate (no timelock) — rationale: it only loosens deposit restrictions, never tightens them against depositors.
+(c) Confirm S2-H's oracle-based staleness check (using the same XAU/USD feed as S6-H) is acceptable.
+
+---
+
+## SR-021 — Registry required: CharityModule and PurificationEscrow cannot deploy without a registry (Task J, J3)
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-23 |
+| Task | J (J3) |
+| Affects | `CharityModule` constructor, `PurificationEscrow` constructor |
+
+**Change.** Both contracts now revert `RegistryRequired()` when constructed with `boardRegistry = address(0)`. The local-fallback path (where the owner could act as sole board member) is removed. All new Shariah deploys must wire the registry at construction time.
+
+**Board action required.** Confirm that the removal of the `address(0)` fallback does not block any planned deployment path, and that the production registry multisig address will be available before `CharityModule` and `PurificationEscrow` are deployed.
+
+---
+
+## SR-022 — Invariant suite: six protocol invariants now machine-verified (Task J, J4)
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-23 |
+| Task | J (J4) |
+| Affects | `AutonomousVault`, `ShariahVault`, `TreasuryModule`, `PurificationEscrow` |
+
+**New invariant tests** (`contracts/test/invariant/VaultInvariant.t.sol`, 256 runs × depth 50):
+1. `invariant_redeemNeverReverts` — any holder may always redeem up to `maxRedeem()` without revert.
+2. `invariant_totalAssetsAccounting` — `totalAssets()` equals idle balance + `totalDeployed` minus locked profit (within 2 USDC rounding).
+3. `invariant_goldCapNotExceeded` — combined gold value ≤ `MAX_GOLD_BPS` of `totalAssets()` at all times.
+4. `invariant_sharePrice_monotone_across_users` — no depositor's pro-rata NAV increases because another user deposited or redeemed (beyond 2 USDC rounding).
+5. `invariant_vaultShareZero_when_hwmDeficit` — manager earns zero vault share during any loss-recovery period.
+6. `invariant_lockedProfitDecaysToZero` — locked profit reaches zero after `unlockedAt` passes.
+
+**Board action required.** Confirm the above invariants accurately capture the Shariah depositor-fairness requirements. In particular, confirm invariant 4 (share-price monotonicity) reflects the board's understanding of how deposits and redemptions interact with NAV.

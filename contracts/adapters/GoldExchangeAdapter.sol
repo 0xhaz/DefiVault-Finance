@@ -7,6 +7,14 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IStrategyAdapter} from "../IStrategyAdapter.sol";
 
+/// @notice Minimal Chainlink-style oracle interface (same shape as AggregatorV3Interface).
+interface IAggregatorV3 {
+    function latestRoundData() external view returns (
+        uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
+    );
+    function decimals() external view returns (uint8);
+}
+
 /// @notice Uniswap V3 interface (minimal — only exactInputSingle needed)
 interface ISwapRouter {
     struct ExactInputSingleParams {
@@ -53,6 +61,7 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
     event LastGoodPriceUpdated(uint256 price, uint256 timestamp);
     event StaleHaircutBpsUpdated(uint256 previous, uint256 updated);
     event MaxStalenessBpsUpdated(uint256 previous, uint256 updated);
+    event GoldOracleUpdated(address indexed previous, address indexed updated);
 
     IERC20  public immutable usdc;
     IERC20  public immutable paxg;
@@ -90,6 +99,12 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
     uint256 public maxStalenessSecs;
     /// @notice Hard cap for maxStalenessSecs: 7 days.
     uint256 public constant MAX_STALENESS_SECS = 7 days;
+
+    /// @notice Optional XAU/USD Chainlink oracle (same feed as S6-H). When set, isPriceSane()
+    ///         uses oracle-heartbeat age instead of last-swap age, so a 3-day idle S2-H with
+    ///         a fresh oracle stays sane. pokePrice() updates lastGoodPrice from the oracle.
+    ///         When address(0), isPriceSane() falls back to last-swap-age check (original I2 behaviour).
+    IAggregatorV3 public goldOracle;
 
     constructor(
         address usdc_,
@@ -243,12 +258,59 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         return (grossValue * (10_000 - staleHaircutBps)) / 10_000;
     }
 
-    /// @notice Returns false when the last executed swap is older than maxStalenessSecs.
-    ///         ShariahVault.maxDeposit/maxMint return 0 when this is false (PR1 / I2).
-    ///         Returns true when no swap has ever been executed (no position open).
+    /// @notice Returns false when the price reference is stale (J2 update).
+    ///         When goldOracle is set: uses the oracle's `updatedAt` field for the freshness check,
+    ///           independent of last-swap age. A 3-day idle adapter with a fresh oracle stays sane.
+    ///         When goldOracle is address(0): falls back to last-swap age (original I2 behaviour).
+    ///         Returns true when no position is open (lastGoodPriceAt == 0).
     function isPriceSane() external view returns (bool) {
-        if (lastGoodPriceAt == 0) return true;  // no position — no oracle issue
+        if (lastGoodPriceAt == 0) return true; // no position — no oracle issue
+        if (address(goldOracle) != address(0)) {
+            // Oracle-based freshness: read updatedAt without reverting.
+            try goldOracle.latestRoundData() returns (
+                uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
+            ) {
+                // Suppress unused-variable warnings by assigning to named returns (already named).
+                startedAt; roundId; answeredInRound;
+                if (answer <= 0) return false;
+                return block.timestamp - updatedAt <= maxStalenessSecs;
+            } catch {
+                return false; // oracle reverts → treat as stale
+            }
+        }
+        // Fallback: last-swap age.
         return block.timestamp - lastGoodPriceAt <= maxStalenessSecs;
+    }
+
+    /// @notice Anyone may call to refresh lastGoodPrice from the oracle (J2 / PR1 parity).
+    ///         When goldOracle is set, reads the oracle price.
+    ///         When not set, this is a no-op (no oracle to poke).
+    function pokePrice() external {
+        if (address(goldOracle) == address(0)) return;
+        try goldOracle.latestRoundData() returns (
+            uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
+        ) {
+            roundId; startedAt; answeredInRound; updatedAt;
+            if (answer <= 0) return;
+            // Oracle gives XAU/USD in oracle decimals; convert to USDC-per-PAXG (6 dec).
+            uint8 oracDec = goldOracle.decimals();
+            // oraclePrice in 1e(oracDec) → convert to 6 dec USDC
+            uint256 oracleUsdc = oracDec >= 6
+                ? uint256(answer) / (10 ** uint256(oracDec - 6))
+                : uint256(answer) * (10 ** uint256(6 - oracDec));
+            if (oracleUsdc == 0) return;
+            lastGoodPrice   = oracleUsdc;
+            lastGoodPriceAt = block.timestamp;
+            emit LastGoodPriceUpdated(lastGoodPrice, block.timestamp);
+        } catch {}
+    }
+
+    /// @notice Owner sets the XAU/USD oracle for oracle-based freshness (J2).
+    ///         Pass address(0) to revert to last-swap-age staleness detection.
+    function setGoldOracle(address oracle) external onlyOwner {
+        address previous = address(goldOracle);
+        goldOracle = IAggregatorV3(oracle);
+        emit GoldOracleUpdated(previous, oracle);
     }
 
     function protocolName() external pure returns (string memory) {

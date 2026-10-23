@@ -16,6 +16,14 @@ interface IGoldAdapter {
     function isPriceSane() external view returns (bool);
 }
 
+/// @dev Minimal Chainlink-style oracle interface for price reads (same as AggregatorV3Interface).
+interface IGoldOracle {
+    function latestRoundData() external view returns (
+        uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
+    );
+    function decimals() external view returns (uint8);
+}
+
 contract ShariahVault is AutonomousVault {
     using SafeERC20 for IERC20;
 
@@ -39,6 +47,7 @@ contract ShariahVault is AutonomousVault {
     event GoldAllocationAdapterUpdated(address indexed adapter);
     event GoldSpreadAdapterUpdated(address indexed adapter);
     event PurificationEscrowUpdated(address indexed escrow);
+    event DustThresholdUpdated(uint256 previous, uint256 updated);
 
     TreasuryModule public immutable shariahTreasury;
     /// @dev v1 — DEPRECATED. Kept for history. New profit routing uses purificationEscrow.
@@ -66,6 +75,11 @@ contract ShariahVault is AutonomousVault {
 
     /// @notice S6-H gold allocation adapter (GoldAllocationAdapter — XAUT). Used for combined cap check.
     address public goldAllocationAdapter;
+
+    /// @notice Minimum adapter value (USDC, 6 dec) that triggers a deposit pause when price is stale.
+    ///         An empty adapter (currentValue <= dustThreshold) never blocks deposits even if stale.
+    ///         Default 1e6 = 1 USDC. Board-settable via setDustThreshold().
+    uint256 public dustThreshold = 1e6;
 
     uint256 public lastFeeAccrualTime;
     uint256 public hurdlePrincipal;
@@ -258,15 +272,27 @@ contract ShariahVault is AutonomousVault {
         return super.maxMint(receiver);
     }
 
-    /// @dev Returns true when at least one gold adapter is set and reports price insanity.
+    /// @dev Returns true when at least one gold adapter is set, reports price insanity,
+    ///      AND holds more than dustThreshold USDC of value.
+    ///      An adapter with no material position (e.g. S6-H disabled, S2-H idle) never
+    ///      blocks deposits even if its oracle or last-swap timestamp is stale (J2).
     function _goldPriceInsane() internal view returns (bool) {
-        if (goldAllocationAdapter != address(0) && !IGoldAdapter(goldAllocationAdapter).isPriceSane()) {
-            return true;
+        if (goldAllocationAdapter != address(0)) {
+            IGoldAdapter adp = IGoldAdapter(goldAllocationAdapter);
+            if (!adp.isPriceSane() && adp.currentValue() > dustThreshold) return true;
         }
-        if (goldSpreadAdapter != address(0) && !IGoldAdapter(goldSpreadAdapter).isPriceSane()) {
-            return true;
+        if (goldSpreadAdapter != address(0)) {
+            IGoldAdapter adp = IGoldAdapter(goldSpreadAdapter);
+            if (!adp.isPriceSane() && adp.currentValue() > dustThreshold) return true;
         }
         return false;
+    }
+
+    /// @notice Set the dust threshold for deposit-pause logic (J2).
+    function setDustThreshold(uint256 threshold) external onlyOwner {
+        uint256 previous = dustThreshold;
+        dustThreshold = threshold;
+        emit DustThresholdUpdated(previous, threshold);
     }
 
     function setHurdlePrincipal(uint256 principal) external onlyOwner {
