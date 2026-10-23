@@ -25,12 +25,10 @@ contract MockRegistryInv {
 
 // ── Mock PAXG swap router: fixed-ratio USDC↔PAXG swaps ──────────────────────
 // 1 PAXG (18 dec) = 3_300_000_000 USDC (6 dec)
-// USDC→PAXG: amountOut_paxg = amountIn_usdc * 1e18 / 3_300_000_000
-// PAXG→USDC: amountOut_usdc = amountIn_paxg * 3_300_000_000 / 1e18
 contract MockPaxgRouter {
     IERC20 public usdc;
     IERC20 public paxg;
-    uint256 public constant USDC_PER_PAXG = 3_300_000_000; // 6-dec USDC per PAXG (1oz ≈ $3300)
+    uint256 public constant USDC_PER_PAXG = 3_300_000_000;
 
     constructor(address usdc_, address paxg_) {
         usdc = IERC20(usdc_);
@@ -54,15 +52,49 @@ contract MockPaxgRouter {
         require(block.timestamp <= p.deadline, "deadline");
         IERC20(p.tokenIn).transferFrom(msg.sender, address(this), p.amountIn);
         if (p.tokenIn == address(usdc)) {
-            // USDC→PAXG
             amountOut = (p.amountIn * 1e18) / USDC_PER_PAXG;
         } else {
-            // PAXG→USDC
             amountOut = (p.amountIn * USDC_PER_PAXG) / 1e18;
         }
         require(amountOut >= p.amountOutMinimum, "slippage");
         IERC20(p.tokenOut).transfer(p.recipient, amountOut);
     }
+}
+
+// ── Mock CCTP TokenMessenger: returns sequential nonces, does NOT burn ────────
+// (vault balance is NOT decremented; tests sim cross-chain by calling settle)
+contract MockMessengerInv {
+    uint64 public nextNonce = 1;
+    function depositForBurnWithCaller(
+        uint256, uint32, bytes32, address, bytes32
+    ) external returns (uint64 nonce) {
+        nonce = nextNonce++;
+    }
+}
+
+// ── Mock CCTP MessageTransmitter: settable mint-on-receiveMessage ─────────────
+contract MockTransmitterInv {
+    address public usdc;
+    address public target; // vault
+    uint256 public mintAmount;
+
+    constructor(address usdc_, address target_) {
+        usdc   = usdc_;
+        target = target_;
+    }
+
+    function setMintAmount(uint256 a) external { mintAmount = a; }
+
+    function receiveMessage(bytes calldata, bytes calldata) external returns (bool) {
+        if (mintAmount > 0) {
+            MockERC20Like2(usdc).mint(target, mintAmount);
+        }
+        return true;
+    }
+}
+
+interface MockERC20Like2 {
+    function mint(address to, uint256 amount) external;
 }
 
 // ── Shared base: deploys the full ShariahVault stack ─────────────────────────
@@ -82,9 +114,14 @@ abstract contract VaultInvariantBase is Test {
     MockERC20            public usdc;
     MockAllocatedGold    public paxg;
     MockXAUT             public xaut;
-    MockXauUsdAggregator public xauOracle;
+    MockXauUsdAggregator public xauOracle;          // S6-H oracle (XAU/USD)
+    MockXauUsdAggregator public goldSpreadOracle_;  // S2-H oracle (K2: mandatory)
     MockUniswapV3PoolXAUT public xautPool;
     MockPaxgRouter       public paxgRouter;
+
+    // ── CCTP mocks ───────────────────────────────────────────────────────────
+    MockMessengerInv    public mockMessenger_;
+    MockTransmitterInv  public mockTransmitter_;
 
     // ── Protocol ─────────────────────────────────────────────────────────────
     TreasuryModule       public treasury;
@@ -97,30 +134,47 @@ abstract contract VaultInvariantBase is Test {
 
     // ── Constants ─────────────────────────────────────────────────────────────
     uint32  internal constant SOURCE_DOMAIN     = 26;
-    uint256 internal constant POOL_USDC_PER_XAUT = 3_300_000_000; // $3300
+    uint256 internal constant POOL_USDC_PER_XAUT = 3_300_000_000;
     int256  internal constant ORACLE_PRICE      = 330_000_000_000; // 8 dec
-    uint256 internal constant MAX_STALENESS     = 30 days;        // match adapter
+    uint256 internal constant MAX_STALENESS     = 30 days;
+
+    // ── Accessor helpers for handler ─────────────────────────────────────────
+    function goldSpreadOracle()  public view returns (MockXauUsdAggregator) { return goldSpreadOracle_;  }
+    function mockMessenger()     public view returns (MockMessengerInv)     { return mockMessenger_;     }
+    function mockTransmitter()   public view returns (MockTransmitterInv)   { return mockTransmitter_;   }
 
     function setUp() public virtual {
         vm.warp(1_700_000_000); // realistic start time
 
         actors = [alice, bob, carol];
 
-        // Pre-compute escrow address: record nonce BEFORE any deploy from address(this).
-        // Deploys from address(this):
-        //   +0: usdc, +1: paxg, +2: xaut, +3: xauOracle, +4: xautPool, +5: paxgRouter,
-        //   +6: registry, +7: treasury, +8: purificationEscrow
-        // Deploys from owner (vm.prank) do NOT consume address(this)'s nonce.
+        // Pre-compute escrow address.
+        // Deploys from address(this) in order:
+        //   +0: usdc
+        //   +1: paxg
+        //   +2: xaut
+        //   +3: xauOracle
+        //   +4: goldSpreadOracle_   (NEW — K2)
+        //   +5: xautPool
+        //   +6: paxgRouter
+        //   +7: mockMessenger_      (NEW — PR2)
+        //   +8: registry
+        //   +9: treasury
+        //   +10: purificationEscrow
         uint256 startNonce = vm.getNonce(address(this));
-        address expectedEscrow = vm.computeCreateAddress(address(this), startNonce + 8);
+        address expectedEscrow = vm.computeCreateAddress(address(this), startNonce + 10);
 
         // ── Tokens ────────────────────────────────────────────────────────────
-        usdc      = new MockERC20("Mock USDC", "mUSDC", 6);
-        paxg      = new MockAllocatedGold();
-        xaut      = new MockXAUT();
-        xauOracle = new MockXauUsdAggregator();
-        xautPool  = new MockUniswapV3PoolXAUT(address(usdc), address(xaut), POOL_USDC_PER_XAUT);
-        paxgRouter = new MockPaxgRouter(address(usdc), address(paxg));
+        usdc             = new MockERC20("Mock USDC", "mUSDC", 6);
+        paxg             = new MockAllocatedGold();
+        xaut             = new MockXAUT();
+        xauOracle        = new MockXauUsdAggregator();
+        goldSpreadOracle_ = new MockXauUsdAggregator(); // K2: separate oracle for S2-H
+        xautPool         = new MockUniswapV3PoolXAUT(address(usdc), address(xaut), POOL_USDC_PER_XAUT);
+        paxgRouter       = new MockPaxgRouter(address(usdc), address(paxg));
+
+        // ── CCTP mocks ────────────────────────────────────────────────────────
+        mockMessenger_ = new MockMessengerInv();
 
         // Seed pool with liquidity
         usdc.mint(address(this), 100_000_000e6);
@@ -134,17 +188,16 @@ abstract contract VaultInvariantBase is Test {
         usdc.mint(address(paxgRouter), 100_000_000e6);
 
         // ── Registry ──────────────────────────────────────────────────────────
-        registry = new MockRegistryInv(manager); // manager is the board member
+        registry = new MockRegistryInv(manager);
 
         // ── Treasury ─────────────────────────────────────────────────────────
-        // feeSource = expectedEscrow (deployed as deploy #8 from address(this))
         treasury = new TreasuryModule(
             "Shariah",
-            expectedEscrow, // feeSource = escrow
+            expectedEscrow,
             address(usdc),
-            50,    // wakalaFeeBps 0.5%
-            1000,  // musharakahShareBps 10%
-            400,   // hurdleRateBps 4%
+            50,   // wakalaFeeBps 0.5%
+            1000, // musharakahShareBps 10%
+            400,  // hurdleRateBps 4%
             owner
         );
 
@@ -153,7 +206,7 @@ abstract contract VaultInvariantBase is Test {
         charityModule = new CharityModule(
             charity,
             address(usdc),
-            expectedEscrow, // vault = escrow (charityModule.distributeCharity called by escrow)
+            expectedEscrow,
             owner,
             address(registry)
         );
@@ -166,12 +219,15 @@ abstract contract VaultInvariantBase is Test {
             address(0) // no ZakatModule
         );
         vault.setManager(manager);
-        vault.setShariahScreening(false); // disable screening for simplicity
+        vault.setShariahScreening(false);
         vault.setMaxAllocationBps(8000);
+        // Wire CCTP for cross-chain handler actions (PR2)
+        vault.setTokenMessenger(address(mockMessenger_));
+        vault.setMaxPendingCrossChainBps(2000); // 20% cap
 
         goldSpreadAdp = new GoldExchangeAdapter(
             address(usdc), address(paxg), address(paxgRouter), 3000,
-            address(vault), owner
+            address(vault), owner, address(goldSpreadOracle_) // K2: mandatory oracle
         );
 
         goldAllocAdp = new GoldAllocationAdapter(
@@ -184,7 +240,6 @@ abstract contract VaultInvariantBase is Test {
             MAX_STALENESS,
             owner
         );
-        // pool address for slot0 read
         goldAllocAdp.setPool(address(xautPool));
 
         vault.setScreened(address(goldSpreadAdp), true);
@@ -204,8 +259,14 @@ abstract contract VaultInvariantBase is Test {
         );
         require(address(purificationEscrow) == expectedEscrow, "escrow addr mismatch");
 
-        vm.prank(owner);
+        // Deploy MockTransmitter AFTER vault address is known
+        // (doesn't count in the escrow nonce since it's after purificationEscrow)
+        mockTransmitter_ = new MockTransmitterInv(address(usdc), address(vault));
+
+        vm.startPrank(owner);
         vault.setPurificationEscrow(address(purificationEscrow));
+        vault.setMessageTransmitter(address(mockTransmitter_));
+        vm.stopPrank();
 
         // ── Seed depositors ────────────────────────────────────────────────────
         for (uint256 i = 0; i < actors.length; i++) {

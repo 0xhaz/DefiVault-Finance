@@ -89,11 +89,15 @@ Work order (each task = one branch/PR per the one-task-per-branch rule):
 | H | PR1 gold haircut / PR2 purification timelock / PR3 depositor fairness | DONE |
 | I | I1–I5 hardening: settle verification, S2-H PR1 parity, HWM calc, single-source board, registry constructor | DONE |
 | J | J1 atomic settleCrossChainWithMessage; J2 dustThreshold deposit pause + S2-H oracle freshness; J3 RegistryRequired; J4 invariant suite | DONE |
+| K | K1 CCTP V2 feeExecuted decode + CrossChainFeeDeducted emit + 3 new K1 tests (fee=0, fee>0, fee+strategy-loss); K2 GoldExchangeAdapter mandatory oracle + onlyBoard rename in CharityModule; PR2 invariant suite extended to 8 invariants + 17 handler actions (cross-chain, losses, no-dilution, cap); PR3 README sync (class diagram, flow diagram, adapter table, security model); PR4 Rehearsal.s.sol + docs/rehearsal.md | DONE |
 
-**J4 invariant suite**: `contracts/test/invariant/VaultInvariant.t.sol` — 6 invariants, 256 runs × depth 50.
-Run with: `forge test --match-path 'contracts/test/invariant/*' --invariant-runs 256 --invariant-depth 50`
+**K invariant suite**: `contracts/test/invariant/VaultInvariant.t.sol` — 8 invariants, 17 handler actions, 256 runs x depth 50.
+Confirmed green: 8/8 invariants pass, 0 reverts across all handler actions.
+Run with: `forge test --match-path 'contracts/test/invariant/*' -vv`
 
-**Test status**: 399/399 Foundry tests pass (512 fuzz runs). 48/48 bun screening tests pass.
+**Test status**: 353/353 non-invariant Foundry tests pass (256-512 fuzz runs). 8/8 invariants pass (256 runs). 48/48 bun screening tests pass.
+
+**Known**: TreasuryModule feeSource placeholder issue in Rehearsal.s.sol — noted in docs/rehearsal.md, redeploy required before live profit claims. MSG_TRANSMITTER on Arc Testnet must be confirmed from Circle docs before step 5 of rehearsal.
 
 **Board review items**: SR-001 through SR-022 — all REVIEW, none approved. See `docs/agents/SHARIAH_REVIEW.md`.
 

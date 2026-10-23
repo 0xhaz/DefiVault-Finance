@@ -43,22 +43,34 @@ contract TaskITest_I1 is TaskITestBase {
 
     MockMessageTransmitter public transmitter;
 
-    // ─── helper: build a fake CCTP message that decodes correctly ─────────────
+    // ─── helper: build a fake CCTP V2 message that decodes correctly ──────────
     // Outer header (116 bytes): version(4), srcDomain(4), dstDomain(4), nonce(8), ... padding to 116
-    // BurnMessage body appended at offset 116:
-    //   [0..35]  version(4)+burnToken(32)
-    //   [36..67] mintRecipient (bytes32)
-    //   [68..99] amount (uint256)
+    // BurnMessage V2 body appended at offset 116 (164 bytes):
+    //   [0..3]    version(4)
+    //   [4..35]   burnToken(32)
+    //   [36..67]  mintRecipient (bytes32)
+    //   [68..99]  amount (uint256)
     //   [100..131] messageSender(32)
+    //   [132..163] feeExecuted (uint256)  — CCTP V2 field
     function _buildMessage(uint64 nonce_, uint256 amount_, address mintRecipient_)
         internal pure returns (bytes memory)
     {
+        return _buildMessageWithFee(nonce_, amount_, mintRecipient_, 0);
+    }
+
+    function _buildMessageWithFee(
+        uint64 nonce_,
+        uint256 amount_,
+        address mintRecipient_,
+        uint256 feeExecuted_
+    ) internal pure returns (bytes memory) {
         bytes memory header = new bytes(116);
         // nonce at bytes [12..19]
         for (uint256 i = 0; i < 8; i++) {
             header[19 - i] = bytes1(uint8(nonce_ >> (i * 8)));
         }
-        bytes memory body = new bytes(132);
+        // V2 body: 164 bytes (132 original + 32 for feeExecuted)
+        bytes memory body = new bytes(164);
         // mintRecipient at body[36..67]
         bytes32 recipientWord = bytes32(uint256(uint160(mintRecipient_)));
         for (uint256 i = 0; i < 32; i++) {
@@ -68,6 +80,11 @@ contract TaskITest_I1 is TaskITestBase {
         bytes32 amountWord = bytes32(amount_);
         for (uint256 i = 0; i < 32; i++) {
             body[68 + i] = amountWord[i];
+        }
+        // feeExecuted at body[132..163]
+        bytes32 feeWord = bytes32(feeExecuted_);
+        for (uint256 i = 0; i < 32; i++) {
+            body[132 + i] = feeWord[i];
         }
         return abi.encodePacked(header, body);
     }
@@ -128,15 +145,16 @@ contract TaskITest_I1 is TaskITestBase {
     // ─────────────────────────────────────────────────────────────────────────
     function test_I1_amount_mismatch_reverts() public {
         uint64 nonce = _deployCrossChainI1(10_000e6);
-        // Transmitter mints 10_000e6 but message says 9_000e6.
+        // Transmitter mints 10_000e6 but message says 9_000e6 (no fee).
+        // expectedNet = 9_000e6, balanceDelta = 10_000e6 → mismatch.
         bytes memory msg_ = _buildMessage(nonce, 9_000e6, address(vault));
 
         vm.prank(manager);
         vm.expectRevert(
             abi.encodeWithSelector(
                 AutonomousVault.MessageAmountMismatch.selector,
-                9_000e6,
-                10_000e6
+                9_000e6,   // expectedNet (= msgAmount - feeExecuted = 9_000e6 - 0)
+                10_000e6   // balanceDelta (transmitter minted 10_000e6)
             )
         );
         vault.settleCrossChainWithMessage(nonce, msg_, "");
@@ -190,5 +208,99 @@ contract TaskITest_I1 is TaskITestBase {
         // Full loss: NAV drops by deployAmt (totalDeployed -= sent; no USDC returned).
         assertEq(vault.totalAssets(), navBefore - deployAmt, "write-off books full loss");
         assertEq(vault.pendingCrossChain(nonce), 0, "pendingCrossChain cleared on write-off");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // K1 Test 6 — Fast Transfer with fee=0: behaves identically to Standard.
+    //             Settle succeeds; NAV unchanged (full amount returned).
+    // ─────────────────────────────────────────────────────────────────────────
+    function test_K1_settle_with_fee_zero_succeeds() public {
+        uint256 deployAmt = 10_000e6;
+        uint64  nonce     = _deployCrossChainI1(deployAmt);
+
+        uint256 navBefore = vault.totalAssets();
+
+        // message: amount=10_000e6, feeExecuted=0 → expectedNet=10_000e6
+        // transmitter mints 10_000e6 → balanceDelta=10_000e6 → match
+        bytes memory msg_ = _buildMessageWithFee(nonce, deployAmt, address(vault), 0);
+
+        vm.prank(manager);
+        vm.expectEmit(true, false, false, true);
+        emit AutonomousVault.CrossChainSettled(nonce, deployAmt, 0);
+        vault.settleCrossChainWithMessage(nonce, msg_, "");
+
+        // No fee: shortfall == 0, NAV unchanged
+        assertApproxEqAbs(vault.totalAssets(), navBefore, 1,
+            "NAV unchanged on zero-fee settle");
+        assertEq(vault.pendingCrossChain(nonce), 0, "nonce cleared");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // K1 Test 7 — Fast Transfer with fee > 0: settle succeeds; NAV drops by fee.
+    //             Fee is emitted as CrossChainFeeDeducted; total cost = fee.
+    // ─────────────────────────────────────────────────────────────────────────
+    function test_K1_settle_with_fee_nonzero_succeeds_and_nav_drops() public {
+        uint256 deployAmt  = 10_000e6;
+        uint256 feeAmt     = 500e6;   // $500 CCTP fast-transfer fee
+        uint256 netAmt     = deployAmt - feeAmt; // 9_500e6 minted to vault
+
+        uint64  nonce = _deployCrossChainI1(deployAmt);
+
+        // Adjust transmitter to mint net amount (after fee deduction)
+        transmitter.setMintAmount(netAmt);
+
+        uint256 navBefore = vault.totalAssets();
+
+        // message: amount=10_000e6, feeExecuted=500e6 → expectedNet=9_500e6
+        bytes memory msg_ = _buildMessageWithFee(nonce, deployAmt, address(vault), feeAmt);
+
+        vm.prank(manager);
+        // Expect fee event
+        vm.expectEmit(true, false, false, true);
+        emit AutonomousVault.CrossChainFeeDeducted(nonce, feeAmt);
+        // Expect settle event: received=9_500e6, shortfall=500e6
+        vm.expectEmit(true, false, false, true);
+        emit AutonomousVault.CrossChainSettled(nonce, netAmt, feeAmt);
+        vault.settleCrossChainWithMessage(nonce, msg_, "");
+
+        // NAV drops by exactly the fee (the 9_500e6 was minted back, 500e6 is gone)
+        // After settle: totalDeployed -= 10_000e6; vault balance += 9_500e6.
+        // Net: vault lost 500e6 in assets.
+        assertEq(vault.totalAssets(), navBefore - feeAmt,
+            "NAV must drop by exactly feeExecuted");
+        assertEq(vault.pendingCrossChain(nonce), 0, "nonce cleared after fee settle");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // K1 Test 8 — Both fee and strategy loss: NAV drops by fee + shortfall.
+    //             (message.amount > deployed: not possible. But fee + strategy loss combo.)
+    //             Scenario: deployed 10_000, came back 9_000 net, fee=200 (so amount=9_200 in msg).
+    // ─────────────────────────────────────────────────────────────────────────
+    function test_K1_settle_fee_plus_strategy_loss_nav_drops_by_total_cost() public {
+        uint256 deployAmt  = 10_000e6;
+        uint256 msgAmount  = 9_200e6; // gross burned amount on the return leg
+        uint256 feeAmt     = 200e6;
+        uint256 netAmt     = msgAmount - feeAmt; // 9_000e6 actually minted
+
+        uint64 nonce = _deployCrossChainI1(deployAmt);
+
+        // Transmitter mints only 9_000e6 (strategy returned less + fee taken)
+        transmitter.setMintAmount(netAmt);
+
+        uint256 navBefore = vault.totalAssets();
+
+        bytes memory msg_ = _buildMessageWithFee(nonce, msgAmount, address(vault), feeAmt);
+
+        vm.prank(manager);
+        // shortfall in _doSettle = deployAmt(10_000) - received(9_000) = 1_000e6
+        vm.expectEmit(true, false, false, true);
+        emit AutonomousVault.CrossChainFeeDeducted(nonce, feeAmt);
+        vm.expectEmit(true, false, false, true);
+        emit AutonomousVault.CrossChainSettled(nonce, netAmt, deployAmt - netAmt);
+        vault.settleCrossChainWithMessage(nonce, msg_, "");
+
+        // Total cost = 1_000e6 (strategy loss + fee combined)
+        assertEq(vault.totalAssets(), navBefore - (deployAmt - netAmt),
+            "NAV drops by total cross-chain cost (fee + strategy loss)");
     }
 }

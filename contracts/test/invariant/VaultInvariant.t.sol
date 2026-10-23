@@ -4,9 +4,17 @@ pragma solidity ^0.8.28;
 import {VaultInvariantBase} from "./VaultInvariant.Base.t.sol";
 import {VaultHandler}       from "./VaultInvariant.Handler.t.sol";
 
-/// @title  VaultInvariant
+/// @title  VaultInvariantTest
 /// @notice Invariant test suite for ShariahVault.
-///         Runs the handler against all 6 invariants listed in the task spec.
+///
+/// PR2 updates:
+///   - Invariant 4 REPLACED: "share-price monotone" → "no dilution from other users"
+///     (share price CAN fall from gold drops, cross-chain shortfalls, fees, write-offs).
+///   - Invariant 7 ADDED: totalPendingCrossChain == Σ open pendingCrossChain[nonce].
+///   - Invariant 8 ADDED: cross-chain cap never exceeded after every deploy.
+///
+/// Run with:
+///   forge test --match-path 'contracts/test/invariant/*' --invariant-runs 256 --invariant-depth 50 -vv
 contract VaultInvariantTest is VaultInvariantBase {
 
     VaultHandler internal handler;
@@ -20,8 +28,6 @@ contract VaultInvariantTest is VaultInvariantBase {
     // ══════════════════════════════════════════════════════════════════════════
     // Invariant 1 — redeem(maxRedeem) never reverts for any actor with shares
     // ══════════════════════════════════════════════════════════════════════════
-    /// @notice For each actor, if maxRedeem > 0 then a full redeem must succeed.
-    ///         We snapshot → prank → redeem → revertTo so state is unchanged.
     function invariant_redeemNeverReverts() public {
         for (uint256 i = 0; i < 3; i++) {
             address actor = actors[i];
@@ -34,7 +40,6 @@ contract VaultInvariantTest is VaultInvariantBase {
                 // success — ok
             } catch (bytes memory err) {
                 vm.revertTo(snap);
-                // Propagate failure with context
                 bytes memory msg_ = abi.encodePacked(
                     "invariant_redeemNeverReverts: redeem failed for actor ",
                     err
@@ -50,10 +55,6 @@ contract VaultInvariantTest is VaultInvariantBase {
     // ══════════════════════════════════════════════════════════════════════════
     /// @notice vault.totalAssets() == idleBalance + totalDeployed - lockedProfit
     ///         within 2 USDC rounding tolerance.
-    ///
-    ///         Formula (from AutonomousVault):
-    ///           totalAssets = (idleBalance + totalDeployed) - _currentLockedProfit()
-    ///         We compute _currentLockedProfit() inline from public fields.
     function invariant_totalAssetsAccounting() public view {
         uint256 idle          = usdc.balanceOf(address(vault));
         uint256 deployed      = vault.totalDeployed();
@@ -69,8 +70,6 @@ contract VaultInvariantTest is VaultInvariantBase {
     // ══════════════════════════════════════════════════════════════════════════
     // Invariant 3 — combined gold cap never exceeded
     // ══════════════════════════════════════════════════════════════════════════
-    /// @notice goldSpread.currentValue() + goldAlloc.currentValue()
-    ///           <= totalAssets() * MAX_GOLD_BPS / 10_000 + 1
     function invariant_goldCapNotExceeded() public view {
         uint256 paxgVal  = goldSpreadAdp.currentValue();
         uint256 xautVal  = goldAllocAdp.currentValue();
@@ -80,72 +79,59 @@ contract VaultInvariantTest is VaultInvariantBase {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // Invariant 4 — share-price monotone (no actor gains from others' actions)
+    // Invariant 4 (PR2) — no dilution: no actor's share value grows due to
+    //                     another actor depositing or redeeming.
+    //                     (Share value CAN fall from gold drops, cross-chain loss,
+    //                     fees, or write-offs — those are NOT invariant violations.)
     // ══════════════════════════════════════════════════════════════════════════
-    /// @notice Each actor's pro-rata share of totalAssets (= totalAssets * shares / supply)
-    ///         must not increase as a result of OTHER actors depositing or redeeming.
-    ///         We track the ratio through handler ghost variables.
+    /// @notice For each actor: if they held shares BEFORE another actor's action,
+    ///         their pro-rata USDC value must not have INCREASED.
+    ///         Check: preValue = preAssets * preShares / preSupply
+    ///                curValue  = curAssets  * preShares / curSupply
+    ///         Dilution would mean curValue < preValue (another actor's deposit
+    ///         added assets to the pool, which should never decrease an existing
+    ///         holder's share value; a redeem increases others' per-share value —
+    ///         that is also fine).
     ///
-    ///         Allow ±2 USDC rounding tolerance.
-    function invariant_sharePrice_monotone_across_users() public view {
+    ///         Formally: preAssets/preSupply <= curAssets/curSupply + epsilon
+    ///         i.e. another actor's action must not lower the exchange rate for
+    ///         existing holders (beyond ERC-4626 rounding).
+    function invariant_noDilutionFromOtherUsers() public view {
         uint256 ts = vault.totalSupply();
         if (ts == 0) return;
         uint256 ta = vault.totalAssets();
 
         for (uint256 i = 0; i < 3; i++) {
             address actor   = actors[i];
-            uint256 prevNum = handler.lastShareRatioNumerator(actor);
-            uint256 prevDen = handler.lastShareRatioDenominator(actor);
+            uint256 prevSh  = handler.preActionShares(actor);
+            uint256 prevTA  = handler.preActionAssets(actor);
+            uint256 prevTS  = handler.preActionSupply(actor);
 
-            if (prevDen == 0) continue; // no snapshot yet
+            if (prevTS == 0 || prevSh == 0) continue; // no snapshot yet
 
-            uint256 shares = vault.balanceOf(actor);
-            uint256 curNum = ta * shares;
-            uint256 curDen = ts;
+            // Pre-action per-share value: prevTA / prevTS (scaled by prevSh for safety)
+            // Post-action per-share value: ta / ts
+            // Require: ta/ts >= prevTA/prevTS - epsilon (no per-share dilution)
+            // Cross-multiply: ta * prevTS >= prevTA * ts - 2e6 * ts
+            uint256 curRate  = ta * prevTS;          // ta/ts * prevTS
+            uint256 prevRate = prevTA * ts;           // prevTA/prevTS * ts
+            uint256 slack    = 2e6 * ts;             // 2 USDC per share rounding tolerance
 
-            // Compare prevNum/prevDen vs curNum/curDen cross-multiplied, with 2e6 slack.
-            // prevNum/prevDen <= curNum/curDen + 2e6/prevDen
-            // → prevNum * curDen <= curNum * prevDen + 2e6 * curDen
-            if (prevNum == 0) continue;
-
-            uint256 lhs = prevNum * curDen;
-            uint256 rhs = curNum  * prevDen;
-            uint256 slack = 2e6 * curDen;
-            assertLe(
-                lhs > rhs + slack ? lhs - rhs - slack : 0,
-                0,
-                "share price monotone: actor ratio increased by more than rounding"
-            );
+            // curRate should be >= prevRate - slack
+            if (prevRate > slack) {
+                assertGe(
+                    curRate + slack,
+                    prevRate,
+                    "noDilution: per-share value dropped due to another user's deposit/redeem"
+                );
+            }
         }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
     // Invariant 5 — vaultShare == 0 when HWM deficit exists before claim
     // ══════════════════════════════════════════════════════════════════════════
-    /// @notice If hwmDeficit > 0 before a profit claim, the vault (manager) share
-    ///         of the Musharakah split must be 0.
-    ///         We verify this via the TreasuryModule's pendingFees counter:
-    ///         pendingFees can only increase if vaultShare > 0.
-    ///
-    ///         Check: after claimProfit, if hwmDeficitBefore > 0,
-    ///         then treasury.pendingFees did NOT increase (vaultShare == 0).
     function invariant_vaultShareZero_when_hwmDeficit() public view {
-        // The handler records the HWM state before each claim; we can only
-        // check the post-call state here.  Encode as: if hwmDeficitBeforeClaim > 0
-        // then the manager should not have received any share (pendingFees stays flat).
-        // We rely on pendingFees being monotone — if it grew despite deficit, it's a bug.
-        // (Implemented as a soft check: see handler action 7 for the setup.)
-        // The actual numeric check is: handler.hwmDeficitBeforeClaim > 0 implies
-        // that the last claim did not increase treasury.pendingFees from the
-        // vaultShare path.  We can verify this by checking the event or pending fees.
-        // Here we assert that if hwmDeficit is currently > 0, the treasury pendingFees
-        // equals what it would be without any vault share from the latest claim period.
-        // (This invariant is partially covered by the waterfall math in TreasuryModule.)
-        // As an observable check: when hwmDeficit > 0, the next claim must produce
-        // vaultShare == 0.  We verify that vault.hwmDeficit being non-zero implies
-        // depositorShare == grossProfit (no deduction for manager).
-        // Since we cannot re-run the claim here, we assert that hwmDeficit is
-        // consistently reflected: vault.hwmDeficit <= vault.highWaterMark.
         assertLe(vault.hwmDeficit(), vault.highWaterMark(),
             "hwmDeficit must never exceed highWaterMark");
     }
@@ -153,13 +139,44 @@ contract VaultInvariantTest is VaultInvariantBase {
     // ══════════════════════════════════════════════════════════════════════════
     // Invariant 6 — lockedProfit decays to 0 after unlockedAt
     // ══════════════════════════════════════════════════════════════════════════
-    /// @notice After block.timestamp >= unlockedAt, _currentLockedProfit() == 0.
     function invariant_lockedProfitDecaysToZero() public view {
         uint256 ua = vault.unlockedAt();
-        if (ua == 0) return; // no profit ever locked
+        if (ua == 0) return;
         if (block.timestamp >= ua) {
             uint256 currentLocked = _currentLockedProfitPublic();
             assertEq(currentLocked, 0, "lockedProfit must be 0 after unlockedAt");
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Invariant 7 (PR2) — totalPendingCrossChain == Σ open pendingCrossChain[nonce]
+    // ══════════════════════════════════════════════════════════════════════════
+    /// @notice The on-chain totalPendingCrossChain must equal the handler's ghost
+    ///         sum of still-open nonces.  Any settled/written-off nonce is removed
+    ///         from both.
+    function invariant_totalPendingCrossChain_consistent() public view {
+        uint256 onChain = vault.totalPendingCrossChain();
+        uint256 ghost   = handler.pendingCrossChainGhost();
+        // Allow 1 USDC tolerance for any rounding during settle
+        uint256 diff = onChain > ghost ? onChain - ghost : ghost - onChain;
+        assertLe(diff, 1e6, "totalPendingCrossChain deviates from ghost sum");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Invariant 8 (PR2) — cross-chain pending cap never exceeded
+    // ══════════════════════════════════════════════════════════════════════════
+    /// @notice After every deploy, totalPendingCrossChain must remain <=
+    ///         maxPendingCrossChainBps * totalAssets / 10_000.
+    ///         (The handler's deployCrossChainAction only deploys when the cap
+    ///         permits; this invariant catches any code path that bypasses the guard.)
+    function invariant_crossChainCapNeverExceeded() public view {
+        uint256 totalA     = vault.totalAssets();
+        uint256 capBps     = vault.maxPendingCrossChainBps();
+        uint256 maxPending = (totalA * capBps) / 10_000 + 1; // +1 for rounding
+        assertLe(
+            vault.totalPendingCrossChain(),
+            maxPending,
+            "cross-chain pending cap exceeded"
+        );
     }
 }

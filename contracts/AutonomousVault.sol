@@ -24,14 +24,31 @@ interface IMessageTransmitterV2 {
     function receiveMessage(bytes calldata message, bytes calldata attestation) external returns (bool success);
 }
 
-/// @notice Minimal decoder for the CCTP burn message to extract nonce, amount, and mintRecipient.
-///         Layout (all big-endian, byte offsets from start of `messageBody`):
-///           [0..3]   version (uint32)
-///           [4..35]  burnToken (bytes32)
-///           [36..67] mintRecipient (bytes32)
-///           [68..99] amount (uint256)
+/// @notice Minimal decoder for the CCTP V2 burn message to extract nonce, amount,
+///         mintRecipient, and feeExecuted.
+///
+///         Outer message header layout (116 bytes, all big-endian):
+///           [0..3]    version (uint32)
+///           [4..7]    sourceDomain (uint32)
+///           [8..11]   destinationDomain (uint32)
+///           [12..19]  nonce (uint64)
+///           [20..51]  sender (bytes32)
+///           [52..83]  recipient (bytes32)
+///           [84..115] destinationCaller (bytes32)
+///
+///         BurnMessage body layout (at outer header offset 116, all big-endian):
+///           [0..3]    version (uint32)
+///           [4..35]   burnToken (bytes32)
+///           [36..67]  mintRecipient (bytes32)
+///           [68..99]  amount (uint256)
 ///           [100..131] messageSender (bytes32)
+///           [132..163] feeExecuted (uint256)  — CCTP V2 Fast Transfer field;
+///                       zero for Standard Transfer. The CCTP V2 transmitter mints
+///                       (amount - feeExecuted) to the mintRecipient — NOT the full amount.
 library CctpMessageDecoder {
+    /// @dev Minimum message length: 116-byte header + 164-byte V2 body.
+    uint256 internal constant MIN_MESSAGE_LEN = 116 + 164;
+
     /// @dev Returns the `nonce` embedded in the outer CCTP message header.
     ///      Header layout (bytes):
     ///        [0..3]   version
@@ -44,13 +61,23 @@ library CctpMessageDecoder {
         nonce = uint64(bytes8(bytes20(message[12:20])));
     }
 
-    /// @dev Returns the `amount` and `mintRecipient` from the BurnMessage body.
+    /// @dev Returns `amount`, `mintRecipient`, and `feeExecuted` from the V2 BurnMessage body.
     ///      The outer message header is 116 bytes; the body starts at offset 116.
-    function decodeBody(bytes calldata message) internal pure returns (uint256 amount, bytes32 mintRecipient) {
-        require(message.length >= 116 + 132, "CCTP: message body too short");
-        // body offset 36..67 = mintRecipient, body offset 68..99 = amount
+    ///      For Standard Transfer, `feeExecuted` is zero and the full `amount` is minted.
+    ///      For Fast Transfer, `feeExecuted` > 0 and the net minted amount is
+    ///      `amount - feeExecuted`.
+    function decodeBody(bytes calldata message)
+        internal
+        pure
+        returns (uint256 amount, bytes32 mintRecipient, uint256 feeExecuted)
+    {
+        require(message.length >= MIN_MESSAGE_LEN, "CCTP: message body too short");
+        // body offset 36..67 = mintRecipient
         mintRecipient = bytes32(message[116 + 36 : 116 + 68]);
+        // body offset 68..99 = amount (gross, before fee deduction)
         amount        = uint256(bytes32(message[116 + 68 : 116 + 100]));
+        // body offset 132..163 = feeExecuted (zero for Standard Transfer)
+        feeExecuted   = uint256(bytes32(message[116 + 132 : 116 + 164]));
     }
 }
 
@@ -70,8 +97,9 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     error InvalidUnlockPeriod();
     /// @notice Thrown by settleCrossChainWithMessage when the decoded mintRecipient is not this vault.
     error WrongMintRecipient(bytes32 recipient);
-    /// @notice Thrown by settleCrossChainWithMessage when the message amount != received balance delta.
-    error MessageAmountMismatch(uint256 messageAmount, uint256 balanceDelta);
+    /// @notice Thrown by settleCrossChainWithMessage when the net minted amount
+    ///         (message amount minus feeExecuted) does not equal the actual USDC balance delta.
+    error MessageAmountMismatch(uint256 expectedNet, uint256 balanceDelta);
     /// @notice Thrown by the write-off path when received > 0 (write-off must book a full loss).
     error WriteOffMustBeZero();
 
@@ -88,6 +116,9 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         uint64 nonce
     );
     event CrossChainSettled(uint64 indexed nonce, uint256 amount, uint256 shortfall);
+    /// @notice Emitted when a CCTP Fast Transfer fee is deducted from the minted amount.
+    ///         `feeExecuted` is booked as part of the cross-chain cost alongside any strategy loss.
+    event CrossChainFeeDeducted(uint64 indexed nonce, uint256 feeExecuted);
     event TokenMessengerUpdated(address indexed previousMessenger, address indexed newMessenger);
     event MessageTransmitterUpdated(address indexed previous, address indexed updated);
     event ProfitLocked(uint256 amount, uint256 unlockedAt);
@@ -300,10 +331,16 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         if (sent == 0) revert NonceMismatch(nonce);
 
         // Decode and validate the message before minting.
-        (uint256 msgAmount, bytes32 mintRecipient) = CctpMessageDecoder.decodeBody(message);
+        // feeExecuted > 0 on CCTP V2 Fast Transfer — the transmitter mints (amount - feeExecuted).
+        (uint256 msgAmount, bytes32 mintRecipient, uint256 feeExecuted) =
+            CctpMessageDecoder.decodeBody(message);
         if (mintRecipient != bytes32(uint256(uint160(address(this))))) {
             revert WrongMintRecipient(mintRecipient);
         }
+
+        // Net amount expected to be minted by the transmitter.
+        // feeExecuted must be <= msgAmount (defensive: treat > as full fee coverage = 0 net).
+        uint256 expectedNet = feeExecuted <= msgAmount ? msgAmount - feeExecuted : 0;
 
         // Snapshot balance, call receiveMessage (mints USDC to this vault), measure delta.
         uint256 balBefore = IERC20(asset()).balanceOf(address(this));
@@ -311,8 +348,15 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         uint256 balAfter  = IERC20(asset()).balanceOf(address(this));
         uint256 received  = balAfter > balBefore ? balAfter - balBefore : 0;
 
-        // Cross-check: message-encoded amount must equal actual minted amount.
-        if (msgAmount != received) revert MessageAmountMismatch(msgAmount, received);
+        // Cross-check: the net expected amount must equal the actual minted amount.
+        // This guards against fee mis-encoding and transmitter bugs.
+        if (expectedNet != received) revert MessageAmountMismatch(expectedNet, received);
+
+        // Emit fee cost so callers can observe the total cross-chain cost
+        // (fee + any strategy shortfall = totalDeployed - received).
+        if (feeExecuted > 0) {
+            emit CrossChainFeeDeducted(nonce, feeExecuted);
+        }
 
         _doSettle(nonce, sent, received);
     }

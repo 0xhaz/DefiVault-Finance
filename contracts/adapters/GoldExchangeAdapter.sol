@@ -53,6 +53,8 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
     error StalePrice(uint256 paxgBalance, uint256 usdcSpent);
     /// @notice Thrown when the stale-haircut BPS exceeds the hard cap.
     error HaircutAboveCap(uint256 proposed, uint256 cap);
+    /// @notice Thrown when the constructor is called without a non-zero gold oracle address (K2).
+    error OracleRequired();
 
     event GoldAcquired(uint256 usdcIn, uint256 paxgOut, uint256 spotPrice);
     event GoldReturned(uint256 paxgIn, uint256 usdcOut);
@@ -100,10 +102,11 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
     /// @notice Hard cap for maxStalenessSecs: 7 days.
     uint256 public constant MAX_STALENESS_SECS = 7 days;
 
-    /// @notice Optional XAU/USD Chainlink oracle (same feed as S6-H). When set, isPriceSane()
-    ///         uses oracle-heartbeat age instead of last-swap age, so a 3-day idle S2-H with
-    ///         a fresh oracle stays sane. pokePrice() updates lastGoodPrice from the oracle.
-    ///         When address(0), isPriceSane() falls back to last-swap-age check (original I2 behaviour).
+    /// @notice Mandatory XAU/USD Chainlink oracle (K2 — address(0) reverts OracleRequired).
+    ///         isPriceSane() uses the oracle's `updatedAt` heartbeat for the freshness check,
+    ///         so a 3-day idle S2-H with a fresh oracle stays sane.
+    ///         pokePrice() updates lastGoodPrice from the oracle.
+    ///         On testnet, pass MockXauUsdAggregator.
     IAggregatorV3 public goldOracle;
 
     constructor(
@@ -112,16 +115,19 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         address swapRouter_,
         uint24  poolFee_,
         address vault_,
-        address initialOwner
+        address initialOwner,
+        address goldOracle_ // K2: mandatory — pass the XAU/USD feed (or MockXauUsdAggregator on testnet)
     ) Ownable(initialOwner) {
+        if (goldOracle_ == address(0)) revert OracleRequired();
         usdc      = IERC20(usdc_);
         paxg      = IERC20(paxg_);
         swapRouter = ISwapRouter(swapRouter_);
         poolFee   = poolFee_;
         vault     = vault_;
+        goldOracle       = IAggregatorV3(goldOracle_);
         minOutBps        = 9900;  // 99% default (1% max slippage)
         staleHaircutBps  = 500;   // 5% default stale haircut (matches GoldAllocationAdapter)
-        maxStalenessSecs = 1 days; // price considered stale if no swap in > 1 day
+        maxStalenessSecs = 1 days; // oracle heartbeat window (max 7 days)
     }
 
     modifier onlyVault() {
@@ -258,35 +264,29 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         return (grossValue * (10_000 - staleHaircutBps)) / 10_000;
     }
 
-    /// @notice Returns false when the price reference is stale (J2 update).
-    ///         When goldOracle is set: uses the oracle's `updatedAt` field for the freshness check,
-    ///           independent of last-swap age. A 3-day idle adapter with a fresh oracle stays sane.
-    ///         When goldOracle is address(0): falls back to last-swap age (original I2 behaviour).
-    ///         Returns true when no position is open (lastGoodPriceAt == 0).
+    /// @notice Returns false when the XAU/USD oracle is stale or unhealthy (K2 update).
+    ///         The oracle is now mandatory — the last-swap-age fallback has been removed.
+    ///         Uses the oracle's `updatedAt` field for the freshness check, independent of
+    ///         when the last atomic PAXG swap was executed. A 3-day idle S2-H adapter with a
+    ///         fresh oracle heartbeat stays sane. Returns true when no position is open
+    ///         (lastGoodPriceAt == 0 means no swap has been executed yet).
     function isPriceSane() external view returns (bool) {
-        if (lastGoodPriceAt == 0) return true; // no position — no oracle issue
-        if (address(goldOracle) != address(0)) {
-            // Oracle-based freshness: read updatedAt without reverting.
-            try goldOracle.latestRoundData() returns (
-                uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
-            ) {
-                // Suppress unused-variable warnings by assigning to named returns (already named).
-                startedAt; roundId; answeredInRound;
-                if (answer <= 0) return false;
-                return block.timestamp - updatedAt <= maxStalenessSecs;
-            } catch {
-                return false; // oracle reverts → treat as stale
-            }
+        if (lastGoodPriceAt == 0) return true; // no position open — no oracle concern
+        // Oracle-based freshness: read updatedAt without reverting.
+        try goldOracle.latestRoundData() returns (
+            uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
+        ) {
+            startedAt; roundId; answeredInRound; // suppress unused-variable warnings
+            if (answer <= 0) return false;
+            return block.timestamp - updatedAt <= maxStalenessSecs;
+        } catch {
+            return false; // oracle reverts → treat as stale
         }
-        // Fallback: last-swap age.
-        return block.timestamp - lastGoodPriceAt <= maxStalenessSecs;
     }
 
     /// @notice Anyone may call to refresh lastGoodPrice from the oracle (J2 / PR1 parity).
-    ///         When goldOracle is set, reads the oracle price.
-    ///         When not set, this is a no-op (no oracle to poke).
+    ///         Reads the mandatory XAU/USD oracle price (K2: oracle is always set).
     function pokePrice() external {
-        if (address(goldOracle) == address(0)) return;
         try goldOracle.latestRoundData() returns (
             uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
         ) {
@@ -305,9 +305,10 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         } catch {}
     }
 
-    /// @notice Owner sets the XAU/USD oracle for oracle-based freshness (J2).
-    ///         Pass address(0) to revert to last-swap-age staleness detection.
+    /// @notice Owner updates the XAU/USD oracle (K2 — must be non-zero; reverts OracleRequired).
+    ///         Use this to rotate the oracle feed without redeploying the adapter.
     function setGoldOracle(address oracle) external onlyOwner {
+        if (oracle == address(0)) revert OracleRequired();
         address previous = address(goldOracle);
         goldOracle = IAggregatorV3(oracle);
         emit GoldOracleUpdated(previous, oracle);

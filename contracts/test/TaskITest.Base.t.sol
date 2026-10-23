@@ -10,9 +10,10 @@ import {TreasuryModule}        from "../TreasuryModule.sol";
 import {CharityModule}         from "../CharityModule.sol";
 import {PurificationEscrow}    from "../PurificationEscrow.sol";
 import {ShariahAdapterRegistry} from "../ShariahAdapterRegistry.sol";
-import {GoldExchangeAdapter}   from "../adapters/GoldExchangeAdapter.sol";
-import {MockERC20}             from "../test-helpers/MockERC20.sol";
-import {MockAllocatedGold}     from "../test-helpers/MockAllocatedGold.sol";
+import {GoldExchangeAdapter}    from "../adapters/GoldExchangeAdapter.sol";
+import {MockERC20}              from "../test-helpers/MockERC20.sol";
+import {MockAllocatedGold}      from "../test-helpers/MockAllocatedGold.sol";
+import {MockXauUsdAggregator}   from "../test-helpers/MockXauUsdAggregator.sol";
 
 // ─── Minimal mock token messenger ────────────────────────────────────────────
 // Returns sequential nonces; does NOT burn real tokens (balance stays in vault).
@@ -94,10 +95,11 @@ abstract contract TaskITestBase is Test {
     AutonomousVault      internal vault;
 
     // ── I2: GoldExchangeAdapter + ShariahVault ────────────────────────────────
-    MockSwapRouterI          internal router;
-    ShariahVault             internal svault;
-    TreasuryModule           internal sTreasury;
-    GoldExchangeAdapter      internal goldAdapter;
+    MockSwapRouterI            internal router;
+    MockXauUsdAggregator       internal xauOracle;
+    ShariahVault               internal svault;
+    TreasuryModule             internal sTreasury;
+    GoldExchangeAdapter        internal goldAdapter;
     MockGoldAllocationAdapterI internal goldAllocAdapter;
 
     // ── I3: TreasuryModule (Shariah) ──────────────────────────────────────────
@@ -134,7 +136,8 @@ abstract contract TaskITestBase is Test {
         vm.stopPrank();
 
         // ── I2: ShariahVault + GoldExchangeAdapter ───────────────────────────
-        router = new MockSwapRouterI();
+        router    = new MockSwapRouterI();
+        xauOracle = new MockXauUsdAggregator(); // K2: mandatory oracle
 
         vm.startPrank(owner);
         sTreasury = new TreasuryModule(
@@ -146,7 +149,7 @@ abstract contract TaskITestBase is Test {
         svault.setManager(manager);
         goldAdapter = new GoldExchangeAdapter(
             address(usdc), address(paxg), address(router), 3000,
-            address(svault), owner
+            address(svault), owner, address(xauOracle)
         );
         svault.setScreened(address(goldAdapter), true);
         svault.setGoldSpreadAdapter(address(goldAdapter));

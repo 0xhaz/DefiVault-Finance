@@ -4,12 +4,13 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {GoldExchangeAdapter} from "../adapters/GoldExchangeAdapter.sol";
-import {ShariahVault}        from "../ShariahVault.sol";
-import {AutonomousVault}     from "../AutonomousVault.sol";
-import {TreasuryModule}      from "../TreasuryModule.sol";
-import {MockERC20}           from "../test-helpers/MockERC20.sol";
-import {MockAllocatedGold}   from "../test-helpers/MockAllocatedGold.sol";
+import {GoldExchangeAdapter}    from "../adapters/GoldExchangeAdapter.sol";
+import {ShariahVault}           from "../ShariahVault.sol";
+import {AutonomousVault}        from "../AutonomousVault.sol";
+import {TreasuryModule}         from "../TreasuryModule.sol";
+import {MockERC20}              from "../test-helpers/MockERC20.sol";
+import {MockAllocatedGold}      from "../test-helpers/MockAllocatedGold.sol";
+import {MockXauUsdAggregator}   from "../test-helpers/MockXauUsdAggregator.sol";
 
 /// @title  GoldExchangeAdapterTest
 /// @notice Comprehensive unit tests for Task C: GoldExchangeAdapter + ShariahVault guard.
@@ -87,19 +88,21 @@ contract GoldExchangeAdapterTest is Test {
     address internal alice    = makeAddr("alice");
     address internal attacker = makeAddr("attacker");
 
-    MockERC20           internal usdc;
-    MockAllocatedGold   internal mag;
-    MockSwapRouter      internal router;
-    ShariahVault        internal vault;
-    TreasuryModule      internal treasury;
-    GoldExchangeAdapter internal adapter;
+    MockERC20              internal usdc;
+    MockAllocatedGold      internal mag;
+    MockSwapRouter         internal router;
+    MockXauUsdAggregator   internal xauOracle;
+    ShariahVault           internal vault;
+    TreasuryModule         internal treasury;
+    GoldExchangeAdapter    internal adapter;
 
     uint32 internal constant SOURCE_DOMAIN = 26;
 
     function setUp() public {
-        usdc   = new MockERC20("Mock USDC", "mUSDC", 6);
-        mag    = new MockAllocatedGold();
-        router = new MockSwapRouter();
+        usdc      = new MockERC20("Mock USDC", "mUSDC", 6);
+        mag       = new MockAllocatedGold();
+        router    = new MockSwapRouter();
+        xauOracle = new MockXauUsdAggregator(); // K2: mandatory oracle
 
         vm.startPrank(owner);
         treasury = new TreasuryModule(
@@ -111,7 +114,7 @@ contract GoldExchangeAdapterTest is Test {
         vault.setManager(manager);
         adapter = new GoldExchangeAdapter(
             address(usdc), address(mag), address(router), 3000,
-            address(vault), owner
+            address(vault), owner, address(xauOracle)
         );
         vault.setScreened(address(adapter), true);
         vault.setGoldCrossChainBlocked(true);
@@ -337,7 +340,8 @@ contract GoldExchangeAdapterTest is Test {
     function test_C15_deploy_zero_reverts() public {
         // Create adapter pointing at address(this) so we can call deploy() directly
         GoldExchangeAdapter da = new GoldExchangeAdapter(
-            address(usdc), address(mag), address(router), 3000, address(this), owner
+            address(usdc), address(mag), address(router), 3000,
+            address(this), owner, address(xauOracle)
         );
         vm.expectRevert(GoldExchangeAdapter.ZeroAmount.selector);
         da.deploy(0);
@@ -347,7 +351,8 @@ contract GoldExchangeAdapterTest is Test {
 
     function test_C16_recall_zero_reverts() public {
         GoldExchangeAdapter da = new GoldExchangeAdapter(
-            address(usdc), address(mag), address(router), 3000, address(this), owner
+            address(usdc), address(mag), address(router), 3000,
+            address(this), owner, address(xauOracle)
         );
         vm.expectRevert(GoldExchangeAdapter.ZeroAmount.selector);
         da.recall(0);
@@ -357,7 +362,8 @@ contract GoldExchangeAdapterTest is Test {
 
     function test_C17_recall_with_zero_paxgHeld_returns_zero() public {
         GoldExchangeAdapter da = new GoldExchangeAdapter(
-            address(usdc), address(mag), address(router), 3000, address(this), owner
+            address(usdc), address(mag), address(router), 3000,
+            address(this), owner, address(xauOracle)
         );
         uint256 ret = da.recall(1);
         assertEq(ret, 0, "recall with zero paxgHeld must return 0 gracefully");

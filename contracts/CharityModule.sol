@@ -113,19 +113,15 @@ contract CharityModule is Ownable2Step {
         charityBps     = DEFAULT_CHARITY_BPS;
     }
 
-    // ── Board modifier (I4) ───────────────────────────────────────────────────
+    // ── Board modifier (I4 / K2) ──────────────────────────────────────────────
 
-    /// @dev Allows anyone who is a board member per the registry (J3: registry always set).
-    ///      The owner cannot act alone unless they are also on the registry board.
-    ///      Rename note: called onlyBoardOrOwner for backward-compat; effectively onlyBoard
-    ///      because boardRegistry is required. An owner who is also on the board may call.
-    modifier onlyBoardOrOwner() {
-        bool isBoardMember = IShariahRegistry(boardRegistry).isBoard(msg.sender);
-        bool isOwner_      = (msg.sender == owner());
-        if (!isBoardMember && !isOwner_) revert NotBoardOrOwner(msg.sender);
-        // When registry is set: owner-only (not-on-board) still blocked in production.
-        // Here we allow owner as a convenience for same-address deployments where the
-        // deployer is both owner and the initialBoardMember of the registry.
+    /// @dev Allows only board members per the registry (boardRegistry is always set — J3).
+    ///      The owner alone CANNOT call these functions unless they are also on the board.
+    ///      An owner who is also the initialBoardMember of the registry may call.
+    ///      Renamed from onlyBoardOrOwner to onlyBoard (K2) since boardRegistry is mandatory
+    ///      and an owner who is not on the board is blocked regardless.
+    modifier onlyBoard() {
+        if (!IShariahRegistry(boardRegistry).isBoard(msg.sender)) revert NotBoardOrOwner(msg.sender);
         _;
     }
 
@@ -159,14 +155,14 @@ contract CharityModule is Ownable2Step {
 
     // ── Charity wallet timelock ──────────────────────────────────────────────
 
-    function proposeCharityWalletChange(address newWallet) external onlyBoardOrOwner {
+    function proposeCharityWalletChange(address newWallet) external onlyBoard {
         if (newWallet == address(0)) revert ZeroWallet();
         pendingCharityWallet   = newWallet;
         walletChangeRequestTime = block.timestamp;
         emit CharityWalletChangeProposed(newWallet, block.timestamp + TIMELOCK_PERIOD);
     }
 
-    function confirmCharityWalletChange() external onlyBoardOrOwner {
+    function confirmCharityWalletChange() external onlyBoard {
         address proposed = pendingCharityWallet;
         if (proposed == address(0)) revert NoPendingChange();
         uint256 executeAfter = walletChangeRequestTime + TIMELOCK_PERIOD;
@@ -180,7 +176,7 @@ contract CharityModule is Ownable2Step {
         emit CharityWalletConfirmed(previous, charityWallet);
     }
 
-    function cancelCharityWalletChange() external onlyBoardOrOwner {
+    function cancelCharityWalletChange() external onlyBoard {
         address proposed = pendingCharityWallet;
         if (proposed == address(0)) revert NoPendingChange();
         emit CharityWalletChangeCancelled(proposed);
@@ -190,7 +186,7 @@ contract CharityModule is Ownable2Step {
 
     // ── Charity rate timelock ────────────────────────────────────────────────
 
-    function proposeCharityRateChange(uint256 newBps) external onlyBoardOrOwner {
+    function proposeCharityRateChange(uint256 newBps) external onlyBoard {
         if (newBps > MAX_CHARITY_BPS) revert CharityRateAboveCap(newBps, MAX_CHARITY_BPS);
         pendingCharityBps    = newBps;
         rateChangeRequestTime = block.timestamp;
@@ -198,7 +194,7 @@ contract CharityModule is Ownable2Step {
         emit CharityRateChangeProposed(newBps, block.timestamp + TIMELOCK_PERIOD);
     }
 
-    function confirmCharityRateChange() external onlyBoardOrOwner {
+    function confirmCharityRateChange() external onlyBoard {
         if (!hasPendingRateChange) revert NoPendingChange();
         uint256 executeAfter = rateChangeRequestTime + TIMELOCK_PERIOD;
         if (block.timestamp < executeAfter) revert TimelockNotElapsed(executeAfter - block.timestamp);
@@ -212,7 +208,7 @@ contract CharityModule is Ownable2Step {
         emit CharityRateConfirmed(previous, charityBps);
     }
 
-    function cancelCharityRateChange() external onlyBoardOrOwner {
+    function cancelCharityRateChange() external onlyBoard {
         if (!hasPendingRateChange) revert NoPendingChange();
         emit CharityRateChangeCancelled(pendingCharityBps);
         pendingCharityBps    = 0;
