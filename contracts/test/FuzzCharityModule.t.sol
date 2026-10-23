@@ -31,7 +31,7 @@ contract FuzzCharityModule is Test {
         usdc = new MockERC20("Mock USDC", "mUSDC", 6);
 
         vm.prank(owner);
-        module = new CharityModule(charityWallet, address(usdc), address(this), owner);
+        module = new CharityModule(charityWallet, address(usdc), address(this), owner, address(0));
 
         // Large balance so any fuzz amount can be approved
         usdc.mint(address(this), type(uint96).max);

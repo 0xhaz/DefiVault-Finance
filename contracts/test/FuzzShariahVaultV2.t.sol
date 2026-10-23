@@ -62,7 +62,7 @@ contract FuzzShariahVaultV2 is Test {
 
         zakatModule = new ZakatModule(charityWallet, address(usdc), address(0), owner);
 
-        registry = new ShariahAdapterRegistry(owner);
+        registry = new ShariahAdapterRegistry(owner, owner);
 
         vault = new ShariahVaultV2(
             IERC20(address(usdc)),

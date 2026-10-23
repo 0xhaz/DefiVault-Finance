@@ -336,7 +336,7 @@ contract TaskGTest is Test {
         // Deploy a fresh registry — deployer is owner AND board member
         address registryOwner = makeAddr("regOwner");
         vm.prank(registryOwner);
-        ShariahAdapterRegistry freshRegistry = new ShariahAdapterRegistry(registryOwner);
+        ShariahAdapterRegistry freshRegistry = new ShariahAdapterRegistry(registryOwner, registryOwner);
 
         // registryOwner has board role from constructor
         assertTrue(freshRegistry.boardRole(registryOwner), "deployer must have board role");
@@ -362,7 +362,7 @@ contract TaskGTest is Test {
         address boardMember = makeAddr("boardDeployer");
 
         vm.prank(boardMember);
-        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember);
+        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember, boardMember);
 
         // boardMember proposes to grant to newMember
         vm.prank(boardMember);
@@ -381,7 +381,7 @@ contract TaskGTest is Test {
         address boardMember = makeAddr("boardDeployer13");
 
         vm.prank(boardMember);
-        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember);
+        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember, boardMember);
 
         vm.prank(boardMember);
         reg.proposeBoardRoleChange(newMember, true);
@@ -407,7 +407,7 @@ contract TaskGTest is Test {
         address boardMember = makeAddr("boardDeployer14");
 
         vm.prank(boardMember);
-        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember);
+        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember, boardMember);
 
         vm.prank(boardMember);
         reg.proposeBoardRoleChange(newMember, true);
@@ -429,7 +429,7 @@ contract TaskGTest is Test {
         address boardMember = makeAddr("boardDeployer15");
 
         vm.prank(boardMember);
-        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember);
+        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember, boardMember);
 
         vm.prank(boardMember);
         reg.proposeBoardRoleChange(account, true);
@@ -454,7 +454,7 @@ contract TaskGTest is Test {
         address nonOwner    = makeAddr("nonOwner16");
 
         vm.prank(boardMember);
-        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember);
+        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember, boardMember);
 
         vm.prank(nonOwner);
         vm.expectRevert(
@@ -470,7 +470,7 @@ contract TaskGTest is Test {
         address boardMember = makeAddr("boardDeployer17");
 
         vm.prank(boardMember);
-        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember);
+        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember, boardMember);
 
         // boardMember has board role from constructor
         assertTrue(reg.boardRole(boardMember), "must have board role initially");
@@ -490,7 +490,7 @@ contract TaskGTest is Test {
         address boardMember = makeAddr("boardDeployer18");
 
         vm.prank(boardMember);
-        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember);
+        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(boardMember, boardMember);
 
         vm.prank(boardMember);
         reg.proposeBoardRoleChange(account, true);
@@ -526,7 +526,7 @@ contract TaskGTest is Test {
             owner
         );
 
-        ShariahAdapterRegistry registry2 = new ShariahAdapterRegistry(owner);
+        ShariahAdapterRegistry registry2 = new ShariahAdapterRegistry(owner, owner);
 
         // Deploy ShariahVaultV2 with zakatModule_ = address(0)
         ShariahVaultV2 vault2 = new ShariahVaultV2(

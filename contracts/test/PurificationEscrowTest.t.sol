@@ -66,7 +66,8 @@ contract PurificationEscrowTest is Test {
             charityWallet,
             address(usdc),
             address(this), // vault for CharityModule — will be overridden to escrow below
-            owner
+            owner,
+            address(0)     // no registry for tests
         );
 
         // TreasuryModule placeholder — feeSource must be escrow, deployed next.
@@ -109,7 +110,8 @@ contract PurificationEscrowTest is Test {
             charityWallet,
             address(usdc),
             expectedEscrowAddr,  // vault = escrow
-            owner
+            owner,
+            address(0)           // no registry for tests
         );
 
         escrow = new PurificationEscrow(
@@ -117,7 +119,8 @@ contract PurificationEscrowTest is Test {
             address(usdc),
             address(charityModule),
             address(treasury),
-            owner
+            owner,
+            address(0)        // no registry for tests
         );
 
         // Sanity: confirm addresses match
@@ -151,7 +154,8 @@ contract PurificationEscrowTest is Test {
             charityWallet,
             address(usdc),
             address(0), // placeholder — will be the vaultEscrow address
-            owner
+            owner,
+            address(0)  // no registry for tests
         );
 
         vm.stopPrank();
@@ -177,7 +181,8 @@ contract PurificationEscrowTest is Test {
             charityWallet,
             address(usdc),
             expectedVaultEscrowAddr,  // vault = vaultEscrow (escrow calls distributeCharity)
-            owner
+            owner,
+            address(0)                // no registry for tests
         );
 
         vm.stopPrank();
@@ -191,7 +196,8 @@ contract PurificationEscrowTest is Test {
             address(usdc),
             address(vaultCharityModule),
             address(vaultTreasury),
-            owner
+            owner,
+            address(0)    // no registry for tests
         );
 
         assertEq(address(vaultEscrow), expectedVaultEscrowAddr2, "vaultEscrow address mismatch");

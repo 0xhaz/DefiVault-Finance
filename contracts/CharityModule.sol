@@ -6,6 +6,11 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
+/// @dev Minimal interface to query board membership from ShariahAdapterRegistry (I4).
+interface IShariahRegistry {
+    function isBoard(address account) external view returns (bool);
+}
+
 /**
  * @title  CharityModule
  * @notice Routes a configurable percentage of Shariah vault profit to a board-approved
@@ -35,6 +40,8 @@ contract CharityModule is Ownable2Step {
     error TimelockNotElapsed(uint256 remaining);
     /// @dev Thrown when a proposed charityBps exceeds MAX_CHARITY_BPS.
     error CharityRateAboveCap(uint256 proposed, uint256 cap);
+    /// @dev Thrown when caller is neither owner nor a board member per the registry (I4).
+    error NotBoardOrOwner(address caller);
 
     // ── Events ──────────────────────────────────────────────────────────────
 
@@ -81,6 +88,10 @@ contract CharityModule is Ownable2Step {
 
     address public immutable asset;
     address public immutable vault;
+    /// @notice Optional Shariah registry for single-source board membership (I4).
+    ///         When set, board-gated functions check registry.isBoard(msg.sender).
+    ///         When address(0), only the owner can call those functions.
+    address public immutable boardRegistry;
 
     // ── Constructor ──────────────────────────────────────────────────────────
 
@@ -88,13 +99,30 @@ contract CharityModule is Ownable2Step {
         address charityWallet_,
         address asset_,
         address vault_,
-        address initialOwner
+        address initialOwner,
+        address boardRegistry_ // pass address(0) to keep onlyOwner-only governance
     ) Ownable(initialOwner) {
         if (charityWallet_ == address(0)) revert ZeroWallet();
-        charityWallet = charityWallet_;
-        asset         = asset_;
-        vault         = vault_;
-        charityBps    = DEFAULT_CHARITY_BPS;
+        charityWallet  = charityWallet_;
+        asset          = asset_;
+        vault          = vault_;
+        boardRegistry  = boardRegistry_;
+        charityBps     = DEFAULT_CHARITY_BPS;
+    }
+
+    // ── Board modifier (I4) ───────────────────────────────────────────────────
+
+    /// @dev Allows the owner OR a board member (per registry) to call timelocked functions.
+    ///      When boardRegistry == address(0), only the owner may call.
+    ///      When boardRegistry is set, a registry board member may call even without ownership.
+    ///      This intentionally removes the owner's ability to act alone if a registry is set
+    ///      and the owner is not on the registry — matching the registry's own governance model.
+    modifier onlyBoardOrOwner() {
+        bool isOwner_     = (msg.sender == owner());
+        bool isBoardMember = (boardRegistry != address(0)) &&
+            IShariahRegistry(boardRegistry).isBoard(msg.sender);
+        if (!isOwner_ && !isBoardMember) revert NotBoardOrOwner(msg.sender);
+        _;
     }
 
     // ── Distribution ─────────────────────────────────────────────────────────
@@ -127,14 +155,14 @@ contract CharityModule is Ownable2Step {
 
     // ── Charity wallet timelock ──────────────────────────────────────────────
 
-    function proposeCharityWalletChange(address newWallet) external onlyOwner {
+    function proposeCharityWalletChange(address newWallet) external onlyBoardOrOwner {
         if (newWallet == address(0)) revert ZeroWallet();
         pendingCharityWallet   = newWallet;
         walletChangeRequestTime = block.timestamp;
         emit CharityWalletChangeProposed(newWallet, block.timestamp + TIMELOCK_PERIOD);
     }
 
-    function confirmCharityWalletChange() external onlyOwner {
+    function confirmCharityWalletChange() external onlyBoardOrOwner {
         address proposed = pendingCharityWallet;
         if (proposed == address(0)) revert NoPendingChange();
         uint256 executeAfter = walletChangeRequestTime + TIMELOCK_PERIOD;
@@ -148,7 +176,7 @@ contract CharityModule is Ownable2Step {
         emit CharityWalletConfirmed(previous, charityWallet);
     }
 
-    function cancelCharityWalletChange() external onlyOwner {
+    function cancelCharityWalletChange() external onlyBoardOrOwner {
         address proposed = pendingCharityWallet;
         if (proposed == address(0)) revert NoPendingChange();
         emit CharityWalletChangeCancelled(proposed);
@@ -158,7 +186,7 @@ contract CharityModule is Ownable2Step {
 
     // ── Charity rate timelock ────────────────────────────────────────────────
 
-    function proposeCharityRateChange(uint256 newBps) external onlyOwner {
+    function proposeCharityRateChange(uint256 newBps) external onlyBoardOrOwner {
         if (newBps > MAX_CHARITY_BPS) revert CharityRateAboveCap(newBps, MAX_CHARITY_BPS);
         pendingCharityBps    = newBps;
         rateChangeRequestTime = block.timestamp;
@@ -166,7 +194,7 @@ contract CharityModule is Ownable2Step {
         emit CharityRateChangeProposed(newBps, block.timestamp + TIMELOCK_PERIOD);
     }
 
-    function confirmCharityRateChange() external onlyOwner {
+    function confirmCharityRateChange() external onlyBoardOrOwner {
         if (!hasPendingRateChange) revert NoPendingChange();
         uint256 executeAfter = rateChangeRequestTime + TIMELOCK_PERIOD;
         if (block.timestamp < executeAfter) revert TimelockNotElapsed(executeAfter - block.timestamp);
@@ -180,7 +208,7 @@ contract CharityModule is Ownable2Step {
         emit CharityRateConfirmed(previous, charityBps);
     }
 
-    function cancelCharityRateChange() external onlyOwner {
+    function cancelCharityRateChange() external onlyBoardOrOwner {
         if (!hasPendingRateChange) revert NoPendingChange();
         emit CharityRateChangeCancelled(pendingCharityBps);
         pendingCharityBps    = 0;

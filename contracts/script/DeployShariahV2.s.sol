@@ -53,17 +53,23 @@ contract DeployShariahV2 is Script {
 
     function run() external returns (Addresses memory addrs) {
         address deployer = msg.sender;
+        // I5: Read the board multisig from env (BOARD_MULTISIG). Falls back to deployer on testnet.
+        // On production: set BOARD_MULTISIG to the organisation's Safe or multisig address.
+        address boardMultisig = vm.envOr("BOARD_MULTISIG", deployer);
+
         vm.startBroadcast();
 
-        addrs = _deploy(deployer);
+        addrs = _deploy(deployer, boardMultisig);
 
         vm.stopBroadcast();
         _log(addrs);
     }
 
-    function _deploy(address deployer) internal returns (Addresses memory addrs) {
-        // 1. Registry
-        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(deployer);
+    function _deploy(address deployer, address boardMultisig) internal returns (Addresses memory addrs) {
+        // 1. Registry — deployer is owner (can emergency-revoke); boardMultisig receives boardRole.
+        //    On testnet: boardMultisig == deployer (acceptable; document the risk).
+        //    On production: boardMultisig must be the organisation's Safe.
+        ShariahAdapterRegistry reg = new ShariahAdapterRegistry(deployer, boardMultisig);
         addrs.registry = address(reg);
         console.log("ShariahAdapterRegistry:", addrs.registry);
 
@@ -112,12 +118,13 @@ contract DeployShariahV2 is Script {
         addrs.vault = address(vault);
         console.log("ShariahVaultV2:", addrs.vault);
 
-        // 5. CharityModule
+        // 5. CharityModule — boardRegistry set to registry (I4: board changes propagate from registry)
         CharityModule charity = new CharityModule(
+            deployer,        // charityWallet — MUST be updated via SR-003 board resolution
             USDC_ARC_TESTNET,
             addrs.vault,
-            deployer,    // charityWallet — MUST be updated via SR-003 board resolution
-            deployer     // owner
+            deployer,        // owner
+            addrs.registry   // boardRegistry (I4) — board membership sourced from registry
         );
         addrs.charityModule = address(charity);
         console.log("CharityModule:", addrs.charityModule);
@@ -125,13 +132,14 @@ contract DeployShariahV2 is Script {
         // Propose default charity rate (250 bps = 2.5%) — no-op since it is the default.
         // Board must complete SR-002 (rate) and SR-003 (wallet) before any live distribution.
 
-        // 6. PurificationEscrow
+        // 6. PurificationEscrow — boardRegistry set to registry (I4)
         PurificationEscrow escrow = new PurificationEscrow(
-            USDC_ARC_TESTNET,
             addrs.vault,
+            USDC_ARC_TESTNET,
             addrs.charityModule,
             addrs.shariahTreasury,
-            deployer
+            deployer,        // owner
+            addrs.registry   // boardRegistry (I4) — board membership sourced from registry
         );
         addrs.purificationEscrow = address(escrow);
         console.log("PurificationEscrow:", addrs.purificationEscrow);

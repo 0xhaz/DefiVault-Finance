@@ -8,6 +8,11 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {CharityModule} from "./CharityModule.sol";
 import {TreasuryModule} from "./TreasuryModule.sol";
 
+/// @dev Minimal interface to query board membership from ShariahAdapterRegistry (I4).
+interface IShariahRegistry {
+    function isBoard(address account) external view returns (bool);
+}
+
 /**
  * @title  PurificationEscrow
  * @notice Implements the Shariah profit-distribution waterfall:
@@ -85,7 +90,12 @@ contract PurificationEscrow is Ownable2Step {
     ///         Raised only when the board identifies a specific impure-income event.
     uint256 public purificationBps;
 
-    /// @notice Board members authorised to propose rate changes (PR2).
+    /// @notice Optional Shariah registry for single-source board membership (I4).
+    ///         When set, board-gated functions delegate to registry.isBoard(msg.sender).
+    ///         When address(0), falls back to the local boardRole mapping (backward compat).
+    address public immutable boardRegistry;
+
+    /// @notice Local board role mapping — used only when boardRegistry == address(0) (I4).
     mapping(address => bool) public boardRole;
 
     struct PendingRateChange {
@@ -108,14 +118,20 @@ contract PurificationEscrow is Ownable2Step {
         address asset_,
         address charityModule_,
         address shariahTreasury_,
-        address initialOwner
+        address initialOwner,
+        address boardRegistry_ // pass address(0) to keep local boardRole; pass registry for I4
     ) Ownable(initialOwner) {
         vault           = vault_;
         asset           = asset_;
         charityModule   = CharityModule(charityModule_);
         shariahTreasury = TreasuryModule(shariahTreasury_);
+        boardRegistry   = boardRegistry_;
         purificationBps = 0; // no impure income identified at deploy
-        boardRole[initialOwner] = true; // deployer is initial board member
+        // When no registry: grant deployer local board membership so propose/confirm work out-of-box.
+        // When registry is provided: board membership is managed entirely by the registry.
+        if (boardRegistry_ == address(0)) {
+            boardRole[initialOwner] = true;
+        }
     }
 
     // ── Waterfall ────────────────────────────────────────────────────────────
@@ -205,7 +221,10 @@ contract PurificationEscrow is Ownable2Step {
     // ── Board role management ────────────────────────────────────────────────
 
     modifier onlyBoard() {
-        if (!boardRole[msg.sender]) revert NotBoardRole(msg.sender);
+        bool ok = boardRegistry != address(0)
+            ? IShariahRegistry(boardRegistry).isBoard(msg.sender)
+            : boardRole[msg.sender];
+        if (!ok) revert NotBoardRole(msg.sender);
         _;
     }
 

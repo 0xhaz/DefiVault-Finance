@@ -34,7 +34,7 @@ contract CharityModuleTest is Test {
 
         // address(this) is vault; owner is the Ownable owner
         vm.prank(owner);
-        module = new CharityModule(charityWallet, address(usdc), address(this), owner);
+        module = new CharityModule(charityWallet, address(usdc), address(this), owner, address(0));
 
         // Fund this contract (acting as vault) with USDC
         usdc.mint(address(this), INITIAL_BALANCE);

@@ -324,3 +324,90 @@ The board must confirm, before any USDC/XAUT LP position is taken:
 (b) If USDC/XAUT LP is permissible, whether it is subject to the combined 30% gold cap (SR-009) or is treated as fee income (USDC) only.
 
 (c) The current code does NOT route any LP capital to USDC/XAUT pools. This ruling is required only before such a pool is added to the strategy's approved pool list.
+
+---
+
+## SR-004 — Musharakah loss-sharing: HWM excess clarification (Task I)
+
+*(Update to SR-004 above — additional finding from Task I code review.)*
+
+**HWM excess split rule (confirmed in code).** `calculateMusharakahSplitHWM` computes:
+
+```
+afterRecovery = max(0, grossProfit − hwmDeficit)
+surplus       = max(0, afterRecovery − hurdleAmount)
+vaultShare    = surplus × musharakahShareBps / 10_000
+depositorShare = grossProfit − vaultShare
+```
+
+The 4% hurdle is applied to `afterRecovery` (not the full gross), and the manager split runs only on `surplus = afterRecovery − hurdle`. This means:
+
+- If `grossProfit < hwmDeficit`: `afterRecovery = 0`, `vaultShare = 0`. Depositors absorb the full gross as partial loss recovery.
+- If `grossProfit > hwmDeficit` but `afterRecovery ≤ hurdle`: `surplus = 0`, `vaultShare = 0`. Hurdle is borne from the excess; no manager share.
+- Only when `afterRecovery > hurdle` does the manager earn a share — and only on that final surplus.
+
+**Board confirmation required.** The board must confirm this ordering is acceptable under Musharakah fiqh: specifically, whether the hurdle rate applies to the post-recovery excess (current implementation) or to the full gross profit. SR-004 original question (b) is partially answered by this implementation; the board must confirm it is correct.
+
+---
+
+## SR-016 — S2-H (PAXG) stale-price valuation and deposit pause (Task I, I2)
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-23 |
+| Task | I (I2) |
+| Affects | `GoldExchangeAdapter.currentValue()`, `GoldExchangeAdapter.isPriceSane()`, `ShariahVault.maxDeposit/maxMint` |
+
+**Issue.** `GoldExchangeAdapter` (S2-H, PAXG) previously returned `totalDeployed` (cost basis) from `currentValue()`, overstating value when gold has fallen. Task I applies the same PR1 treatment as S6-H: `lastGoodPrice` cached at every swap execution; stale detection via `maxStalenessSecs` (default 1 day, max 7 days); stale `currentValue()` = `grossValue × (1 − staleHaircutBps)` (default 5%, cap 20%).
+
+**Difference from S6-H (GoldAllocationAdapter).** S2-H has no external oracle — "staleness" is measured from the last executed atomic swap (deploy or recall), not from a Chainlink heartbeat. The board must confirm:
+
+(a) Whether staleness-from-last-swap (default 1 day) is appropriate for S2-H, or whether a different threshold should apply to a pure DEX-price adapter.
+
+(b) Whether `staleHaircutBps = 500` (5%) is conservative enough when the last PAXG/USDC price is known only from a DEX trade that may have been executed under atypical liquidity conditions.
+
+(c) The `maxDeposit`/`maxMint` block now applies to BOTH gold adapters — S6-H oracle stale OR S2-H last-swap stale → deposits paused. The board must confirm this is the correct combined gate.
+
+---
+
+## SR-017 — settleCrossChain: caller-supplied `received` verification (Task I, I1)
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-23 |
+| Task | I (I1) |
+| Affects | `AutonomousVault.settleCrossChain`, `AutonomousVault.balanceBeforeDeploy` |
+
+**Issue.** Before Task I, `settleCrossChain(nonce, received)` trusted the manager-supplied `received` parameter. Over-reporting would inflate NAV; under-reporting would book a phantom loss.
+
+**Implemented (I1).** `deployCrossChain` now snapshots the vault's post-burn USDC balance in `balanceBeforeDeploy[nonce]`. When `settleCrossChain` is called, it computes `arrived = currentBalance − snapshotBalance` and reverts `ReceivedExceedsArrived(received, arrived)` if `received > arrived`. CCTP mints inbound USDC to the vault before the operator calls `settleCrossChain`, so the balance delta is the on-chain verifiable arrival amount.
+
+**Residual risk.** The snapshot is taken at deploy time. Any unrelated USDC arriving at the vault between deploy and settle (e.g. from a direct transfer) increases `arrived` and thus loosens the bound. This is acceptable: it makes the guard less tight, not less safe — legitimate settles always pass. The guard's purpose is to prevent the manager from reporting more than what the chain has actually received.
+
+**Board action required.** Board to confirm this residual risk is understood and the one-way guard (can never over-report, may under-report bound on rare concurrent arrivals) is acceptable.
+
+---
+
+## SR-018 — Single-source board role: registry as authority for CharityModule and PurificationEscrow (Task I, I4/I5)
+
+| Field | Value |
+|---|---|
+| Status | REVIEW |
+| Raised | 2026-10-23 |
+| Task | I (I4, I5) |
+| Affects | `CharityModule.boardRegistry`, `PurificationEscrow.boardRegistry`, `ShariahAdapterRegistry.isBoard()`, `ShariahAdapterRegistry` constructor |
+
+**Issue.** Before Task I, `CharityModule` (wallet/rate changes) and `PurificationEscrow` (purification rate) each maintained a local `boardRole` mapping. This meant a board composition change in the registry did NOT automatically propagate to these contracts — the operator had to separately update each contract's local mapping, creating a window of divergence.
+
+**Implemented (I4/I5).**
+- `ShariahAdapterRegistry.isBoard(address)` view function added (returns `boardRole[account]`).
+- `CharityModule` and `PurificationEscrow` constructors now accept `boardRegistry` (immutable). When set, `onlyBoard`/`onlyBoardOrOwner` checks `registry.isBoard(msg.sender)` instead of local mapping.
+- `ShariahAdapterRegistry` constructor now accepts `(initialOwner, initialBoardMember)`. `initialOwner` does NOT automatically receive `boardRole`; only `initialBoardMember` does. On production: `initialBoardMember` must be the organisation's Safe multisig address.
+- `DeployShariahV2.s.sol` reads `BOARD_MULTISIG` env var (falls back to deployer on testnet).
+
+**Board action required.**
+(a) Confirm the production `BOARD_MULTISIG` address to use as `initialBoardMember` in the registry constructor.
+(b) Confirm that the deployer-as-owner-but-not-board separation is acceptable for testnet (documented risk: testnet board == deployer EOA).
+(c) Confirm the asymmetric emergency power: owner can `emergencyRevokeBoardRole` (instant, no timelock); owner cannot grant board membership without the board itself proposing (30-day timelock).

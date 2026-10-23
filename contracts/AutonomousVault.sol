@@ -33,6 +33,9 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     error PendingCrossChainCapExceeded();
     /// @notice Thrown when profitUnlockPeriod is set above MAX_PROFIT_UNLOCK_PERIOD.
     error InvalidUnlockPeriod();
+    /// @notice Thrown by settleCrossChain when the caller claims more was received than
+    ///         actually arrived in the vault since the matching deployCrossChain (I1).
+    error ReceivedExceedsArrived(uint256 claimed, uint256 arrived);
 
     event ManagerUpdated(address indexed previousManager, address indexed newManager);
     event MaxAllocationBpsUpdated(uint256 previousBps, uint256 newBps);
@@ -66,6 +69,12 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     uint256 public maxPendingCrossChainBps = 2_000;
     /// @notice Hard cap for maxPendingCrossChainBps.
     uint256 public constant MAX_PENDING_CROSS_CHAIN_BPS = 5_000;
+
+    /// @notice USDC balance snapshot taken just before each deployCrossChain call (I1).
+    ///         Used by settleCrossChain to verify that `received` does not exceed the
+    ///         actual balance increase since the deploy, preventing NAV inflation by
+    ///         an over-reporting caller.  Keyed by CCTP nonce.
+    mapping(uint64 => uint256) public balanceBeforeDeploy;
 
     /// @notice Profit locked for linear unlock (PR3.2 — Yearn-style streaming).
     ///         Locked profit is excluded from totalAssets until unlockedAt.
@@ -180,6 +189,10 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         uint256 maxPending = (totalAssets() * maxPendingCrossChainBps) / 10_000;
         if (totalPendingCrossChain + amount > maxPending) revert PendingCrossChainCapExceeded();
 
+        // I1: Snapshot USDC balance before the burn so settleCrossChain can verify
+        //     that `received` does not exceed what actually arrived in the vault.
+        uint256 _balBefore = IERC20(asset()).balanceOf(address(this));
+
         // Approve exact amount; always clear residual allowance after the call
         IERC20(asset()).forceApprove(tokenMessenger, amount);
         uint64 nonce = ITokenMessenger(tokenMessenger).depositForBurnWithCaller(
@@ -196,6 +209,8 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         totalPendingCrossChain += amount;
         // Record pending position so settleCrossChain can decrement totalDeployed on return
         pendingCrossChain[nonce] = amount;
+        // I1: Record balance after burn (== balBefore - amount) for arrival verification.
+        balanceBeforeDeploy[nonce] = _balBefore - amount; // vault balance after the outbound burn
 
         emit CapitalDeployedCrossChain(destinationDomain, recipient, amount, nonce);
     }
@@ -253,7 +268,22 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     function settleCrossChain(uint64 nonce, uint256 received) external onlyManagerOrOwner {
         uint256 sent = pendingCrossChain[nonce];
         if (sent == 0) revert NonceMismatch(nonce);
+
+        // I1: Verify that the caller's `received` claim does not exceed what actually
+        //     arrived on-chain.  We compare the current vault balance against the
+        //     snapshot taken when the outbound burn fired.  CCTP mints the inbound USDC
+        //     to this vault BEFORE the operator calls settleCrossChain, so the balance
+        //     delta equals the real arrived amount.
+        //     Any other tokens that arrived between deploy and settle (e.g. from unrelated
+        //     sources) would also count here — acceptable: they make the bound looser, not
+        //     tighter, so a legitimate settle always passes.
+        uint256 balNow   = IERC20(asset()).balanceOf(address(this));
+        uint256 snapBase = balanceBeforeDeploy[nonce];
+        uint256 arrived  = balNow >= snapBase ? balNow - snapBase : 0;
+        if (received > arrived) revert ReceivedExceedsArrived(received, arrived);
+
         delete pendingCrossChain[nonce];
+        delete balanceBeforeDeploy[nonce];
 
         uint256 shortfall = sent > received ? sent - received : 0;
         // Decrement totalDeployed by the full sent amount. The received USDC tokens are

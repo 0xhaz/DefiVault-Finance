@@ -118,9 +118,16 @@ contract ShariahAdapterRegistry is Ownable {
     // Constructor
     // ─────────────────────────────────────────────────────────────
 
-    constructor(address initialOwner) Ownable(initialOwner) {
-        boardRole[initialOwner] = true;
-        emit BoardRoleGranted(initialOwner);
+    /// @param initialOwner       Contract owner (Ownable2Step pattern). Can emergency-revoke
+    ///                           board members. Does NOT automatically receive boardRole (I5).
+    /// @param initialBoardMember The multisig or board address that receives boardRole at deploy.
+    ///                           Pass a safe/multisig — not the deployer EOA — to satisfy the
+    ///                           H PR2.2 / I5 requirement that the deployer is not sole board.
+    ///                           May equal initialOwner only when no separate multisig is available
+    ///                           (e.g. testnet single-signer setup); document the risk in README.
+    constructor(address initialOwner, address initialBoardMember) Ownable(initialOwner) {
+        boardRole[initialBoardMember] = true;
+        emit BoardRoleGranted(initialBoardMember);
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -277,5 +284,15 @@ contract ShariahAdapterRegistry is Ownable {
      */
     function getScreening(address adapter) external view returns (Screening memory) {
         return screenings[adapter];
+    }
+
+    /**
+     * @notice Single-source board membership query (I4).
+     *         CharityModule and PurificationEscrow call this instead of maintaining
+     *         their own local boardRole mappings, so governance changes propagate to
+     *         all contracts simultaneously.
+     */
+    function isBoard(address account) external view returns (bool) {
+        return boardRole[account];
     }
 }

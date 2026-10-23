@@ -43,10 +43,16 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
     error ZeroAmount();
     error DeadlineExceeded();
     error StalePrice(uint256 paxgBalance, uint256 usdcSpent);
+    /// @notice Thrown when the stale-haircut BPS exceeds the hard cap.
+    error HaircutAboveCap(uint256 proposed, uint256 cap);
 
     event GoldAcquired(uint256 usdcIn, uint256 paxgOut, uint256 spotPrice);
     event GoldReturned(uint256 paxgIn, uint256 usdcOut);
     event MinOutBpsUpdated(uint256 previousBps, uint256 newBps);
+    /// @notice Emitted whenever lastGoodPrice is refreshed from an executed swap (PR1 parity).
+    event LastGoodPriceUpdated(uint256 price, uint256 timestamp);
+    event StaleHaircutBpsUpdated(uint256 previous, uint256 updated);
+    event MaxStalenessBpsUpdated(uint256 previous, uint256 updated);
 
     IERC20  public immutable usdc;
     IERC20  public immutable paxg;
@@ -67,6 +73,24 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
     ///         Production: replace with a 30-min TWAP from a Uniswap V3 pool.
     uint256 public lastPaxgPricePerUsdc;
 
+    // ── PR1 parity — stale-price valuation (I2) ─────────────────────────────
+    /// @notice Last USDC-per-PAXG price recorded at swap execution (USDC units, 6 dec).
+    ///         Equivalent to GoldAllocationAdapter.lastGoodPrice. Set on every deploy/recall.
+    uint256 public lastGoodPrice;
+    /// @notice Timestamp of the last executed swap (deploy or recall).
+    uint256 public lastGoodPriceAt;
+    /// @notice Haircut applied to lastGoodPrice when price is stale (bps, default 500 = 5%).
+    ///         Settable by owner, hard cap MAX_STALE_HAIRCUT_BPS.
+    uint256 public staleHaircutBps;
+    /// @notice Hard cap for staleHaircutBps (matches GoldAllocationAdapter).
+    uint256 public constant MAX_STALE_HAIRCUT_BPS = 2000;
+    /// @notice Seconds after the last swap before isPriceSane() returns false.
+    ///         Default: 1 day. Settable by owner. S2-H has no external oracle;
+    ///         staleness is measured from the last executed trade.
+    uint256 public maxStalenessSecs;
+    /// @notice Hard cap for maxStalenessSecs: 7 days.
+    uint256 public constant MAX_STALENESS_SECS = 7 days;
+
     constructor(
         address usdc_,
         address paxg_,
@@ -80,7 +104,9 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         swapRouter = ISwapRouter(swapRouter_);
         poolFee   = poolFee_;
         vault     = vault_;
-        minOutBps = 9900; // 99% default (1% max slippage)
+        minOutBps        = 9900;  // 99% default (1% max slippage)
+        staleHaircutBps  = 500;   // 5% default stale haircut (matches GoldAllocationAdapter)
+        maxStalenessSecs = 1 days; // price considered stale if no swap in > 1 day
     }
 
     modifier onlyVault() {
@@ -133,7 +159,13 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         paxgHeld      += paxgOut;
         totalDeployed += amount;
 
-        uint256 spotPrice = (amount * 1e18) / paxgOut; // USDC per PAXG (1e18-scaled)
+        // USDC per PAXG (1e18-scaled: amount is 6 dec, paxgOut is 18 dec)
+        uint256 spotPrice = (amount * 1e18) / paxgOut;
+        // PR1: Record lastGoodPrice in USDC units (6 dec) — USDC paid per 1e18 PAXG.
+        //      lastPaxgPricePerUsdc is the inverse; keep both for backward compat.
+        lastGoodPrice    = spotPrice / 1e12; // convert 1e18-scaled to USDC (6 dec)
+        lastGoodPriceAt  = block.timestamp;
+        emit LastGoodPriceUpdated(lastGoodPrice, block.timestamp);
         emit GoldAcquired(amount, paxgOut, spotPrice);
     }
 
@@ -167,6 +199,15 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
 
         paxg.forceApprove(address(swapRouter), 0);
 
+        // PR1: Compute exit price and update lastGoodPrice/At so currentValue() stays accurate
+        //      after the position is closed and before a new one is opened.
+        if (paxgToSell > 0 && usdcReturned > 0) {
+            uint256 exitSpotPrice = (usdcReturned * 1e18) / paxgToSell;
+            lastGoodPrice   = exitSpotPrice / 1e12;
+            lastGoodPriceAt = block.timestamp;
+            emit LastGoodPriceUpdated(lastGoodPrice, block.timestamp);
+        }
+
         paxgHeld       = 0;
         // On full exit, always clear deployed principal regardless of PAXG/USDC price at exit.
         // This prevents stale totalDeployed from inflating vault NAV after position is closed.
@@ -175,15 +216,39 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         emit GoldReturned(paxgToSell, usdcReturned);
     }
 
+    /**
+     * @notice Returns the USDC value of the PAXG position. Never reverts (PR1 parity / I2).
+     *
+     * - paxgHeld == 0: returns 0 (no position open).
+     * - Price fresh (lastGoodPriceAt within maxStalenessSecs): use lastGoodPrice.
+     * - Price stale: use lastGoodPrice × (1 - staleHaircutBps / 10_000).
+     *   If lastGoodPrice == 0 (no swap ever executed): returns 0.
+     *
+     * Note: S2-H has no external oracle. "Staleness" here means the last atomic swap
+     * executed more than maxStalenessSecs ago — the live market price is unknown.
+     * Cost basis (totalDeployed) is NOT used — consistent with GoldAllocationAdapter PR1.
+     */
     function currentValue() external view returns (uint256) {
-        // Without a live oracle: return totalDeployed as conservative floor
-        return totalDeployed;
+        if (paxgHeld == 0) return 0;
+        if (lastGoodPrice == 0) return 0; // no swap ever executed
+
+        // lastGoodPrice is USDC per 1e18 PAXG (6-dec USDC, 18-dec PAXG).
+        // value = paxgHeld (18 dec) * lastGoodPrice (6 dec / 1e18 PAXG) / 1e18
+        uint256 grossValue = (paxgHeld * lastGoodPrice) / 1e18;
+
+        bool fresh = (lastGoodPriceAt > 0) && (block.timestamp - lastGoodPriceAt <= maxStalenessSecs);
+        if (fresh) return grossValue;
+
+        // Stale: apply haircut.
+        return (grossValue * (10_000 - staleHaircutBps)) / 10_000;
     }
 
-    /// @notice S2-H uses no oracle — price sanity is always considered true.
-    ///         Required by IGoldAdapter so ShariahVault can call isPriceSane() uniformly.
-    function isPriceSane() external pure returns (bool) {
-        return true;
+    /// @notice Returns false when the last executed swap is older than maxStalenessSecs.
+    ///         ShariahVault.maxDeposit/maxMint return 0 when this is false (PR1 / I2).
+    ///         Returns true when no swap has ever been executed (no position open).
+    function isPriceSane() external view returns (bool) {
+        if (lastGoodPriceAt == 0) return true;  // no position — no oracle issue
+        return block.timestamp - lastGoodPriceAt <= maxStalenessSecs;
     }
 
     function protocolName() external pure returns (string memory) {
@@ -195,6 +260,22 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         uint256 prev = minOutBps;
         minOutBps = newBps;
         emit MinOutBpsUpdated(prev, newBps);
+    }
+
+    /// @notice Set the stale-price haircut (bps, max MAX_STALE_HAIRCUT_BPS = 2000).
+    function setStaleHaircutBps(uint256 bps) external onlyOwner {
+        if (bps > MAX_STALE_HAIRCUT_BPS) revert HaircutAboveCap(bps, MAX_STALE_HAIRCUT_BPS);
+        uint256 prev = staleHaircutBps;
+        staleHaircutBps = bps;
+        emit StaleHaircutBpsUpdated(prev, bps);
+    }
+
+    /// @notice Set the max staleness window (seconds, max MAX_STALENESS_SECS = 7 days).
+    function setMaxStalenessSecs(uint256 secs) external onlyOwner {
+        require(secs > 0 && secs <= MAX_STALENESS_SECS, "GoldExchangeAdapter: staleness out of range");
+        uint256 prev = maxStalenessSecs;
+        maxStalenessSecs = secs;
+        emit MaxStalenessBpsUpdated(prev, secs);
     }
 
     function renounceOwnership() public override(Ownable) onlyOwner {

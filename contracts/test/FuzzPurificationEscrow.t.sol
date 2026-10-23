@@ -65,7 +65,8 @@ contract FuzzPurificationEscrow is Test {
             charityWallet,
             address(usdc),
             expectedEscrowAddr,      // vault = escrow (escrow calls distributeCharity)
-            owner
+            owner,
+            address(0)               // no registry for tests
         );
 
         escrow = new PurificationEscrow(
@@ -73,7 +74,8 @@ contract FuzzPurificationEscrow is Test {
             address(usdc),
             address(charityModule),
             address(treasury),
-            owner
+            owner,
+            address(0)               // no registry for tests
         );
 
         assertEq(address(escrow), expectedEscrowAddr, "escrow address mismatch");

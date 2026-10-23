@@ -78,7 +78,7 @@ contract ShariahVaultV2Test is Test {
 
         zakatModule = new ZakatModule(charityWallet, address(usdc), address(0), owner);
 
-        registry = new ShariahAdapterRegistry(owner);
+        registry = new ShariahAdapterRegistry(owner, owner);
         // owner gets boardRole automatically
 
         vault = new ShariahVaultV2(
@@ -190,7 +190,7 @@ contract ShariahVaultV2Test is Test {
     // ─────────────────────────────────────────────────────────────
 
     function test_setRegistry_updates() public {
-        ShariahAdapterRegistry newRegistry = new ShariahAdapterRegistry(owner);
+        ShariahAdapterRegistry newRegistry = new ShariahAdapterRegistry(owner, owner);
 
         vm.prank(owner);
         vault.setRegistry(address(newRegistry));

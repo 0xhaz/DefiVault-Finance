@@ -29,7 +29,7 @@ contract ShariahAdapterRegistryTest is Test {
 
     function setUp() public {
         vm.prank(deployer);
-        registry = new ShariahAdapterRegistry(deployer);
+        registry = new ShariahAdapterRegistry(deployer, deployer);
         // deployer has boardRole automatically (set in constructor)
     }
 

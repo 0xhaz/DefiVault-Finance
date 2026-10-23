@@ -221,7 +221,8 @@ contract TaskHTest is Test {
             charityWallet,
             address(usdc),
             expectedEscrowAddr, // vault = escrow
-            owner
+            owner,
+            address(0)          // no registry for tests — local board only
         );
 
         escrow = new PurificationEscrow(
@@ -229,7 +230,8 @@ contract TaskHTest is Test {
             address(usdc),
             address(charityModule),
             address(escrowTreasury),
-            owner
+            owner,
+            address(0)            // no registry for tests — local board only
         );
 
         require(address(escrow) == expectedEscrowAddr, "TaskHTest: escrow addr mismatch");
