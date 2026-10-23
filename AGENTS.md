@@ -90,14 +90,15 @@ Work order (each task = one branch/PR per the one-task-per-branch rule):
 | I | I1–I5 hardening: settle verification, S2-H PR1 parity, HWM calc, single-source board, registry constructor | DONE |
 | J | J1 atomic settleCrossChainWithMessage; J2 dustThreshold deposit pause + S2-H oracle freshness; J3 RegistryRequired; J4 invariant suite | DONE |
 | K | K1 CCTP V2 feeExecuted decode + CrossChainFeeDeducted emit + 3 new K1 tests (fee=0, fee>0, fee+strategy-loss); K2 GoldExchangeAdapter mandatory oracle + onlyBoard rename in CharityModule; PR2 invariant suite extended to 8 invariants + 17 handler actions (cross-chain, losses, no-dilution, cap); PR3 README sync (class diagram, flow diagram, adapter table, security model); PR4 Rehearsal.s.sol + docs/rehearsal.md | DONE |
+| L | L1 CctpMessageDecoder offset corrected (feeExecuted at body[164..195], not body[132..163] which is maxFee); MIN_MESSAGE_LEN raised to 344; all 4 message builders updated; 2 new L1 tests (body-too-short revert, golden fixture); L2 audit: 396 non-invariant tests confirmed intact — README count of 353 was a doc error; L3 README fixes (J2 oracle mandatory note, K1 offset note, foundry.toml invariant note) | DONE |
 
-**K invariant suite**: `contracts/test/invariant/VaultInvariant.t.sol` — 8 invariants, 17 handler actions, 256 runs x depth 50.
-Confirmed green: 8/8 invariants pass, 0 reverts across all handler actions.
-Run with: `forge test --match-path 'contracts/test/invariant/*' -vv`
+**Invariant suite**: `contracts/test/invariant/VaultInvariant.t.sol` — 8 invariants, 17 handler actions.
+Runs/depth set in `foundry.toml` [profile.default.invariant]: runs=256, depth=50.
+Run with: `forge test --match-path 'contracts/test/invariant/*'`
 
-**Test status**: 353/353 non-invariant Foundry tests pass (256-512 fuzz runs). 8/8 invariants pass (256 runs). 48/48 bun screening tests pass.
+**Test status**: 398/398 non-invariant Foundry tests pass (512 fuzz runs). 8/8 invariants pass (256 runs x depth 50). 48/48 bun screening tests pass.
 
-**Known**: TreasuryModule feeSource placeholder issue in Rehearsal.s.sol — noted in docs/rehearsal.md, redeploy required before live profit claims. MSG_TRANSMITTER on Arc Testnet must be confirmed from Circle docs before step 5 of rehearsal.
+**Known**: TreasuryModule feeSource placeholder issue in Rehearsal.s.sol — noted in docs/rehearsal.md, redeploy required before live profit claims. MSG_TRANSMITTER on Arc Testnet must be confirmed from Circle docs before step 5 of rehearsal. L4 (live rehearsal run) not yet executed.
 
 **Board review items**: SR-001 through SR-022 — all REVIEW, none approved. See `docs/agents/SHARIAH_REVIEW.md`.
 

@@ -43,13 +43,14 @@ library TestCctpMsg {
     function build(uint64 nonce_, uint256 amount_, address recipient_) internal pure returns (bytes memory) {
         bytes memory header = new bytes(116);
         for (uint256 i = 0; i < 8; i++) header[19 - i] = bytes1(uint8(nonce_ >> (i * 8)));
-        // CCTP V2 BurnMessage body is 164 bytes (adds feeExecuted uint256 at [132..163]).
-        bytes memory body = new bytes(164);
+        // BurnMessageV2 body: 228 bytes (version+burnToken+mintRecipient+amount+
+        //   messageSender+maxFee+feeExecuted+expirationBlock = 4+32+32+32+32+32+32+32).
+        bytes memory body = new bytes(228);
         bytes32 rw = bytes32(uint256(uint160(recipient_)));
         for (uint256 i = 0; i < 32; i++) body[36 + i] = rw[i];
         bytes32 aw = bytes32(amount_);
         for (uint256 i = 0; i < 32; i++) body[68 + i] = aw[i];
-        // feeExecuted at [132..163] — left as zero (Standard Transfer / no fee)
+        // maxFee at [132..163], feeExecuted at [164..195] — both zero (Standard Transfer)
         return abi.encodePacked(header, body);
     }
 }

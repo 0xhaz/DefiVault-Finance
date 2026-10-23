@@ -389,16 +389,18 @@ contract VaultHandler is Test {
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    /// @dev Build a minimal CCTP V2 message (280 bytes: 116 header + 164 body).
+    /// @dev Build a minimal CCTP V2 BurnMessageV2 (344 bytes: 116 header + 228 body).
+    ///      Body layout: version(4)+burnToken(32)+mintRecipient(32)+amount(32)+
+    ///                   messageSender(32)+maxFee(32)+feeExecuted(32)+expirationBlock(32).
     function _buildCctpMsg(uint64 nonce_, uint256 amount_, uint256 feeExecuted_)
         internal view returns (bytes memory)
     {
         bytes memory header = new bytes(116);
-        // encode nonce at bytes [12..19]
+        // encode nonce at header bytes [12..19] (big-endian uint64)
         for (uint256 i = 0; i < 8; i++) {
             header[19 - i] = bytes1(uint8(nonce_ >> (i * 8)));
         }
-        bytes memory body = new bytes(164);
+        bytes memory body = new bytes(228);
         // mintRecipient at body[36..67] = vault address
         bytes32 recipientWord = bytes32(uint256(uint160(address(s.vault()))));
         for (uint256 i = 0; i < 32; i++) {
@@ -409,11 +411,17 @@ contract VaultHandler is Test {
         for (uint256 i = 0; i < 32; i++) {
             body[68 + i] = amountWord[i];
         }
-        // feeExecuted at body[132..163]
+        // maxFee at body[132..163] — set equal to feeExecuted as a valid ceiling
+        bytes32 maxFeeWord = bytes32(feeExecuted_);
+        for (uint256 i = 0; i < 32; i++) {
+            body[132 + i] = maxFeeWord[i];
+        }
+        // feeExecuted at body[164..195] (actual fee taken; 0 for Standard Transfer)
         bytes32 feeWord = bytes32(feeExecuted_);
         for (uint256 i = 0; i < 32; i++) {
-            body[132 + i] = feeWord[i];
+            body[164 + i] = feeWord[i];
         }
+        // expirationBlock at body[196..227] — left zero
         return abi.encodePacked(header, body);
     }
 

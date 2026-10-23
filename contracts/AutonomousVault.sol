@@ -36,18 +36,30 @@ interface IMessageTransmitterV2 {
 ///           [52..83]  recipient (bytes32)
 ///           [84..115] destinationCaller (bytes32)
 ///
-///         BurnMessage body layout (at outer header offset 116, all big-endian):
-///           [0..3]    version (uint32)
-///           [4..35]   burnToken (bytes32)
-///           [36..67]  mintRecipient (bytes32)
-///           [68..99]  amount (uint256)
-///           [100..131] messageSender (bytes32)
-///           [132..163] feeExecuted (uint256)  — CCTP V2 Fast Transfer field;
-///                       zero for Standard Transfer. The CCTP V2 transmitter mints
-///                       (amount - feeExecuted) to the mintRecipient — NOT the full amount.
+///         BurnMessageV2 body layout (at outer header offset 116, all big-endian).
+///         Reference: Circle CCTP V2 BurnMessage spec
+///         https://developers.circle.com/stablecoins/docs/cctp-technical-reference
+///
+///           Body offset | Field           | Size (bytes)
+///           ------------|-----------------|-------------
+///           [0..3]      | version         | 4
+///           [4..35]     | burnToken       | 32
+///           [36..67]    | mintRecipient   | 32
+///           [68..99]    | amount          | 32
+///           [100..131]  | messageSender   | 32
+///           [132..163]  | maxFee          | 32  — caller-specified fee ceiling
+///           [164..195]  | feeExecuted     | 32  — actual fee taken; zero for Standard Transfer
+///           [196..227]  | expirationBlock | 32
+///           [228+]      | hookData        | dynamic (may be empty)
+///
+///         The CCTP V2 transmitter mints (amount - feeExecuted) to mintRecipient.
+///         feeExecuted <= maxFee always; feeExecuted == 0 for Standard Transfer.
 library CctpMessageDecoder {
-    /// @dev Minimum message length: 116-byte header + 164-byte V2 body.
-    uint256 internal constant MIN_MESSAGE_LEN = 116 + 164;
+    /// @dev Minimum message length: 116-byte header + 228-byte fixed V2 body
+    ///      (version + burnToken + mintRecipient + amount + messageSender +
+    ///       maxFee + feeExecuted + expirationBlock = 4+32+32+32+32+32+32+32 = 228).
+    ///      hookData (offset 228+) is optional and not read here.
+    uint256 internal constant MIN_MESSAGE_LEN = 116 + 228;
 
     /// @dev Returns the `nonce` embedded in the outer CCTP message header.
     ///      Header layout (bytes):
@@ -72,12 +84,13 @@ library CctpMessageDecoder {
         returns (uint256 amount, bytes32 mintRecipient, uint256 feeExecuted)
     {
         require(message.length >= MIN_MESSAGE_LEN, "CCTP: message body too short");
-        // body offset 36..67 = mintRecipient
+        // body offset 36..67  = mintRecipient (32 bytes)
         mintRecipient = bytes32(message[116 + 36 : 116 + 68]);
-        // body offset 68..99 = amount (gross, before fee deduction)
+        // body offset 68..99  = amount (uint256, gross before fee deduction)
         amount        = uint256(bytes32(message[116 + 68 : 116 + 100]));
-        // body offset 132..163 = feeExecuted (zero for Standard Transfer)
-        feeExecuted   = uint256(bytes32(message[116 + 132 : 116 + 164]));
+        // body offset 132..163 = maxFee  (not read — ceil only, not the actual fee taken)
+        // body offset 164..195 = feeExecuted (zero for Standard Transfer; > 0 for Fast Transfer)
+        feeExecuted   = uint256(bytes32(message[116 + 164 : 116 + 196]));
     }
 }
 

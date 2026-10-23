@@ -43,34 +43,55 @@ contract TaskITest_I1 is TaskITestBase {
 
     MockMessageTransmitter public transmitter;
 
-    // ─── helper: build a fake CCTP V2 message that decodes correctly ──────────
-    // Outer header (116 bytes): version(4), srcDomain(4), dstDomain(4), nonce(8), ... padding to 116
-    // BurnMessage V2 body appended at offset 116 (164 bytes):
+    // ─── helper: build a fake CCTP V2 message matching the real BurnMessageV2 layout ───
+    //
+    // Outer header (116 bytes):
+    //   [0..3]   version(4)  [4..7] srcDomain(4)  [8..11] dstDomain(4)
+    //   [12..19] nonce(8)    [20..51] sender(32)   [52..83] recipient(32)
+    //   [84..115] destinationCaller(32)
+    //
+    // BurnMessageV2 body (228 bytes, at message offset 116):
     //   [0..3]    version(4)
     //   [4..35]   burnToken(32)
-    //   [36..67]  mintRecipient (bytes32)
-    //   [68..99]  amount (uint256)
+    //   [36..67]  mintRecipient(32)
+    //   [68..99]  amount(32)
     //   [100..131] messageSender(32)
-    //   [132..163] feeExecuted (uint256)  — CCTP V2 field
+    //   [132..163] maxFee(32)        — fee ceiling (not the actual fee)
+    //   [164..195] feeExecuted(32)   — actual fee taken; 0 for Standard Transfer
+    //   [196..227] expirationBlock(32)
+    //
+    // Total minimum message length: 116 + 228 = 344 bytes.
     function _buildMessage(uint64 nonce_, uint256 amount_, address mintRecipient_)
         internal pure returns (bytes memory)
     {
-        return _buildMessageWithFee(nonce_, amount_, mintRecipient_, 0);
+        return _buildMessageWithFee(nonce_, amount_, mintRecipient_, 0, 0);
     }
 
+    /// @dev Build with a specific feeExecuted; maxFee is set to feeExecuted as a safe ceiling.
     function _buildMessageWithFee(
         uint64 nonce_,
         uint256 amount_,
         address mintRecipient_,
         uint256 feeExecuted_
     ) internal pure returns (bytes memory) {
+        return _buildMessageWithFee(nonce_, amount_, mintRecipient_, feeExecuted_, feeExecuted_);
+    }
+
+    /// @dev Full builder: explicit maxFee and feeExecuted (feeExecuted <= maxFee in real messages).
+    function _buildMessageWithFee(
+        uint64 nonce_,
+        uint256 amount_,
+        address mintRecipient_,
+        uint256 feeExecuted_,
+        uint256 maxFee_
+    ) internal pure returns (bytes memory) {
         bytes memory header = new bytes(116);
-        // nonce at bytes [12..19]
+        // nonce at header bytes [12..19] (big-endian uint64)
         for (uint256 i = 0; i < 8; i++) {
             header[19 - i] = bytes1(uint8(nonce_ >> (i * 8)));
         }
-        // V2 body: 164 bytes (132 original + 32 for feeExecuted)
-        bytes memory body = new bytes(164);
+        // BurnMessageV2 body: 228 bytes
+        bytes memory body = new bytes(228);
         // mintRecipient at body[36..67]
         bytes32 recipientWord = bytes32(uint256(uint160(mintRecipient_)));
         for (uint256 i = 0; i < 32; i++) {
@@ -81,11 +102,17 @@ contract TaskITest_I1 is TaskITestBase {
         for (uint256 i = 0; i < 32; i++) {
             body[68 + i] = amountWord[i];
         }
-        // feeExecuted at body[132..163]
+        // maxFee at body[132..163]
+        bytes32 maxFeeWord = bytes32(maxFee_);
+        for (uint256 i = 0; i < 32; i++) {
+            body[132 + i] = maxFeeWord[i];
+        }
+        // feeExecuted at body[164..195]
         bytes32 feeWord = bytes32(feeExecuted_);
         for (uint256 i = 0; i < 32; i++) {
-            body[132 + i] = feeWord[i];
+            body[164 + i] = feeWord[i];
         }
+        // expirationBlock at body[196..227] — left zero (no expiry in tests)
         return abi.encodePacked(header, body);
     }
 
@@ -303,4 +330,77 @@ contract TaskITest_I1 is TaskITestBase {
         assertEq(vault.totalAssets(), navBefore - (deployAmt - netAmt),
             "NAV drops by total cross-chain cost (fee + strategy loss)");
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // L1 Test 9 — body shorter than 228 bytes reverts "CCTP: message body too short"
+    //             MIN_MESSAGE_LEN = 116 + 228 = 344. A 343-byte message must revert.
+    // ─────────────────────────────────────────────────────────────────────────
+    function test_L1_body_too_short_reverts() public {
+        uint64 nonce = _deployCrossChainI1(10_000e6);
+
+        // Build a valid 344-byte message then truncate to 343 bytes.
+        bytes memory full = _buildMessage(nonce, 10_000e6, address(vault));
+        assertEq(full.length, 344, "sanity: builder produces 344-byte message");
+
+        bytes memory truncated = new bytes(343);
+        for (uint256 i = 0; i < 343; i++) truncated[i] = full[i];
+
+        vm.prank(manager);
+        vm.expectRevert(bytes("CCTP: message body too short"));
+        vault.settleCrossChainWithMessage(nonce, truncated, "");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // L1 Test 10 — golden fixture: a hand-crafted BurnMessageV2 with known field
+    //              values round-trips through settleCrossChainWithMessage and the
+    //              emitted events must carry exactly those values.
+    //
+    //  This test exercises CctpMessageDecoder end-to-end without a shim.
+    //
+    //  Fixture fields:
+    //    amount       = 5_000_000   (5 USDC, 6 dec)
+    //    maxFee       = 100_000     (0.1 USDC ceiling — placed at body[132..163])
+    //    feeExecuted  = 50_000      (0.05 USDC actual — placed at body[164..195])
+    //    mintRecipient = vault address
+    //
+    //  If the decoder were reading body[132] instead of body[164], feeExecuted would
+    //  equal maxFee (100_000) instead of 50_000, and expectedNet would be 4_900_000
+    //  instead of 4_950_000 — the transmitter mints 4_950_000, the check fails.
+    //  This test therefore fails specifically when the offset is wrong.
+    // ─────────────────────────────────────────────────────────────────────────
+    function test_L1_golden_fixture_correct_offset() public {
+        uint256 fixtureAmount  = 5_000_000;  // 5 USDC
+        uint256 fixtureMaxFee  = 100_000;    // 0.1 USDC — must NOT be decoded as feeExecuted
+        uint256 fixtureFeeExec = 50_000;     // 0.05 USDC actual fee
+        uint256 expectedNet    = fixtureAmount - fixtureFeeExec; // 4_950_000
+
+        // Pre-condition: maxFee != feeExecuted so an offset mix-up is detectable.
+        assertTrue(fixtureMaxFee != fixtureFeeExec, "fixture design: maxFee must differ from feeExecuted");
+
+        // Deploy 5 USDC cross-chain so there is a pending nonce.
+        uint64 nonce = _deployCrossChainI1(fixtureAmount);
+
+        // Transmitter mints exactly expectedNet (= amount - feeExecuted).
+        transmitter.setMintAmount(expectedNet);
+        uint256 navBefore = vault.totalAssets();
+
+        bytes memory msg_ = _buildMessageWithFee(
+            nonce, fixtureAmount, address(vault), fixtureFeeExec, fixtureMaxFee
+        );
+        assertEq(msg_.length, 344, "fixture message length must be 344 bytes");
+
+        vm.prank(manager);
+        // Expect CrossChainFeeDeducted with the actual feeExecuted (50_000), not maxFee.
+        vm.expectEmit(true, false, false, true);
+        emit AutonomousVault.CrossChainFeeDeducted(nonce, fixtureFeeExec);
+        // Expect CrossChainSettled: received=4_950_000, shortfall=50_000
+        vm.expectEmit(true, false, false, true);
+        emit AutonomousVault.CrossChainSettled(nonce, expectedNet, fixtureFeeExec);
+        vault.settleCrossChainWithMessage(nonce, msg_, "");
+
+        // NAV drops by exactly fixtureFeeExec (not fixtureMaxFee).
+        assertEq(vault.totalAssets(), navBefore - fixtureFeeExec,
+            "NAV drop must equal feeExecuted, not maxFee");
+    }
+
 }
