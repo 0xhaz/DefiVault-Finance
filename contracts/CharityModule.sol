@@ -59,6 +59,7 @@ contract CharityModule is Ownable2Step {
     event CharityRateChangeProposed(uint256 proposed, uint256 executeAfter);
     event CharityRateConfirmed(uint256 previous, uint256 confirmed);
     event CharityRateChangeCancelled(uint256 cancelled);
+    event EscrowSet(address indexed escrow);
 
     // ── Constants ────────────────────────────────────────────────────────────
 
@@ -90,6 +91,10 @@ contract CharityModule is Ownable2Step {
 
     address public immutable asset;
     address public immutable vault;
+    /// @notice PurificationEscrow address.  Set after escrow deploy via setEscrow().
+    ///         distributeCharity() accepts calls from either vault or escrow so that
+    ///         the waterfall path (vault → escrow → charityModule) works correctly.
+    address public escrow;
     /// @notice Optional Shariah registry for single-source board membership (I4).
     ///         When set, board-gated functions check registry.isBoard(msg.sender).
     ///         When address(0), only the owner can call those functions.
@@ -135,18 +140,30 @@ contract CharityModule is Ownable2Step {
      * @return charityAmount  USDC sent to the charity wallet.
      * @return remaining      grossProfit minus charityAmount; passed on to Musharakah split.
      */
+    /// @notice Wire the PurificationEscrow after it is deployed.
+    ///         Must be called once by the owner before any profit claim.
+    ///         The escrow calls distributeCharity() as part of executeWaterfall().
+    function setEscrow(address escrow_) external onlyOwner {
+        if (escrow_ == address(0)) revert ZeroWallet();
+        escrow = escrow_;
+        emit EscrowSet(escrow_);
+    }
+
     function distributeCharity(uint256 grossProfit)
         external
         returns (uint256 charityAmount, uint256 remaining)
     {
-        if (msg.sender != vault) revert NotVault();
+        // Accept calls from the vault (direct) or from the escrow (waterfall path).
+        if (msg.sender != vault && msg.sender != escrow) revert NotVault();
         if (grossProfit == 0) revert ZeroAmount();
 
         charityAmount = (grossProfit * charityBps) / 10_000;
         remaining     = grossProfit - charityAmount;
 
         if (charityAmount > 0) {
-            IERC20(asset).safeTransferFrom(vault, charityWallet, charityAmount);
+            // Pull from msg.sender (the escrow holds the profit and has already
+            // called forceApprove(charityModule, grossProfit) before this call).
+            IERC20(asset).safeTransferFrom(msg.sender, charityWallet, charityAmount);
         }
 
         totalCharityDistributed += charityAmount;

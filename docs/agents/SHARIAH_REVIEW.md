@@ -486,3 +486,20 @@ The 4% hurdle is applied to `afterRecovery` (not the full gross), and the manage
 6. `invariant_lockedProfitDecaysToZero` — locked profit reaches zero after `unlockedAt` passes.
 
 **Board action required.** Confirm the above invariants accurately capture the Shariah depositor-fairness requirements. In particular, confirm invariant 4 (share-price monotonicity) reflects the board's understanding of how deposits and redemptions interact with NAV.
+
+
+---
+
+## SR-023 — goldCrossChainBlocked flag set on live deployment
+
+**Status:** REVIEW  
+**Raised by:** Fork verification of rehearsal step 5 (2026-10-28)  
+**Severity:** LOW — operational, not a contract defect
+
+The `AutonomousVault.goldCrossChainBlocked` flag is `true` on the live Arc Testnet deployment (`0xba094D5B01F4fd245EA345Be6B8ac833488c81B0`). This flag is set automatically by `_goldNonAtomicBlock()` when a cross-chain deploy would use a PAXG/gold position to source the USDC (non-atomic gold exchange risk). It prevents any cross-chain capital deployment until the owner calls `setGoldCrossChainBlocked(false)`.
+
+**Board action required:**  
+Confirm whether the board considers cross-chain deployment of USDC sourced from gold exchanges permissible. If yes, the owner may call `setGoldCrossChainBlocked(false)` before step 5 of the rehearsal. If no, the flag should remain set and CCTP cross-chain deployment should be limited to non-gold USDC positions only.
+
+**Implication for mainnet:**  
+On a mainnet deploy where gold adapters are active, `goldCrossChainBlocked` will be set whenever a gold position is open. The board must issue a ruling on whether cross-chain deployment is permitted while a gold position is held — otherwise step 5 (CCTP round trip) will be blocked in production.

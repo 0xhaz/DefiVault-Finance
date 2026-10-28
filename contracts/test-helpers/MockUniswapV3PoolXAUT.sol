@@ -107,7 +107,11 @@ contract MockUniswapV3PoolXAUT {
         if (block.timestamp > params.deadline) revert DeadlinePassed();
         if (params.amountIn == 0) revert ZeroAmountIn();
 
-        // Pull tokenIn from caller
+        // Pull tokenIn from caller.
+        // NOTE: if tokenIn is the Arc Testnet USDC predeploy, safeTransferFrom triggers a
+        // delegatecall proxy that can overflow the stack when called from a Foundry script.
+        // In tests this is fine (no delegatecall depth). In production the vault pre-approves
+        // via forceApprove so the standard transferFrom path is safe at runtime.
         IERC20(params.tokenIn).safeTransferFrom(msg.sender, address(this), params.amountIn);
 
         bool usdcToXaut = params.tokenIn == address(usdc);
@@ -148,9 +152,34 @@ contract MockUniswapV3PoolXAUT {
     }
 
     /// @notice Fund the pool with tokens so swaps can execute.
+    ///         Pulls tokens from msg.sender via transferFrom.
+    ///         NOTE: on Arc Testnet the USDC predeploy's delegatecall proxy can cause a
+    ///         StackUnderflow when called from a Foundry broadcast script. Use
+    ///         fundPoolDirect() instead when deploying via forge script.
     function fundPool(uint256 usdcAmount, uint256 xautAmount) external {
         if (usdcAmount > 0) usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
         if (xautAmount > 0) xaut.safeTransferFrom(msg.sender, address(this), xautAmount);
+    }
+
+    /// @notice Fund the pool by accepting tokens already transferred to this contract.
+    ///         Caller must send tokens directly (transfer, not approve+transferFrom) before
+    ///         calling this function. This avoids triggering the Arc Testnet USDC predeploy's
+    ///         delegatecall stack depth issue in Foundry broadcast scripts.
+    ///         The function verifies the pool actually holds at least the declared amounts.
+    function fundPoolDirect(uint256 usdcAmount, uint256 xautAmount) external {
+        // Skip USDC balance check when usdcAmount == 0 to avoid calling the Arc Testnet
+        // USDC predeploy (delegatecall proxy causes stack overflow in broadcast scripts).
+        if (usdcAmount > 0) {
+            require(
+                usdc.balanceOf(address(this)) >= usdcAmount,
+                "MockPool: insufficient USDC already transferred"
+            );
+        }
+        require(
+            xaut.balanceOf(address(this)) >= xautAmount,
+            "MockPool: insufficient XAUT already transferred"
+        );
+        // Tokens are already in the pool — nothing else to do.
     }
 
     // ─────────────────────────────────────────────────────────────

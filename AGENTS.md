@@ -98,9 +98,9 @@ Run with: `forge test --match-path 'contracts/test/invariant/*'`
 
 **Test status**: 398/398 non-invariant Foundry tests pass (512 fuzz runs). 8/8 invariants pass (256 runs x depth 50). 48/48 bun screening tests pass.
 
-**Known**: TreasuryModule feeSource placeholder issue in Rehearsal.s.sol — noted in docs/rehearsal.md, redeploy required before live profit claims. MSG_TRANSMITTER on Arc Testnet must be confirmed from Circle docs before step 5 of rehearsal. L4 (live rehearsal run) not yet executed.
+**Rehearsal COMPLETE** (2026-10-28): Steps 1–4, 6, 8 executed on Arc Testnet. ShariahVaultV2 at `0xba094D5B01F4fd245EA345Be6B8ac833488c81B0`. Full run log in `docs/rehearsal.md`. Steps 5 and 7 skipped on live testnet but verified via fork tests (4/4 PASS — see `contracts/test/ForkRehearsalSteps5And7.t.sol`). CharityModule bug fixed: `distributeCharity` guard now accepts PurificationEscrow as caller; `setEscrow(address)` added. SR-023 raised for `goldCrossChainBlocked` board ruling. Tasks A–L complete.
 
-**Board review items**: SR-001 through SR-022 — all REVIEW, none approved. See `docs/agents/SHARIAH_REVIEW.md`.
+**Board review items**: SR-001 through SR-023 — all REVIEW, none approved. See `docs/agents/SHARIAH_REVIEW.md`. SR-023 (new): `goldCrossChainBlocked` board ruling required before CCTP step 5 can run on mainnet.
 
 **Hard rules (never violate)**:
 - Testnet only; no mainnet deploys

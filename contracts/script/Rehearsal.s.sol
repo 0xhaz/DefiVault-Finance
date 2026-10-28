@@ -37,11 +37,17 @@ contract TestnetRegistryShortTimelock is ShariahAdapterRegistry {
     /// @notice 2-minute timelock for rehearsal scripts.
     uint256 public constant TESTNET_TIMELOCK_PERIOD = 2 minutes;
 
+    /// @notice Separate proposal store keyed by adapter — holds the 2-minute executeAfter.
+    mapping(address => uint256) public testnetExecuteAfter;
+    mapping(address => bytes32) public testnetPronouncementHash;
+    mapping(address => uint256) public testnetExpiresAt;
+
     constructor(address initialOwner, address initialBoardMember)
         ShariahAdapterRegistry(initialOwner, initialBoardMember)
     {}
 
     /// @notice Propose screening with the 2-minute testnet timelock.
+    /// After 2 minutes call executeScreeningTestnet(adapter).
     function proposeScreeningTestnet(
         address adapter,
         bytes32 pronouncementHash,
@@ -50,16 +56,30 @@ contract TestnetRegistryShortTimelock is ShariahAdapterRegistry {
         require(boardRole[msg.sender], "TestnetReg: not board");
         require(pronouncementHash != bytes32(0), "TestnetReg: zero hash");
         require(expiresAt > block.timestamp, "TestnetReg: expiresAt in past");
+        testnetExecuteAfter[adapter]    = block.timestamp + TESTNET_TIMELOCK_PERIOD;
+        testnetPronouncementHash[adapter] = pronouncementHash;
+        testnetExpiresAt[adapter]       = expiresAt;
+    }
 
-        // Write directly to the screenings mapping via the parent's storage layout.
-        // We call proposeScreening (parent) but then overwrite the executeAfter timestamp.
-        // Simplest: call parent's proposeScreening first (which uses TIMELOCK_PERIOD=30 days),
-        // then immediately set block.timestamp so executeAfter has already elapsed.
-        // This is only valid on a fork with vm.warp; on live chain it requires a 30-day wait.
-        // For a 2-minute live chain test: just wait 2 minutes after proposeScreening and call
-        // the PARENT's executeScreening — the 30-day timelock has NOT elapsed, so it will revert.
-        // RECOMMENDATION: run the rehearsal on a FORK using `--fork-url` + `vm.warp`.
-        this.proposeScreening(adapter, pronouncementHash, expiresAt);
+    /// @notice Execute screening after the 2-minute testnet timelock has elapsed.
+    /// Writes directly to the parent's `screenings` mapping so the vault sees it.
+    function executeScreeningTestnet(address adapter) external {
+        require(boardRole[msg.sender], "TestnetReg: not board");
+        uint256 executeAfter = testnetExecuteAfter[adapter];
+        require(executeAfter != 0, "TestnetReg: not proposed");
+        require(block.timestamp >= executeAfter, "TestnetReg: timelock not elapsed");
+        bytes32 pHash  = testnetPronouncementHash[adapter];
+        uint256 expiry = testnetExpiresAt[adapter];
+        // Clear testnet proposal.
+        delete testnetExecuteAfter[adapter];
+        delete testnetPronouncementHash[adapter];
+        delete testnetExpiresAt[adapter];
+        // Write to parent's screenings storage.
+        screenings[adapter] = Screening({
+            pronouncementHash: pHash,
+            expiresAt: expiry,
+            setAt: block.timestamp
+        });
     }
 }
 
@@ -136,10 +156,32 @@ contract Rehearsal is Script {
 
     RehearsalAddresses internal _addrs;
 
+    // ── Address loader: reads from env vars, falls back to step-1 deployed values ──
+    // Add REHEARSAL_* vars to .env after step1_deploy() so steps 2-8 find the contracts.
+
+    function _loadAddrs() internal {
+        // Defaults are the step-1 deploy from 2026-10-28 (Arc Testnet, second run).
+        _addrs.registry      = vm.envOr("REHEARSAL_REGISTRY",       address(0x23836611FDF05fAc07a12416e9c8C250F9cdF671));
+        _addrs.mockPaxg      = vm.envOr("REHEARSAL_MOCK_PAXG",      address(0x90476D68572E615a1E1447928c8c5d8AABaC6B51));
+        _addrs.mockXaut      = vm.envOr("REHEARSAL_MOCK_XAUT",      address(0xC57b6125d2a15C09E3624eb78df06e407F6A9912));
+        _addrs.xauOracle     = vm.envOr("REHEARSAL_XAU_ORACLE",     address(0x214a54F86B84589068Cf459749344b1F637A60f7));
+        _addrs.xautPool      = vm.envOr("REHEARSAL_XAUT_POOL",      address(0x6A46a3A9608437e832510EfD16a21898dA02dc66));
+        _addrs.zakatModule   = vm.envOr("REHEARSAL_ZAKAT_MODULE",   address(0xB3fC6A662196EE2c424B6bdfBf9343d96d29569c));
+        _addrs.treasury      = vm.envOr("REHEARSAL_TREASURY",       address(0xF5B550B87476a4359f1307AeFC425cCC6E2530f5));
+        _addrs.vault         = vm.envOr("REHEARSAL_VAULT",          address(0xba094D5B01F4fd245EA345Be6B8ac833488c81B0));
+        _addrs.charityModule = vm.envOr("REHEARSAL_CHARITY_MODULE", address(0x1D05a0010C78B984b0De2735A6E868E9c9f5d99F));
+        _addrs.escrow        = vm.envOr("REHEARSAL_ESCROW",         address(0xcC58b11c3Cd251a44989fEf1f05BdcB0e16375ff));
+        _addrs.goldSpreadAdap= vm.envOr("REHEARSAL_GOLD_SPREAD",    address(0x55907Fc4E60A5353D9afD17D56F229192Fd9c3ED));
+        _addrs.goldAllocAdap = vm.envOr("REHEARSAL_GOLD_ALLOC",     address(0x04FdFd46F0c93569F3b592C106dDc292fc2f975C));
+        _addrs.shariahAgg    = vm.envOr("REHEARSAL_SHARIAH_AGG",    address(0x13340E36E59F8b504faD9B1b731D51fde1697C8A));
+        _addrs.executor      = vm.envOr("REHEARSAL_EXECUTOR",       address(0xA800540A029120C475c15345d5D65FB9C898d85c));
+    }
+
     // ── Step 1: Deploy full stack ─────────────────────────────────────────────
 
     function step1_deploy() public returns (RehearsalAddresses memory) {
-        address deployer      = msg.sender;
+        uint256 deployerPk    = vm.envUint("DEPLOYER_PK");
+        address deployer      = vm.addr(deployerPk);
         address boardMultisig = vm.envOr("BOARD_MULTISIG", deployer);
         address agentWallet   = vm.envOr("AGENT_WALLET", deployer);
 
@@ -147,7 +189,10 @@ contract Rehearsal is Script {
         console.log("Deployer       :", deployer);
         console.log("Board multisig :", boardMultisig);
 
-        vm.startBroadcast();
+        // Pass the private key so every broadcasted call originates from the deployer EOA.
+        // vm.startBroadcast() with no arg uses msg.sender (the script contract), which has
+        // no USDC balance and causes transferFrom to revert on the USDC predeploy.
+        vm.startBroadcast(deployerPk);
         _step1a_registry(deployer, boardMultisig);
         _step1b_tokens(deployer);
         _step1c_vaultStack(deployer);
@@ -181,9 +226,15 @@ contract Rehearsal is Script {
         _addrs.xautPool = address(pool);
 
         xaut.mint(deployer, 5_000e6);
-        xaut.approve(_addrs.xautPool, 5_000e6);
-        IERC20(USDC).approve(_addrs.xautPool, 16_500_000e6);
-        pool.fundPool(16_500_000e6, 5_000e6);
+        // Transfer tokens directly to the pool (avoids Arc Testnet USDC transferFrom
+        // delegatecall stack depth issue). Then call fundPoolDirect to validate.
+        // Seed with MockXAUT only (no USDC transfer — Arc Testnet USDC predeploy
+        // triggers a delegatecall stack overflow on any ERC-20 call from a broadcast
+        // script). The vault swaps USDC→XAUT so only XAUT needs to be pre-loaded on
+        // the output side. USDC flows into the pool naturally during swaps.
+        uint256 poolXautSeed = vm.envOr("POOL_XAUT_SEED", uint256(100e6)); // 100 XAUT (6 dec)
+        xaut.transfer(_addrs.xautPool, poolXautSeed);
+        pool.fundPoolDirect(0, poolXautSeed);
         paxg.mint(deployer, 5_000e18);
     }
 
@@ -222,6 +273,9 @@ contract Rehearsal is Script {
         );
         _addrs.escrow = address(escrow);
         vault.setPurificationEscrow(_addrs.escrow);
+        // Wire escrow back into CharityModule so distributeCharity() accepts the
+        // escrow as caller (the waterfall path is: vault → escrow → charityModule).
+        CharityModule(_addrs.charityModule).setEscrow(_addrs.escrow);
     }
 
     function _step1d_adapters(address deployer) internal {
@@ -270,6 +324,7 @@ contract Rehearsal is Script {
     // ── Step 2: Three wallets deposit ─────────────────────────────────────────
 
     function step2_deposits() public {
+        _loadAddrs();
         console.log("=== STEP 2: Three wallets deposit 100 USDC each ===");
         console.log("Vault:", _addrs.vault);
         console.log("NOTE: Run each broadcast separately with each wallet's private key:");
@@ -302,30 +357,32 @@ contract Rehearsal is Script {
     // ── Step 3: Board screens S3-H (HalalLPAdapter) via short timelock ────────
 
     function step3_screenS3H(address halalLpAdapter) public {
-        address deployer      = msg.sender;
-        address boardMultisig = vm.envOr("BOARD_MULTISIG", deployer);
+        _loadAddrs();
+        uint256 boardPk       = vm.envUint("BOARD_PK");
+        address boardMultisig = vm.addr(boardPk);
 
         console.log("=== STEP 3: Screen S3-H (HalalLP) via 2-minute testnet timelock ===");
         console.log("NOTE: TestnetRegistryShortTimelock TIMELOCK_PERIOD = 2 minutes.");
         console.log("NEVER use this contract on mainnet.");
+        console.log("Board address:", boardMultisig);
 
         bytes32 pronouncementHash = keccak256("SR-011-REHEARSAL-TESTNET-ONLY");
         uint256 expiresAt         = block.timestamp + 365 days;
 
-        vm.startBroadcast(); // must be boardMultisig
-
+        vm.startBroadcast(boardPk);
         TestnetRegistryShortTimelock reg = TestnetRegistryShortTimelock(_addrs.registry);
-        reg.proposeScreening(halalLpAdapter, pronouncementHash, expiresAt);
-        console.log("Proposed screening for HalalLPAdapter:", halalLpAdapter);
+        reg.proposeScreeningTestnet(halalLpAdapter, pronouncementHash, expiresAt);
+        console.log("Proposed screening for adapter:", halalLpAdapter);
         console.log("Wait 2 minutes, then call step3b_executeScreening()");
-
         vm.stopBroadcast();
     }
 
     function step3b_executeScreening(address halalLpAdapter) public {
+        _loadAddrs();
+        uint256 boardPk = vm.envUint("BOARD_PK");
         console.log("=== STEP 3b: Execute S3-H screening after 2-minute delay ===");
-        vm.startBroadcast();
-        TestnetRegistryShortTimelock(_addrs.registry).executeScreening(halalLpAdapter);
+        vm.startBroadcast(boardPk);
+        TestnetRegistryShortTimelock(_addrs.registry).executeScreeningTestnet(halalLpAdapter);
         ShariahVaultV2(_addrs.vault).setScreened(halalLpAdapter, true);
         console.log("S3-H screening executed. HalalLPAdapter is now screened.");
         vm.stopBroadcast();
@@ -349,11 +406,13 @@ contract Rehearsal is Script {
     // ── Step 5: Cross-chain round trip ────────────────────────────────────────
 
     function step5_deployCrossChain() public returns (uint64 nonce) {
-        console.log("=== STEP 5: Cross-chain deploy to ETH-SEPOLIA ===");
-        address deployer = msg.sender;
-        bytes32 recipient = bytes32(uint256(uint160(deployer))); // return to deployer
+        _loadAddrs();
+        uint256 deployerPk = vm.envUint("DEPLOYER_PK");
+        address deployer   = vm.addr(deployerPk);
+        bytes32 recipient  = bytes32(uint256(uint160(deployer))); // return to deployer
 
-        vm.startBroadcast();
+        console.log("=== STEP 5: Cross-chain deploy to ETH-SEPOLIA ===");
+        vm.startBroadcast(deployerPk);
         ShariahVault(_addrs.vault).deployCrossChain(ETH_SEP_DOMAIN, recipient, CCTP_AMOUNT);
         // nonce is emitted in CapitalDeployedCrossChain event; read from tx receipt
         nonce = 0; // placeholder — read actual nonce from event
@@ -368,9 +427,11 @@ contract Rehearsal is Script {
         bytes calldata message,
         bytes calldata attestation
     ) public {
+        _loadAddrs();
+        uint256 deployerPk = vm.envUint("DEPLOYER_PK");
         console.log("=== STEP 5b: Settle cross-chain return ===");
         console.log("Nonce:", nonce);
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPk);
         ShariahVault(_addrs.vault).settleCrossChainWithMessage(nonce, message, attestation);
         console.log("settleCrossChainWithMessage succeeded. NAV updated, feeExecuted absorbed.");
         vm.stopBroadcast();
@@ -379,6 +440,7 @@ contract Rehearsal is Script {
     // ── Step 6: Force stale oracle ────────────────────────────────────────────
 
     function step6_forceStaleOracle() public {
+        _loadAddrs();
         console.log("=== STEP 6: Force stale gold oracle ===");
         console.log("Advancing time past maxStalenessSecs (1 day) WITHOUT updating oracle.");
         console.log("On a live chain, just wait > 1 day without poking the oracle.");
@@ -405,8 +467,10 @@ contract Rehearsal is Script {
     // ── Step 7: Claim profit ──────────────────────────────────────────────────
 
     function step7_claimProfit() public {
+        _loadAddrs();
+        uint256 deployerPk = vm.envUint("DEPLOYER_PK");
         console.log("=== STEP 7: Claim profit - waterfall + 3-day unlock ===");
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPk);
         // Approve escrow to pull grossProfit from vault
         IERC20(USDC).approve(_addrs.escrow, PROFIT_CLAIM);
         // Fund vault with synthetic profit
@@ -423,6 +487,7 @@ contract Rehearsal is Script {
     // ── Step 8: All three wallets redeem ──────────────────────────────────────
 
     function step8_redeemAll() public {
+        _loadAddrs();
         console.log("=== STEP 8: All three wallets redeem fully ===");
 
         uint256[3] memory pks;
