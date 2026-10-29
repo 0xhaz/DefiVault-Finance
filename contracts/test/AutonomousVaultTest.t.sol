@@ -5,22 +5,20 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IStrategyAdapter} from "../IStrategyAdapter.sol";
 import {AutonomousVault} from "../AutonomousVault.sol";
+import {AutonomousVaultHarness} from "../test-helpers/AutonomousVaultHarness.sol";
+import {ConventionalVault} from "../ConventionalVault.sol";
+import {TreasuryModule} from "../TreasuryModule.sol";
 import {MockERC20} from "../test-helpers/MockERC20.sol";
 
 // ---------------------------------------------------------------------------
-// Mock token messenger — returns a fixed nonce and accepts burn calls
+// Mock token messenger — records native V2 burn calls without a return value
 // ---------------------------------------------------------------------------
 contract MockTokenMessenger {
-    uint64 public nextNonce = 1;
-
-    function depositForBurnWithCaller(
-        uint256 /*amount*/,
-        uint32 /*destinationDomain*/,
-        bytes32 /*mintRecipient*/,
-        address /*burnToken*/,
-        bytes32 /*destinationCaller*/
-    ) external returns (uint64 nonce) {
-        nonce = nextNonce++;
+    // Task M: V2 burns return no nonce; record all seven arguments instead.
+    bytes public lastCall;
+    function depositForBurn(uint256 amount, uint32 domain, bytes32 recipient, address token,
+        bytes32 caller, uint256 maxFee, uint32 finality) external {
+        lastCall = abi.encode(amount, domain, recipient, token, caller, maxFee, finality);
     }
 }
 
@@ -40,12 +38,19 @@ contract MockMessageTransmitterAVT {
 
 // Helper to build a minimal CCTP message for tests (matches CctpMessageDecoder offsets)
 library TestCctpMsg {
-    function build(uint64 nonce_, uint256 amount_, address recipient_) internal pure returns (bytes memory) {
-        bytes memory header = new bytes(116);
-        for (uint256 i = 0; i < 8; i++) header[19 - i] = bytes1(uint8(nonce_ >> (i * 8)));
+    function build(uint64 nonce_, uint256 amount_, address recipient_) internal view returns (bytes memory) {
+        AutonomousVault target = AutonomousVault(recipient_);
+        // Task M: native 148-byte V2 header, bytes32 nonce and registered remote sender.
+        uint32 remote = target.pendingCrossChainDestinationDomain(1);
+        bytes memory header = abi.encodePacked(
+            uint32(1), remote, target.localDomain(), bytes32(uint256(nonce_)),
+            target.remoteTokenMessenger(remote), bytes32(uint256(uint160(target.tokenMessenger()))),
+            bytes32(uint256(uint160(recipient_))), uint32(2000), uint32(2000) // destinationCaller = vault
+        );
         // BurnMessageV2 body: 228 bytes (version+burnToken+mintRecipient+amount+
         //   messageSender+maxFee+feeExecuted+expirationBlock = 4+32+32+32+32+32+32+32).
         bytes memory body = new bytes(228);
+        body[3] = 0x01; // Task M: native BurnMessageV2 version.
         bytes32 rw = bytes32(uint256(uint160(recipient_)));
         for (uint256 i = 0; i < 32; i++) body[36 + i] = rw[i];
         bytes32 aw = bytes32(amount_);
@@ -117,6 +122,65 @@ contract AutonomousVaultTest is Test {
         usdc.mint(who, amount);
         vm.prank(who);
         usdc.approve(address(vault), amount);
+    }
+
+    // Shortening an active schedule must checkpoint remaining profit instead of moving its start into the future.
+    function test_profitStreaming_shortenActivePeriod_keepsNavAndDepositsLive() public {
+        AutonomousVaultHarness harness = new AutonomousVaultHarness(IERC20(address(usdc)), owner, SOURCE_DOMAIN);
+        usdc.mint(address(harness), 300e6);
+        vm.prank(owner);
+        harness.lockProfit(300e6);
+        skip(1 days);
+        assertEq(harness.totalAssets(), 100e6);
+        vm.prank(owner);
+        harness.setProfitUnlockPeriod(1 days);
+        assertEq(harness.lockedProfit(), 200e6);
+        assertEq(harness.unlockedAt(), block.timestamp + 1 days);
+        assertEq(harness.totalAssets(), 100e6);
+        usdc.mint(alice, 10e6);
+        vm.startPrank(alice);
+        usdc.approve(address(harness), 10e6);
+        harness.deposit(10e6, alice);
+        vm.stopPrank();
+        assertEq(harness.totalAssets(), 110e6);
+        skip(12 hours);
+        assertEq(harness.totalAssets(), 210e6);
+        skip(12 hours);
+        assertEq(harness.totalAssets(), 310e6);
+    }
+
+    // N-15 preserves streaming coverage via a test-only subclass, never a production base entry point.
+    function test_profitStreaming_harnessOnly() public {
+        AutonomousVaultHarness harness = new AutonomousVaultHarness(IERC20(address(usdc)), owner, SOURCE_DOMAIN);
+        usdc.mint(address(harness), 300e6);
+        vm.prank(owner);
+        harness.lockProfit(300e6);
+        assertEq(harness.totalAssets(), 0);
+        skip(1.5 days);
+        assertEq(harness.totalAssets(), 150e6);
+        skip(1.5 days);
+        assertEq(harness.totalAssets(), 300e6);
+        vm.prank(owner);
+        (bool ok,) = address(vault).call(abi.encodeWithSignature("lockProfit(uint256)", 1));
+        assertFalse(ok, "plain base has no external lockProfit");
+    }
+
+    // N-15 preserves ConventionalVault's former inherited locking and proceeds-based recall semantics.
+    function test_conventionalBaseSemantics_unchanged() public {
+        TreasuryModule treasury = new TreasuryModule("Conventional", address(0), address(usdc), 0, 0, 0, owner);
+        ConventionalVault conventional = new ConventionalVault(IERC20(address(usdc)), owner, SOURCE_DOMAIN, address(treasury));
+        usdc.mint(address(conventional), 1_000e6);
+        vm.prank(owner);
+        conventional.lockProfit(100e6);
+        assertEq(conventional.totalAssets(), 900e6);
+        skip(3 days);
+        MockAdapter adapter = new MockAdapter(address(conventional), address(usdc));
+        vm.prank(owner);
+        conventional.deployCapital(address(adapter), 500e6, "");
+        vm.prank(owner);
+        conventional.recallCapital(address(adapter), 400e6);
+        assertEq(conventional.totalDeployed(), 100e6);
+        assertEq(conventional.totalAssets(), 1_000e6);
     }
 
     // -----------------------------------------------------------------------
@@ -304,8 +368,10 @@ contract AutonomousVaultTest is Test {
             new MockMessageTransmitterAVT(address(usdc), address(vault), 150e6);
         vm.prank(owner);
         vault.setMessageTransmitter(address(transmitter));
+        vm.prank(owner);
+        vault.setRemoteTokenMessenger(DEST_DOMAIN, bytes32(uint256(0xCC7)));
 
-        bytes memory msg_  = TestCctpMsg.build(1, 150e6, address(vault));
+        bytes memory msg_  = TestCctpMsg.build(99, 150e6, address(vault));
         vm.prank(owner);
         vault.settleCrossChainWithMessage(1, msg_, "");
 
@@ -330,7 +396,7 @@ contract AutonomousVaultTest is Test {
 
         // Write-off with unused nonce 99 reverts NonceMismatch.
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(AutonomousVault.NonceMismatch.selector, uint64(99)));
+        vm.expectRevert(abi.encodeWithSelector(AutonomousVault.NonceMismatch.selector, uint64(99), uint64(0)));
         vault.settleCrossChain(99, 0); // J1: write-off only; received must be 0
     }
 

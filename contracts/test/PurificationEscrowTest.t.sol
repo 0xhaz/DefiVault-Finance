@@ -218,6 +218,49 @@ contract PurificationEscrowTest is Test {
         usdc.mint(address(vault), 10_000_000e6);
     }
 
+    function test_waterfallHWM_deficitSuppressesManagerShare() public {
+        usdc.approve(address(escrow), 100e6);
+        uint256 beforeBalance = usdc.balanceOf(address(this));
+        (uint256 p, uint256 c, uint256 v, uint256 d) = escrow.executeWaterfallHWM(100e6, 0, 0, 100e6);
+        assertEq(v, 0);
+        assertEq(p + c + v + d, 100e6);
+        assertEq(treasury.pendingFees(), 0);
+        assertEq(usdc.balanceOf(address(this)), beforeBalance - p - c);
+        assertEq(usdc.balanceOf(address(escrow)), 0);
+    }
+
+    function test_waterfallHWM_shareOnlyOnExcessAfterRecoveryAndHurdle() public {
+        usdc.approve(address(escrow), 1_000e6);
+        uint256 beforeBalance = usdc.balanceOf(address(this));
+        (uint256 p, uint256 c, uint256 v, uint256 d) =
+            escrow.executeWaterfallHWM(1_000e6, 365 days, 10_000e6, 200e6);
+        // 975 after charity, less 200 recovery and 400 hurdle: 10% of 375.
+        assertEq(v, 37_500_000);
+        assertEq(treasury.pendingFees(), v);
+        assertEq(p + c + v + d, 1_000e6);
+        assertEq(usdc.balanceOf(address(this)), beforeBalance - 1_000e6 + v + d);
+        assertEq(usdc.balanceOf(address(escrow)), 0);
+    }
+
+    function test_waterfallHWM_zeroDeficitMatchesLegacyABI() public {
+        usdc.approve(address(escrow), 2_000e6);
+        (uint256 p, uint256 c, uint256 v, uint256 d) = escrow.executeWaterfall(1_000e6, 365 days, 10_000e6);
+        (uint256 hp, uint256 hc, uint256 hv, uint256 hd) = escrow.executeWaterfallHWM(1_000e6, 365 days, 10_000e6, 0);
+        assertEq(p, hp);
+        assertEq(c, hc);
+        assertEq(v, hv);
+        assertEq(d, hd);
+        assertEq(v, 57_500_000);
+    }
+
+    function test_waterfallHWM_preservesAccessAndZeroAmountGuards() public {
+        vm.prank(other);
+        vm.expectRevert(PurificationEscrow.NotVault.selector);
+        escrow.executeWaterfallHWM(100e6, 0, 0, 100e6);
+        vm.expectRevert(PurificationEscrow.ZeroAmount.selector);
+        escrow.executeWaterfallHWM(0, 0, 0, 100e6);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // 1. Waterfall invariant: purified + charity + vaultShare + depositorShare == grossProfit
     // ─────────────────────────────────────────────────────────────────────────
@@ -441,16 +484,17 @@ contract PurificationEscrowTest is Test {
 
         uint256 balanceBefore = usdc.balanceOf(address(this));
 
-        (,,, uint256 depositorShare) = escrow.executeWaterfall(gross, 365 days, 10_000e6);
+        (,, uint256 vaultShare, uint256 depositorShare) = escrow.executeWaterfall(gross, 365 days, 10_000e6);
 
         uint256 balanceAfter = usdc.balanceOf(address(this));
-        // vault sent gross to escrow, escrow returned depositorShare back
-        // net change = depositorShare - gross
+        // F-01 fix: vault sent gross to escrow; escrow returns depositorShare AND the
+        // manager's vaultShare tokens so pendingFees stays backed 1:1 at the vault.
         assertEq(
             balanceAfter,
-            balanceBefore - gross + depositorShare,
-            "vault balance should change by depositorShare - gross"
+            balanceBefore - gross + depositorShare + vaultShare,
+            "vault balance should change by depositorShare + vaultShare - gross"
         );
+        assertEq(usdc.balanceOf(address(escrow)), 0, "escrow must hold no residual tokens");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

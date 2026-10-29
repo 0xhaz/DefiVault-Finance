@@ -9,6 +9,7 @@ contract TreasuryModule is Ownable2Step {
     error InsufficientPending(uint256 requested, uint256 available);
     error NotShariahTreasury();
     error InvalidBps();
+    error ZeroAddress();
 
     struct FeeDisclosure {
         string treasuryType;
@@ -31,9 +32,13 @@ contract TreasuryModule is Ownable2Step {
     );
     event AdminFeeParamsUpdated(uint256 newAdminFeeBps);
     event MusharakahParamsUpdated(uint256 newShareBps, uint256 newHurdleBps);
+    event FeeSourceUpdated(address indexed previousFeeSource, address indexed newFeeSource);
+    event ProfitRecorderUpdated(address indexed previousRecorder, address indexed newRecorder);
 
     string public treasuryType;
-    address public immutable feeSource;
+    address public feeSource;
+    /// @notice Optional second caller allowed to call recordMusharakahProfit (PurificationEscrow).
+    address public profitRecorder;
     address public asset;
     uint256 public pendingFees;
     uint256 public totalFeesCollected;
@@ -82,7 +87,9 @@ contract TreasuryModule is Ownable2Step {
 
     /// @notice Accounting-only claim. Caller must separately call vault.sweepFeesToTreasury()
     ///         to move actual tokens from the vault.
-    function claimFees(address receiver, uint256 amount) external onlyOwner {
+    function claimFees(address receiver, uint256 amount) external {
+        // The fee source (vault) settles its own sweeps; the owner may still book a claim directly.
+        if (msg.sender != feeSource && msg.sender != owner()) revert OwnableUnauthorizedAccount(msg.sender);
         if (amount > pendingFees) revert InsufficientPending(amount, pendingFees);
 
         pendingFees -= amount;
@@ -138,7 +145,9 @@ contract TreasuryModule is Ownable2Step {
         depositorShare = grossProfit - vaultShare;
     }
 
-    function recordMusharakahProfit(uint256 vaultShare) external onlyFeeSource {
+    function recordMusharakahProfit(uint256 vaultShare) external {
+        // Fee source (vault) or the owner-approved profit recorder (PurificationEscrow).
+        if (msg.sender != feeSource && msg.sender != profitRecorder) revert NotFeeSource();
         if (!isShariahTreasury) revert NotShariahTreasury();
 
         pendingFees += vaultShare;
@@ -174,5 +183,22 @@ contract TreasuryModule is Ownable2Step {
         hurdleRateBps = hurdleBps;
 
         emit MusharakahParamsUpdated(shareBps, hurdleBps);
+    }
+
+    /// @notice Update the fee source address. Owner-only.
+    ///         Use when the vault is redeployed or when wiring up a freshly
+    ///         deployed TreasuryModule to its vault post-deployment.
+    ///         Emits FeeSourceUpdated.
+    /// @notice Authorise a second caller (the PurificationEscrow) to book Musharakah profit.
+    ///         The vault stays the sole fee source for wakala accrual and fee sweeps.
+    function setProfitRecorder(address recorder) external onlyOwner {
+        emit ProfitRecorderUpdated(profitRecorder, recorder);
+        profitRecorder = recorder;
+    }
+
+    function setFeeSource(address newFeeSource) external onlyOwner {
+        if (newFeeSource == address(0)) revert ZeroAddress();
+        emit FeeSourceUpdated(feeSource, newFeeSource);
+        feeSource = newFeeSource;
     }
 }

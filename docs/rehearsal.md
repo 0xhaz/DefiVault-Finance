@@ -274,7 +274,7 @@ Used `cast send` directly (Foundry broadcast script hits Arc Testnet USDC StackU
 
 5. `TreasuryModule` deployed with `deployer` as `feeSource` placeholder — redeploy with the actual vault address before live profit claims.
 
-6. Step 5 (CCTP cross-chain) not attempted on live testnet — `MSG_TRANSMITTER` address on Arc Testnet not yet confirmed from Circle docs. `TokenMessengerV2` is `0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA`; transmitter address needed separately. Additionally, `goldCrossChainBlocked` is set to `true` on the live deployment — owner must call `setGoldCrossChainBlocked(false)` (or confirm board ruling SR-023) before step 5 can succeed. Fork test confirmed the CCTP settle path works correctly with mocks (4/4 pass, feeExecuted offset fix verified).
+6. Step 5 (CCTP cross-chain) not attempted on live testnet — `MSG_TRANSMITTER` address on Arc Testnet not yet confirmed from Circle docs. `TokenMessengerV2` is `0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA`; transmitter address needed separately. Note: the live deployment predates Task N1 and still carries the old `goldCrossChainBlocked` flag set to `true`. A vault redeployed from the N1 source has no such flag, so step 5 needs no unblocking (SR-023 superseded). On the old live vault the owner must still call `setGoldCrossChainBlocked(false)` once. Fork test confirmed the CCTP settle path works correctly with mocks (4/4 pass, feeExecuted offset fix verified).
 
 ---
 

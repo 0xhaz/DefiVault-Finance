@@ -111,12 +111,10 @@ contract FuzzGoldAllocationAdapter is Test {
         vm.stopPrank();
     }
 
-    /// @dev deployCapital + adapter.deploy()
+    /// @dev Fund and execute the adapter in one vault call.
     function _deploy(uint256 amount) internal {
         vm.prank(owner);
-        vault.deployCapital(address(adapter), amount, "");
-        vm.prank(address(vault));
-        adapter.deploy(amount);
+        vault.deployCapitalAndExecute(address(adapter), amount, "");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -221,6 +219,10 @@ contract FuzzGoldAllocationAdapter is Test {
         vault.setGoldSpreadAdapter(address(spreadAdapter));
         vm.stopPrank();
 
+        // G-1 includes the newly tracked spread appreciation in the entry-time NAV cap.
+        totalAssets_ = vault.totalAssets();
+        goldCap = (totalAssets_ * vault.MAX_GOLD_BPS()) / 10_000;
+
         // Determine if deploying `deployAmount` would exceed cap
         // combined = spreadValue + currentXautValue(=0) + deployAmount
         uint256 combined = uint256(spreadValue) + 0 + uint256(deployAmount);
@@ -229,7 +231,7 @@ contract FuzzGoldAllocationAdapter is Test {
             // Expect revert GoldCapExceeded
             vm.prank(owner);
             vm.expectRevert();
-            vault.deployCapital(address(adapter), deployAmount, "");
+            vault.deployCapitalAndExecute(address(adapter), deployAmount, "");
             // Cap is preserved — no deployment happened
         } else {
             // Deploy should succeed
@@ -242,9 +244,7 @@ contract FuzzGoldAllocationAdapter is Test {
             if (deployAmount > maxAlloc - alreadyDeployed) return;
 
             vm.prank(owner);
-            vault.deployCapital(address(adapter), deployAmount, "");
-            vm.prank(address(vault));
-            adapter.deploy(deployAmount);
+            vault.deployCapitalAndExecute(address(adapter), deployAmount, "");
 
             // Invariant: spread + allocation <= cap
             uint256 xautVal = adapter.currentValue();
@@ -326,6 +326,7 @@ contract FuzzGoldAllocationAdapter is Test {
 //  Mock helper for fuzz: minimal IGoldAdapter stub
 // ─────────────────────────────────────────────────────────────────────────────
 contract MockGoldSpreadFuzz {
+    function isGoldStrategy() external pure returns (bool) { return true; }
     uint256 private _value;
     constructor(uint256 value_) { _value = value_; }
     function currentValue() external view returns (uint256) { return _value; }

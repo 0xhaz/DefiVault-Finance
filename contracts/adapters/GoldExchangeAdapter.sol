@@ -5,6 +5,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IStrategyAdapter} from "../IStrategyAdapter.sol";
 
 /// @notice Minimal Chainlink-style oracle interface (same shape as AggregatorV3Interface).
@@ -55,6 +56,7 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
     error HaircutAboveCap(uint256 proposed, uint256 cap);
     /// @notice Thrown when the constructor is called without a non-zero gold oracle address (K2).
     error OracleRequired();
+    error StaleGoldPrice();
 
     event GoldAcquired(uint256 usdcIn, uint256 paxgOut, uint256 spotPrice);
     event GoldReturned(uint256 paxgIn, uint256 usdcOut);
@@ -78,11 +80,22 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
     ///         Default: 9900 = 99% (1% max slippage).
     uint256 public minOutBps;
 
-    /// @notice Last observed PAXG-per-USDC price (1e18-scaled, PAXG per 1e6 USDC).
-    ///         Set to 0 before any swap; used as the reference floor on subsequent swaps.
-    ///         This is a simple last-price oracle — not a TWAP. Sufficient for testnet.
-    ///         Production: replace with a 30-min TWAP from a Uniswap V3 pool.
-    uint256 public lastPaxgPricePerUsdc;
+    uint256 public emergencySlippageBps = 1000;
+    uint256 public constant MAX_EMERGENCY_SLIPPAGE_BPS = 2500;
+    uint256 public constant TIMELOCK_DELAY = 30 days;
+    bytes32 public constant PARAM_EMERGENCY_SLIPPAGE = keccak256("emergencySlippageBps");
+
+    struct PendingChange {
+        uint256 newValue;
+        uint256 executeAfter;
+        bool pending;
+    }
+    mapping(bytes32 => PendingChange) public pendingChanges;
+
+    event ParamChangeProposed(bytes32 indexed paramId, uint256 newValue, uint256 executeAfter);
+    event ParamChangeExecuted(bytes32 indexed paramId, uint256 newValue);
+    event ParamChangeCancelled(bytes32 indexed paramId);
+    event EmergencySlippageBpsUpdated(uint256 previous, uint256 updated);
 
     // ── PR1 parity — stale-price valuation (I2) ─────────────────────────────
     /// @notice Last USDC-per-PAXG price recorded at swap execution (USDC units, 6 dec).
@@ -144,20 +157,10 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         // We work with the balance already held here — no pull needed.
         usdc.forceApprove(address(swapRouter), amount);
 
-        // Compute minOut from the last observed price if available.
-        // First swap: minOut = 1 (no reference price yet).
-        // Subsequent swaps: minOut = expectedPaxgOut * minOutBps / 10_000.
-        // expectedPaxgOut = amount * lastPaxgPricePerUsdc / 1e18
-        // Note: lastPaxgPricePerUsdc is PAXG (18 dec) per USDC (6 dec): units are 1e12.
-        // Adjust: minOut in PAXG units = (amount_6dec * price_1e12) / 1e18 = amount * price / 1e12
-        uint256 minOut;
-        if (lastPaxgPricePerUsdc == 0) {
-            minOut = 1; // no reference price — first swap
-        } else {
-            uint256 expectedPaxgOut = (amount * lastPaxgPricePerUsdc) / 1e12;
-            minOut = (expectedPaxgOut * minOutBps) / 10_000;
-            if (minOut == 0) minOut = 1;
-        }
+        (uint256 oraclePrice,) = _freshOraclePrice();
+        if (oraclePrice == 0) revert StaleGoldPrice();
+        uint256 minOut = ((amount * 1e18 / oraclePrice) * minOutBps) / 10_000;
+        if (minOut == 0) minOut = 1;
 
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn:           address(usdc),
@@ -172,7 +175,7 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
 
         paxgOut = swapRouter.exactInputSingle(params);
 
-        if (paxgOut == 0) revert SlippageExceeded(paxgOut, 0);
+        if (paxgOut < minOut) revert SlippageExceeded(paxgOut, minOut);
 
         // Clear any dust approval
         usdc.forceApprove(address(swapRouter), 0);
@@ -180,11 +183,10 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         paxgHeld      += paxgOut;
         totalDeployed += amount;
 
-        // USDC per PAXG (1e18-scaled: amount is 6 dec, paxgOut is 18 dec)
+        // Price is 6-dec USDC per whole PAXG (1e18 token units), matching pokePrice().
         uint256 spotPrice = (amount * 1e18) / paxgOut;
         // PR1: Record lastGoodPrice in USDC units (6 dec) — USDC paid per 1e18 PAXG.
-        //      lastPaxgPricePerUsdc is the inverse; keep both for backward compat.
-        lastGoodPrice    = spotPrice / 1e12; // convert 1e18-scaled to USDC (6 dec)
+        lastGoodPrice    = spotPrice;
         lastGoodPriceAt  = block.timestamp;
         emit LastGoodPriceUpdated(lastGoodPrice, block.timestamp);
         emit GoldAcquired(amount, paxgOut, spotPrice);
@@ -202,8 +204,17 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
 
         paxg.forceApprove(address(swapRouter), paxgToSell);
 
-        uint256 minUsdcOut = (paxgToSell * (10_000 - (10_000 - minOutBps))) / 10_000;
-        // Simplified: accept any non-zero amount for testnet; production would use TWAP floor
+        (uint256 oraclePrice,) = _freshOraclePrice();
+        uint256 minUsdcOut;
+        if (oraclePrice > 0) {
+            minUsdcOut = Math.mulDiv(Math.mulDiv(paxgToSell, oraclePrice, 1e18), minOutBps, 10_000);
+        } else {
+            if (lastGoodPrice == 0) revert StaleGoldPrice();
+            uint256 cachedValue = Math.mulDiv(paxgToSell, lastGoodPrice, 1e18);
+            uint256 haircutValue = Math.mulDiv(cachedValue, 10_000 - staleHaircutBps, 10_000);
+            minUsdcOut = Math.mulDiv(haircutValue, 10_000 - emergencySlippageBps, 10_000);
+        }
+        if (minUsdcOut == 0) minUsdcOut = 1;
 
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn:           address(paxg),
@@ -217,6 +228,7 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         });
 
         usdcReturned = swapRouter.exactInputSingle(params);
+        if (usdcReturned < minUsdcOut) revert SlippageExceeded(usdcReturned, minUsdcOut);
 
         paxg.forceApprove(address(swapRouter), 0);
 
@@ -224,7 +236,8 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         //      after the position is closed and before a new one is opened.
         if (paxgToSell > 0 && usdcReturned > 0) {
             uint256 exitSpotPrice = (usdcReturned * 1e18) / paxgToSell;
-            lastGoodPrice   = exitSpotPrice / 1e12;
+            // Exit price uses the same 6-dec USDC per whole PAXG unit as entry/oracle prices.
+            lastGoodPrice   = exitSpotPrice;
             lastGoodPriceAt = block.timestamp;
             emit LastGoodPriceUpdated(lastGoodPrice, block.timestamp);
         }
@@ -237,31 +250,27 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         emit GoldReturned(paxgToSell, usdcReturned);
     }
 
-    /**
-     * @notice Returns the USDC value of the PAXG position. Never reverts (PR1 parity / I2).
-     *
-     * - paxgHeld == 0: returns 0 (no position open).
-     * - Price fresh (lastGoodPriceAt within maxStalenessSecs): use lastGoodPrice.
-     * - Price stale: use lastGoodPrice × (1 - staleHaircutBps / 10_000).
-     *   If lastGoodPrice == 0 (no swap ever executed): returns 0.
-     *
-     * Note: S2-H has no external oracle. "Staleness" here means the last atomic swap
-     * executed more than maxStalenessSecs ago — the live market price is unknown.
-     * Cost basis (totalDeployed) is NOT used — consistent with GoldAllocationAdapter PR1.
-     */
+    /// @notice Live fresh oracle valuation; otherwise cached price, haircutted after its observation expires.
+    /// @dev pokePrice maintains the fallback cache but is not required for fresh-price NAV correctness.
     function currentValue() external view returns (uint256) {
+        try this.positionValueUsdc() returns (uint256 value) {
+            return value;
+        } catch {
+            return 0;
+        }
+    }
+
+    /// @dev Read-only boundary catches malformed observations and unrepresentable valuation arithmetic.
+    function positionValueUsdc() external view returns (uint256) {
         if (paxgHeld == 0) return 0;
-        if (lastGoodPrice == 0) return 0; // no swap ever executed
-
-        // lastGoodPrice is USDC per 1e18 PAXG (6-dec USDC, 18-dec PAXG).
-        // value = paxgHeld (18 dec) * lastGoodPrice (6 dec / 1e18 PAXG) / 1e18
-        uint256 grossValue = (paxgHeld * lastGoodPrice) / 1e18;
-
-        bool fresh = (lastGoodPriceAt > 0) && (block.timestamp - lastGoodPriceAt <= maxStalenessSecs);
+        (uint256 oraclePrice,) = _freshOraclePrice();
+        if (oraclePrice > 0) return Math.mulDiv(paxgHeld, oraclePrice, 1e18);
+        if (lastGoodPrice == 0) return 0;
+        uint256 grossValue = Math.mulDiv(paxgHeld, lastGoodPrice, 1e18);
+        bool fresh = lastGoodPriceAt > 0 && lastGoodPriceAt <= block.timestamp
+            && block.timestamp - lastGoodPriceAt <= maxStalenessSecs;
         if (fresh) return grossValue;
-
-        // Stale: apply haircut.
-        return (grossValue * (10_000 - staleHaircutBps)) / 10_000;
+        return Math.mulDiv(grossValue, 10_000 - staleHaircutBps, 10_000);
     }
 
     /// @notice Returns false when the XAU/USD oracle is stale or unhealthy (K2 update).
@@ -272,37 +281,40 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
     ///         (lastGoodPriceAt == 0 means no swap has been executed yet).
     function isPriceSane() external view returns (bool) {
         if (lastGoodPriceAt == 0) return true; // no position open — no oracle concern
-        // Oracle-based freshness: read updatedAt without reverting.
-        try goldOracle.latestRoundData() returns (
-            uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
-        ) {
-            startedAt; roundId; answeredInRound; // suppress unused-variable warnings
-            if (answer <= 0) return false;
-            return block.timestamp - updatedAt <= maxStalenessSecs;
-        } catch {
-            return false; // oracle reverts → treat as stale
-        }
+        (uint256 price,) = _freshOraclePrice();
+        return price > 0;
     }
 
-    /// @notice Anyone may call to refresh lastGoodPrice from the oracle (J2 / PR1 parity).
-    ///         Reads the mandatory XAU/USD oracle price (K2: oracle is always set).
-    function pokePrice() external {
+    /// @dev Returns zero for an unavailable, incomplete, invalid or stale observation.
+    ///      Price is 6-dec USDC per whole 18-dec PAXG, as used by pokePrice().
+    function _freshOraclePrice() internal view returns (uint256 price, uint256 observedAt) {
         try goldOracle.latestRoundData() returns (
             uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
         ) {
-            roundId; startedAt; answeredInRound; updatedAt;
-            if (answer <= 0) return;
-            // Oracle gives XAU/USD in oracle decimals; convert to USDC-per-PAXG (6 dec).
-            uint8 oracDec = goldOracle.decimals();
-            // oraclePrice in 1e(oracDec) → convert to 6 dec USDC
-            uint256 oracleUsdc = oracDec >= 6
-                ? uint256(answer) / (10 ** uint256(oracDec - 6))
-                : uint256(answer) * (10 ** uint256(6 - oracDec));
-            if (oracleUsdc == 0) return;
-            lastGoodPrice   = oracleUsdc;
-            lastGoodPriceAt = block.timestamp;
-            emit LastGoodPriceUpdated(lastGoodPrice, block.timestamp);
+            if (startedAt == 0 || answeredInRound < roundId || answer <= 0) return (0, 0);
+            if (updatedAt == 0 || updatedAt > block.timestamp) return (0, 0);
+            if (block.timestamp - updatedAt > maxStalenessSecs) return (0, 0);
+            try goldOracle.decimals() returns (uint8 oracDec) {
+                // Reject unrepresentable scaling rather than reverting during an exit.
+                if (oracDec > 83) return (0, 0);
+                if (oracDec < 6 && uint256(answer) > type(uint256).max / (10 ** uint256(6 - oracDec))) {
+                    return (0, 0);
+                }
+                price = oracDec >= 6
+                    ? uint256(answer) / (10 ** uint256(oracDec - 6))
+                    : uint256(answer) * (10 ** uint256(6 - oracDec));
+                observedAt = updatedAt;
+            } catch {}
         } catch {}
+    }
+
+    /// @notice Refresh the cache only from a fresh, complete oracle observation.
+    function pokePrice() external {
+        (uint256 price, uint256 observedAt) = _freshOraclePrice();
+        if (price == 0) return;
+        lastGoodPrice = price;
+        lastGoodPriceAt = observedAt;
+        emit LastGoodPriceUpdated(price, observedAt);
     }
 
     /// @notice Owner updates the XAU/USD oracle (K2 — must be non-zero; reverts OracleRequired).
@@ -312,6 +324,10 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         address previous = address(goldOracle);
         goldOracle = IAggregatorV3(oracle);
         emit GoldOracleUpdated(previous, oracle);
+    }
+
+    function isGoldStrategy() external pure returns (bool) {
+        return true;
     }
 
     function protocolName() external pure returns (string memory) {
@@ -339,6 +355,34 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         uint256 prev = maxStalenessSecs;
         maxStalenessSecs = secs;
         emit MaxStalenessBpsUpdated(prev, secs);
+    }
+
+    /// @notice Emergency exit tolerance changes take effect only after 30 days.
+    function proposeParamChange(bytes32 paramId, uint256 newValue) external onlyOwner {
+        require(paramId == PARAM_EMERGENCY_SLIPPAGE, "GoldExchangeAdapter: unknown param");
+        if (newValue > MAX_EMERGENCY_SLIPPAGE_BPS) {
+            revert HaircutAboveCap(newValue, MAX_EMERGENCY_SLIPPAGE_BPS);
+        }
+        uint256 executeAfter = block.timestamp + TIMELOCK_DELAY;
+        pendingChanges[paramId] = PendingChange(newValue, executeAfter, true);
+        emit ParamChangeProposed(paramId, newValue, executeAfter);
+    }
+
+    function executeParamChange(bytes32 paramId) external onlyOwner {
+        PendingChange memory pc = pendingChanges[paramId];
+        require(pc.pending, "GoldExchangeAdapter: no proposal pending");
+        require(block.timestamp >= pc.executeAfter, "GoldExchangeAdapter: timelock not elapsed");
+        delete pendingChanges[paramId];
+        uint256 previous = emergencySlippageBps;
+        emergencySlippageBps = pc.newValue;
+        emit EmergencySlippageBpsUpdated(previous, pc.newValue);
+        emit ParamChangeExecuted(paramId, pc.newValue);
+    }
+
+    function cancelParamChange(bytes32 paramId) external onlyOwner {
+        require(pendingChanges[paramId].pending, "GoldExchangeAdapter: no proposal pending");
+        delete pendingChanges[paramId];
+        emit ParamChangeCancelled(paramId);
     }
 
     function renounceOwnership() public override(Ownable) onlyOwner {

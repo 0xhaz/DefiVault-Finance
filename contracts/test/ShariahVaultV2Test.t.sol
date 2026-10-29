@@ -11,6 +11,7 @@ import {ShariahAdapterRegistry} from "../ShariahAdapterRegistry.sol";
 import {TreasuryModule}         from "../TreasuryModule.sol";
 import {ZakatModule}            from "../ZakatModule.sol";
 import {MockERC20}              from "../test-helpers/MockERC20.sol";
+import {MockStrategyAdapterN} from "./TaskNTest.Base.t.sol";
 
 /// @title ShariahVaultV2Test
 /// @notice Unit tests for ShariahVaultV2 — Task E
@@ -180,34 +181,81 @@ contract ShariahVaultV2Test is Test {
     // 5. name and symbol
     // ─────────────────────────────────────────────────────────────
 
+    // Both entry points must share registry authorization without changing the legacy flag.
+    function test_atomicDeployment_registryErrorsMatchTransferOnly() public {
+        vm.startPrank(owner);
+        vault.setShariahScreening(false);
+        vm.expectRevert(abi.encodeWithSelector(ShariahVaultV2.NotScreened.selector, adapter));
+        vault.deployCapitalAndExecute(adapter, 100e6, "");
+        vm.stopPrank();
+        _screenAdapter(adapter, VALID_EXPIRY_OFFSET);
+        ShariahAdapterRegistry.Screening memory s = registry.getScreening(adapter);
+        vm.warp(s.expiresAt);
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(ShariahVaultV2.ScreeningExpired.selector, adapter, s.expiresAt));
+        vault.deployCapitalAndExecute(adapter, 100e6, "");
+        assertFalse(vault.shariahScreeningEnabled());
+        assertEq(vault.totalDeployed(), 0);
+    }
+
+    // A screened V2 adapter executes from the vault while transfer-only deployment remains callable.
+    function test_atomicDeployment_screened_executesFromVault() public {
+        MockStrategyAdapterN target = new MockStrategyAdapterN(address(vault));
+        _screenAdapter(address(target), VALID_EXPIRY_OFFSET);
+        vm.prank(owner);
+        vault.deployCapitalAndExecute(address(target), 100e6, "");
+        assertEq(target.lastDeployCaller(), address(vault));
+        assertEq(usdc.balanceOf(address(target)), 100e6);
+        assertEq(vault.totalDeployed(), 100e6);
+        assertTrue(vault.shariahScreeningEnabled());
+        assertEq(vault.realizedProfit(), 0);
+    }
+
     function test_name_and_symbol() public view {
         assertEq(vault.name(),   "Shariah Vault V2 Share");
         assertEq(vault.symbol(), "svUSDCv2");
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 6. setRegistry updates the registry address
+    // 6. Registry updates require a board proposal and 30-day delay
     // ─────────────────────────────────────────────────────────────
 
-    function test_setRegistry_updates() public {
+    function test_proposeRegistry_updatesAfterTimelock() public {
         ShariahAdapterRegistry newRegistry = new ShariahAdapterRegistry(owner, owner);
+        uint256 executeAfter = block.timestamp + TIMELOCK;
 
         vm.prank(owner);
-        vault.setRegistry(address(newRegistry));
+        vault.proposeRegistry(address(newRegistry));
+        (address pending, uint256 earliest, bool exists) = vault.pendingRegistry();
+        assertEq(pending, address(newRegistry));
+        assertEq(earliest, executeAfter);
+        assertTrue(exists);
+        assertEq(address(vault.registry()), address(registry));
 
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(
+            ShariahVaultV2.RegistryTimelockNotElapsed.selector, executeAfter, block.timestamp
+        ));
+        vault.confirmRegistry();
+
+        vm.warp(executeAfter);
+        vm.prank(owner);
+        vault.confirmRegistry();
         assertEq(address(vault.registry()), address(newRegistry));
+        (, , exists) = vault.pendingRegistry();
+        assertFalse(exists);
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 7. setRegistry by non-owner reverts OwnableUnauthorizedAccount
+    // 7. Registry proposals by non-board callers revert NotBoardRole
     // ─────────────────────────────────────────────────────────────
 
-    function test_setRegistry_nonOwner_reverts() public {
+    function test_proposeRegistry_nonBoard_reverts() public {
         vm.prank(alice);
         vm.expectRevert(
-            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice)
+            abi.encodeWithSelector(ShariahVault.NotBoardRole.selector, alice)
         );
-        vault.setRegistry(address(0));
+        vault.proposeRegistry(address(registry));
     }
 
     // ─────────────────────────────────────────────────────────────

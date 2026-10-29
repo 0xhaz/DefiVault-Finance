@@ -94,10 +94,12 @@ contract FuzzPurificationEscrow is Test {
     // ─────────────────────────────────────────────────────────────────────────
     // 1. Waterfall invariant: sum of parts always equals grossProfit
     // ─────────────────────────────────────────────────────────────────────────
+    // N-07: retain conservation coverage while varying the loss-recovery reserve.
     function testFuzz_waterfall_invariant(
         uint96 grossProfit,
         uint32 elapsed,
-        uint96 principal
+        uint96 principal,
+        uint96 deficit
     ) public {
         uint256 gross     = bound(uint256(grossProfit), 1e6, 100_000e6);
         uint256 elapsedSec = bound(uint256(elapsed), 0, 5 * 365 days);
@@ -105,7 +107,7 @@ contract FuzzPurificationEscrow is Test {
 
         usdc.approve(address(escrow), gross);
         (uint256 purified, uint256 charity, uint256 vaultShare, uint256 depositorShare) =
-            escrow.executeWaterfall(gross, elapsedSec, princ);
+            escrow.executeWaterfallHWM(gross, elapsedSec, princ, bound(uint256(deficit), 0, 200_000e6));
 
         assertEq(
             purified + charity + vaultShare + depositorShare,

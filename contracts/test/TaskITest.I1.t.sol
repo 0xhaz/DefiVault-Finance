@@ -9,7 +9,7 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {TaskITestBase, MockTokenMessengerI} from "./TaskITest.Base.t.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {AutonomousVault} from "../AutonomousVault.sol";
+import {AutonomousVault, CctpMessageDecoder} from "../AutonomousVault.sol";
 
 /// @dev Minimal mock MessageTransmitter: when receiveMessage is called it mints
 ///      `mintAmount` USDC to the vault and returns true.
@@ -24,13 +24,15 @@ contract MockMessageTransmitter {
         mintAmount = mintAmount_;
     }
 
+    bool public receiveResult = true;
+    function setReceiveResult(bool result) external { receiveResult = result; }
     function setMintAmount(uint256 a) external { mintAmount = a; }
 
     /// @dev Mints mintAmount to vault. Message/attestation bytes are ignored.
     function receiveMessage(bytes calldata, bytes calldata) external returns (bool) {
         // Mint by giving the vault extra tokens.
         MockERC20Like(usdc).mint(vault, mintAmount);
-        return true;
+        return receiveResult;
     }
 }
 
@@ -38,19 +40,147 @@ interface MockERC20Like {
     function mint(address to, uint256 amount) external;
 }
 
+// Task M: expose bounds-checked decoder helpers without changing the vault's external ABI.
+contract TaskMDecoderHarness {
+    function header(bytes calldata message) external pure returns (CctpMessageDecoder.Header memory) {
+        return CctpMessageDecoder.decodeHeader(message);
+    }
+    function field(bytes calldata message, uint256 offset, uint256 size) external pure returns (bytes memory) {
+        return CctpMessageDecoder._field(message, offset, size);
+    }
+}
+
 /// @dev CctpMessageDecoder is a library; we test via a thin wrapper.
 contract TaskITest_I1 is TaskITestBase {
 
     MockMessageTransmitter public transmitter;
 
+    // Task M: native V2 validation and outbound settings regression coverage (not executed here).
+    function test_M_outboundDefaultsAndSettings() public {
+        assertEq(vault.crossChainMinFinality(), 2000);
+        assertEq(vault.crossChainMaxFeeBps(), 0);
+        vm.startPrank(owner);
+        vault.setCrossChainMinFinality(1000);
+        vault.setCrossChainMaxFeeBps(100);
+        vm.expectRevert(AutonomousVault.InvalidCrossChainMinFinality.selector);
+        vault.setCrossChainMinFinality(1999);
+        vm.expectRevert(AutonomousVault.InvalidBps.selector);
+        vault.setCrossChainMaxFeeBps(101);
+        vm.expectRevert(AutonomousVault.ZeroAddress.selector);
+        vault.setRemoteTokenMessenger(DEST_DOMAIN, bytes32(0));
+        vm.stopPrank();
+        uint64 positionId = _deployCrossChainI1(10_001);
+        assertEq(positionId, 1);
+        assertEq(messenger.lastCall(), abi.encode(
+            uint256(10_001), DEST_DOMAIN, bytes32(uint256(uint160(alice))), address(usdc),
+            bytes32(0), uint256(100), uint32(1000)
+        ));
+        assertEq(usdc.allowance(address(vault), address(messenger)), 0);
+        assertEq(_deployCrossChainI1(10_001), 2);
+    }
+
+    function test_M_settingsOnlyOwner() public {
+        vm.startPrank(manager);
+        vm.expectRevert();
+        vault.setCrossChainMinFinality(1000);
+        vm.expectRevert();
+        vault.setCrossChainMaxFeeBps(1);
+        vm.expectRevert();
+        vault.setRemoteTokenMessenger(DEST_DOMAIN, bytes32(uint256(1)));
+        vm.stopPrank();
+    }
+
+    function test_M_wrongVersionsAndRemoteSender() public {
+        uint64 positionId = _deployCrossChainI1(10_000e6);
+        bytes memory message = _buildMessage(99, 10_000e6, address(vault));
+        message[3] = 0x02;
+        vm.expectRevert(abi.encodeWithSelector(CctpMessageDecoder.WrongHeaderVersion.selector, uint32(2)));
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(positionId, message, "");
+        message[3] = 0x01;
+        message[151] = 0x02;
+        vm.expectRevert(abi.encodeWithSelector(CctpMessageDecoder.WrongBodyVersion.selector, uint32(2)));
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(positionId, message, "");
+        message[151] = 0x01;
+        bytes32 badSender = bytes32(uint256(123));
+        for (uint256 i; i < 32; ++i) message[44 + i] = badSender[i];
+        vm.expectRevert(abi.encodeWithSelector(AutonomousVault.WrongRemoteSender.selector,
+            vault.remoteTokenMessenger(DEST_DOMAIN), badSender));
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(positionId, message, "");
+        assertFalse(vault.consumedInbound(DEST_DOMAIN, bytes32(uint256(99))));
+    }
+
+    function test_M_missingRemoteMessenger() public {
+        uint64 positionId = _deployCrossChainI1(10_000e6);
+        bytes memory message = _buildMessage(99, 10_000e6, address(vault));
+        // A fresh source domain has no registered messenger; update both recorded route and header.
+        vm.prank(manager);
+        vault.deployCrossChain(7, bytes32(uint256(uint160(alice))), 10_000e6);
+        positionId = vault.crossChainPositionCounter();
+        message[7] = 0x07;
+        vm.expectRevert(abi.encodeWithSelector(AutonomousVault.RemoteMessengerNotSet.selector, uint32(7)));
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(positionId, message, "");
+    }
+
+    function test_M_bytes32NonceHighBitsDistinctAndReplayRollback() public {
+        uint64 first = _deployCrossChainI1(10_000e6);
+        bytes memory message = _buildMessage(99, 10_000e6, address(vault));
+        // Same low 64 bits but different high bits must produce distinct replay keys.
+        bytes32 highNonce = bytes32((uint256(1) << 255) | 99);
+        for (uint256 i; i < 32; ++i) message[12 + i] = highNonce[i];
+        transmitter.setMintAmount(1);
+        vm.expectRevert(abi.encodeWithSelector(AutonomousVault.MessageAmountMismatch.selector, uint256(10_000e6), uint256(1)));
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(first, message, "");
+        assertFalse(vault.consumedInbound(DEST_DOMAIN, highNonce));
+        transmitter.setMintAmount(10_000e6);
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(first, message, "");
+        assertTrue(vault.consumedInbound(DEST_DOMAIN, highNonce));
+        uint64 second = _deployCrossChainI1(10_000e6);
+        vm.expectRevert(AutonomousVault.InboundAlreadyConsumed.selector);
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(second, message, "");
+        message = _buildMessage(99, 10_000e6, address(vault));
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(second, message, "");
+        assertTrue(vault.consumedInbound(DEST_DOMAIN, bytes32(uint256(99))));
+    }
+
+    function test_M_falseReceiveRollsBackMintAndReplay() public {
+        uint64 positionId = _deployCrossChainI1(10_000e6);
+        bytes memory message = _buildMessage(99, 10_000e6, address(vault));
+        uint256 balanceBefore = usdc.balanceOf(address(vault));
+        transmitter.setReceiveResult(false);
+        vm.expectRevert(AutonomousVault.MessageReceiveFailed.selector);
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(positionId, message, "");
+        assertEq(usdc.balanceOf(address(vault)), balanceBefore);
+        assertFalse(vault.consumedInbound(DEST_DOMAIN, bytes32(uint256(99))));
+        assertEq(vault.pendingCrossChain(positionId), 10_000e6);
+    }
+
+    function test_M_shortHeaderAndOversizedOffsets() public {
+        TaskMDecoderHarness harness = new TaskMDecoderHarness();
+        vm.expectRevert(abi.encodeWithSelector(CctpMessageDecoder.InvalidMessageRange.selector,
+            uint256(147), uint256(0), uint256(148)));
+        harness.header(new bytes(147));
+        vm.expectRevert(abi.encodeWithSelector(CctpMessageDecoder.InvalidMessageRange.selector,
+            uint256(0), type(uint256).max, uint256(32)));
+        harness.field("", type(uint256).max, 32);
+        vm.expectRevert(abi.encodeWithSelector(CctpMessageDecoder.InvalidMessageRange.selector,
+            uint256(1), uint256(1), type(uint256).max));
+        harness.field(hex"00", 1, type(uint256).max);
+    }
+
     // ─── helper: build a fake CCTP V2 message matching the real BurnMessageV2 layout ───
     //
-    // Outer header (116 bytes):
-    //   [0..3]   version(4)  [4..7] srcDomain(4)  [8..11] dstDomain(4)
-    //   [12..19] nonce(8)    [20..51] sender(32)   [52..83] recipient(32)
-    //   [84..115] destinationCaller(32)
-    //
-    // BurnMessageV2 body (228 bytes, at message offset 116):
+    // Task M: native 148-byte header, version 1; domains @4/8, bytes32 nonce @12,
+    // sender @44, recipient @76, caller @108, finality fields @140/144.
+    // BurnMessageV2 body (228 bytes, at message offset 148):
     //   [0..3]    version(4)
     //   [4..35]   burnToken(32)
     //   [36..67]  mintRecipient(32)
@@ -60,9 +190,9 @@ contract TaskITest_I1 is TaskITestBase {
     //   [164..195] feeExecuted(32)   — actual fee taken; 0 for Standard Transfer
     //   [196..227] expirationBlock(32)
     //
-    // Total minimum message length: 116 + 228 = 344 bytes.
+    // Total minimum message length: 148 + 228 = 376 bytes.
     function _buildMessage(uint64 nonce_, uint256 amount_, address mintRecipient_)
-        internal pure returns (bytes memory)
+        internal view returns (bytes memory)
     {
         return _buildMessageWithFee(nonce_, amount_, mintRecipient_, 0, 0);
     }
@@ -73,7 +203,7 @@ contract TaskITest_I1 is TaskITestBase {
         uint256 amount_,
         address mintRecipient_,
         uint256 feeExecuted_
-    ) internal pure returns (bytes memory) {
+    ) internal view returns (bytes memory) {
         return _buildMessageWithFee(nonce_, amount_, mintRecipient_, feeExecuted_, feeExecuted_);
     }
 
@@ -84,14 +214,16 @@ contract TaskITest_I1 is TaskITestBase {
         address mintRecipient_,
         uint256 feeExecuted_,
         uint256 maxFee_
-    ) internal pure returns (bytes memory) {
-        bytes memory header = new bytes(116);
-        // nonce at header bytes [12..19] (big-endian uint64)
-        for (uint256 i = 0; i < 8; i++) {
-            header[19 - i] = bytes1(uint8(nonce_ >> (i * 8)));
-        }
+    ) internal view returns (bytes memory) {
+        // Task M: native MessageV2 header; the inbound nonce is independent of the position ID.
+        bytes memory header = abi.encodePacked(
+            uint32(1), DEST_DOMAIN, SOURCE_DOMAIN, bytes32(uint256(nonce_)),
+            vault.remoteTokenMessenger(DEST_DOMAIN),
+            bytes32(uint256(uint160(address(messenger)))), bytes32(uint256(uint160(address(vault)))), uint32(2000), uint32(2000)
+        );
         // BurnMessageV2 body: 228 bytes
         bytes memory body = new bytes(228);
+        body[3] = 0x01; // Task M: native BurnMessageV2 version.
         // mintRecipient at body[36..67]
         bytes32 recipientWord = bytes32(uint256(uint160(mintRecipient_)));
         for (uint256 i = 0; i < 32; i++) {
@@ -116,6 +248,34 @@ contract TaskITest_I1 is TaskITestBase {
         return abi.encodePacked(header, body);
     }
 
+    function test_independent_return_nonce_succeeds() public {
+        uint64 nonce = _deployCrossChainI1(10_000e6);
+        bytes memory message = _buildMessage(nonce + 1, 10_000e6, address(vault));
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(nonce, message, "");
+        assertEq(vault.pendingCrossChain(nonce), 0);
+        assertTrue(vault.consumedInbound(DEST_DOMAIN, bytes32(uint256(nonce + 1))));
+    }
+
+    function test_wrong_destination_domain_reverts() public {
+        uint64 nonce = _deployCrossChainI1(10_000e6);
+        bytes memory message = _buildMessage(nonce, 10_000e6, address(vault));
+        message[11] = bytes1(uint8(SOURCE_DOMAIN + 1));
+        vm.expectRevert(abi.encodeWithSelector(AutonomousVault.WrongDestinationDomain.selector, SOURCE_DOMAIN, SOURCE_DOMAIN + 1));
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(nonce, message, "");
+    }
+
+    function test_wrong_destination_caller_reverts() public {
+        uint64 nonce = _deployCrossChainI1(10_000e6);
+        bytes memory message = _buildMessage(nonce, 10_000e6, address(vault));
+        bytes32 caller = bytes32(uint256(uint160(address(0xBEEF))));
+        for (uint256 i = 0; i < 32; i++) message[108 + i] = caller[i];
+        vm.expectRevert(abi.encodeWithSelector(AutonomousVault.WrongDestinationCaller.selector, caller));
+        vm.prank(manager);
+        vault.settleCrossChainWithMessage(nonce, message, "");
+    }
+
     function setUp() public override {
         super.setUp();
         // Deploy a MessageTransmitter that will mint 10_000e6 USDC to vault on receiveMessage.
@@ -123,6 +283,8 @@ contract TaskITest_I1 is TaskITestBase {
         // Wire it into the vault.
         vm.prank(owner);
         vault.setMessageTransmitter(address(transmitter));
+        vm.prank(owner);
+        vault.setRemoteTokenMessenger(DEST_DOMAIN, bytes32(uint256(0xCC7)));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -188,7 +350,7 @@ contract TaskITest_I1 is TaskITestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Test 4 — replay reverts NonceMismatch (pendingCrossChain[nonce] == 0)
+    // Test 4 — same pending key reverts NonceMismatch; another key cannot reuse the inbound message.
     // ─────────────────────────────────────────────────────────────────────────
     function test_I1_replay_reverts() public {
         uint64 nonce = _deployCrossChainI1(10_000e6);
@@ -207,9 +369,15 @@ contract TaskITest_I1 is TaskITestBase {
 
         vm.prank(manager);
         vm.expectRevert(
-            abi.encodeWithSelector(AutonomousVault.NonceMismatch.selector, nonce)
+            abi.encodeWithSelector(AutonomousVault.NonceMismatch.selector, nonce, uint64(0))
         );
         vault.settleCrossChainWithMessage(nonce, msg_, "");
+
+        uint64 second = _deployCrossChainI1(10_000e6);
+        vm.prank(manager);
+        vm.expectRevert(AutonomousVault.InboundAlreadyConsumed.selector);
+        vault.settleCrossChainWithMessage(second, msg_, "");
+        assertEq(vault.pendingCrossChain(second), 10_000e6);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -332,21 +500,21 @@ contract TaskITest_I1 is TaskITestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // L1 Test 9 — body shorter than 228 bytes reverts "CCTP: message body too short"
-    //             MIN_MESSAGE_LEN = 116 + 228 = 344. A 343-byte message must revert.
+    // Task M: a body shorter than 228 bytes reverts InvalidMessageRange.
+    //             MIN_MESSAGE_LEN = 148 + 228 = 376. A 375-byte message must revert.
     // ─────────────────────────────────────────────────────────────────────────
     function test_L1_body_too_short_reverts() public {
         uint64 nonce = _deployCrossChainI1(10_000e6);
 
-        // Build a valid 344-byte message then truncate to 343 bytes.
+        // Build a valid 376-byte message then truncate to 375 bytes.
         bytes memory full = _buildMessage(nonce, 10_000e6, address(vault));
-        assertEq(full.length, 344, "sanity: builder produces 344-byte message");
+        assertEq(full.length, 376, "sanity: builder produces 376-byte message");
 
-        bytes memory truncated = new bytes(343);
-        for (uint256 i = 0; i < 343; i++) truncated[i] = full[i];
+        bytes memory truncated = new bytes(375);
+        for (uint256 i = 0; i < 375; i++) truncated[i] = full[i];
 
         vm.prank(manager);
-        vm.expectRevert(bytes("CCTP: message body too short"));
+        vm.expectRevert(abi.encodeWithSelector(CctpMessageDecoder.InvalidMessageRange.selector, uint256(375), uint256(0), uint256(376)));
         vault.settleCrossChainWithMessage(nonce, truncated, "");
     }
 
@@ -387,7 +555,7 @@ contract TaskITest_I1 is TaskITestBase {
         bytes memory msg_ = _buildMessageWithFee(
             nonce, fixtureAmount, address(vault), fixtureFeeExec, fixtureMaxFee
         );
-        assertEq(msg_.length, 344, "fixture message length must be 344 bytes");
+        assertEq(msg_.length, 376, "fixture message length must be 376 bytes");
 
         vm.prank(manager);
         // Expect CrossChainFeeDeducted with the actual feeExecuted (50_000), not maxFee.

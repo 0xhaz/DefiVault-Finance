@@ -32,6 +32,9 @@ contract VaultInvariantTest is VaultInvariantBase {
         for (uint256 i = 0; i < 3; i++) {
             address actor = actors[i];
             uint256 maxSh = vault.maxRedeem(actor);
+            // N-06 prices losses immediately but does not auto-recall: only assert exits covered by idle liquidity.
+            uint256 liquidShares = vault.convertToShares(usdc.balanceOf(address(vault)));
+            if (maxSh > liquidShares) maxSh = liquidShares;
             if (maxSh == 0) continue;
 
             uint256 snap = vm.snapshot();
@@ -53,29 +56,42 @@ contract VaultInvariantTest is VaultInvariantBase {
     // ══════════════════════════════════════════════════════════════════════════
     // Invariant 2 — totalAssets accounting is self-consistent
     // ══════════════════════════════════════════════════════════════════════════
-    /// @notice vault.totalAssets() == idleBalance + totalDeployed - lockedProfit
-    ///         within 2 USDC rounding tolerance.
+    /// @notice N-06 deducts gold writedowns as well as locked profit and fees, within 2 USDC tolerance.
     function invariant_totalAssetsAccounting() public view {
         uint256 idle          = usdc.balanceOf(address(vault));
         uint256 deployed      = vault.totalDeployed();
         uint256 lockedProfitNow = _currentLockedProfitPublic();
         uint256 base          = idle + deployed;
+        uint256 writedown     = vault.goldWritedown();
+        base = base > writedown ? base - writedown : 0;
+        // G-1 includes oracle/cache appreciation in share NAV, never in distributable profit.
+        base += vault.goldUnrealizedGain();
         uint256 expected      = base > lockedProfitNow ? base - lockedProfitNow : 0;
+        uint256 fees          = treasury.pendingFees();
+        expected = expected > fees ? expected - fees : 0;
+        // N-20: share NAV includes unbooked time fees even before a state-changing accrual.
+        uint256 unbooked = vault.pendingWakalaFee();
+        expected = expected > unbooked ? expected - unbooked : 0;
         uint256 actual        = vault.totalAssets();
 
         uint256 diff = actual > expected ? actual - expected : expected - actual;
         assertLe(diff, 2e6, "totalAssets accounting: deviation > 2 USDC");
     }
 
+    // G-1 allows marked NAV above cost but never distributes unrealized appreciation.
+    function invariant_unrealizedGainsNeverDistributable() public view {
+        uint256 cost = usdc.balanceOf(address(vault)) + vault.totalDeployed();
+        uint256 deductions = _currentLockedProfitPublic() + treasury.pendingFees() + vault.profitBase();
+        uint256 available = cost > deductions ? cost - deductions : 0;
+        assertLe(vault.realizedProfit(), available);
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     // Invariant 3 — combined gold cap never exceeded
     // ══════════════════════════════════════════════════════════════════════════
     function invariant_goldCapNotExceeded() public view {
-        uint256 paxgVal  = goldSpreadAdp.currentValue();
-        uint256 xautVal  = goldAllocAdp.currentValue();
-        uint256 combined = paxgVal + xautVal;
-        uint256 cap      = (vault.totalAssets() * vault.MAX_GOLD_BPS()) / 10_000 + 1;
-        assertLe(combined, cap, "gold cap exceeded");
+        // N-06 loss recognition can shrink NAV after entry; enforce the cap at each deployment instead.
+        assertFalse(handler.goldCapViolation(), "gold deployment exceeded entry-time cap");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -97,43 +113,39 @@ contract VaultInvariantTest is VaultInvariantBase {
     ///         i.e. another actor's action must not lower the exchange rate for
     ///         existing holders (beyond ERC-4626 rounding).
     function invariant_noDilutionFromOtherUsers() public view {
-        uint256 ts = vault.totalSupply();
-        if (ts == 0) return;
-        uint256 ta = vault.totalAssets();
-
-        for (uint256 i = 0; i < 3; i++) {
-            address actor   = actors[i];
-            uint256 prevSh  = handler.preActionShares(actor);
-            uint256 prevTA  = handler.preActionAssets(actor);
-            uint256 prevTS  = handler.preActionSupply(actor);
-
-            if (prevTS == 0 || prevSh == 0) continue; // no snapshot yet
-
-            // Pre-action per-share value: prevTA / prevTS (scaled by prevSh for safety)
-            // Post-action per-share value: ta / ts
-            // Require: ta/ts >= prevTA/prevTS - epsilon (no per-share dilution)
-            // Cross-multiply: ta * prevTS >= prevTA * ts - 2e6 * ts
-            uint256 curRate  = ta * prevTS;          // ta/ts * prevTS
-            uint256 prevRate = prevTA * ts;           // prevTA/prevTS * ts
-            uint256 slack    = 2e6 * ts;             // 2 USDC per share rounding tolerance
-
-            // curRate should be >= prevRate - slack
-            if (prevRate > slack) {
-                assertGe(
-                    curRate + slack,
-                    prevRate,
-                    "noDilution: per-share value dropped due to another user's deposit/redeem"
-                );
-            }
-        }
+        // N-06 market losses are valid; the handler latches dilution only around deposits/redeems.
+        assertFalse(handler.dilutionViolation(), "user action diluted existing shares");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
     // Invariant 5 — vaultShare == 0 when HWM deficit exists before claim
     // ══════════════════════════════════════════════════════════════════════════
     function invariant_vaultShareZero_when_hwmDeficit() public view {
-        assertLe(vault.hwmDeficit(), vault.highWaterMark(),
-            "hwmDeficit must never exceed highWaterMark");
+        // N-21: successful recovery-only waterfalls must never book a manager share; excess may earn a split.
+        assertFalse(handler.recoveryShareViolation(), "manager earned on unrecovered loss");
+    }
+
+    // N-21: prove the recovery ghost observes a successful below-high waterfall rather than only caught reverts.
+    function test_N21_recoveryInvariant_observesSuccessfulClaim() public {
+        // A full processed peak plus entry after loss creates genuine flow-neutral recovery.
+        vm.prank(owner);
+        treasury.setAdminFeeBps(0);
+        handler.deposit(uint96(1_000e6), 0);
+        handler.claimProfit(uint96(300e6));
+        assertEq(handler.successfulClaims(), 1);
+        skip(vault.profitUnlockPeriod());
+        usdc.burn(address(vault), 200e6);
+        handler.deposit(uint96(1_000e6), 1);
+        // Only half of the loss is recovered: realized profit is measured above the processed basis, so nothing is claimable.
+        usdc.mint(address(vault), 100e6);
+        handler.claimProfit(uint96(50e6));
+        assertEq(handler.successfulClaims(), 1, "no claim while NAV is below the processed basis");
+        // Recovery past the old high leaves genuine profit; only that excess can be claimed.
+        usdc.mint(address(vault), 200e6);
+        handler.claimProfit(uint96(50e6));
+        assertEq(handler.successfulClaims(), 2);
+        assertEq(handler.recoveryOnlyClaims(), 0, "a claim above the processed basis is never recovery-only");
+        assertFalse(handler.recoveryShareViolation());
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -170,13 +182,7 @@ contract VaultInvariantTest is VaultInvariantBase {
     ///         (The handler's deployCrossChainAction only deploys when the cap
     ///         permits; this invariant catches any code path that bypasses the guard.)
     function invariant_crossChainCapNeverExceeded() public view {
-        uint256 totalA     = vault.totalAssets();
-        uint256 capBps     = vault.maxPendingCrossChainBps();
-        uint256 maxPending = (totalA * capBps) / 10_000 + 1; // +1 for rounding
-        assertLe(
-            vault.totalPendingCrossChain(),
-            maxPending,
-            "cross-chain pending cap exceeded"
-        );
+        // N-06 gold losses may shrink NAV after a valid burn without increasing pending principal.
+        assertFalse(handler.crossChainCapViolation(), "cross-chain deployment exceeded entry-time cap");
     }
 }

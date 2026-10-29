@@ -10,90 +10,86 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IStrategyAdapter} from "./IStrategyAdapter.sol";
 
 interface ITokenMessenger {
-    function depositForBurnWithCaller(
+    function depositForBurn(
         uint256 amount,
         uint32 destinationDomain,
         bytes32 mintRecipient,
         address burnToken,
-        bytes32 destinationCaller
-    ) external returns (uint64 nonce);
+        bytes32 destinationCaller,
+        uint256 maxFee,
+        uint32 minFinalityThreshold
+    ) external;
 }
 
 /// @notice CCTP V2 MessageTransmitter — only the function needed for atomic settle.
 interface IMessageTransmitterV2 {
     function receiveMessage(bytes calldata message, bytes calldata attestation) external returns (bool success);
+    function localDomain() external view returns (uint32);
 }
 
-/// @notice Minimal decoder for the CCTP V2 burn message to extract nonce, amount,
-///         mintRecipient, and feeExecuted.
-///
-///         Outer message header layout (116 bytes, all big-endian):
-///           [0..3]    version (uint32)
-///           [4..7]    sourceDomain (uint32)
-///           [8..11]   destinationDomain (uint32)
-///           [12..19]  nonce (uint64)
-///           [20..51]  sender (bytes32)
-///           [52..83]  recipient (bytes32)
-///           [84..115] destinationCaller (bytes32)
-///
-///         BurnMessageV2 body layout (at outer header offset 116, all big-endian).
-///         Reference: Circle CCTP V2 BurnMessage spec
-///         https://developers.circle.com/stablecoins/docs/cctp-technical-reference
-///
-///           Body offset | Field           | Size (bytes)
-///           ------------|-----------------|-------------
-///           [0..3]      | version         | 4
-///           [4..35]     | burnToken       | 32
-///           [36..67]    | mintRecipient   | 32
-///           [68..99]    | amount          | 32
-///           [100..131]  | messageSender   | 32
-///           [132..163]  | maxFee          | 32  — caller-specified fee ceiling
-///           [164..195]  | feeExecuted     | 32  — actual fee taken; zero for Standard Transfer
-///           [196..227]  | expirationBlock | 32
-///           [228+]      | hookData        | dynamic (may be empty)
-///
-///         The CCTP V2 transmitter mints (amount - feeExecuted) to mintRecipient.
-///         feeExecuted <= maxFee always; feeExecuted == 0 for Standard Transfer.
+/// @notice Decoder for native Circle MessageV2 / BurnMessageV2, not a compatibility envelope.
+/// @dev All fields are big-endian. Header offsets (148 bytes before body):
+///      0: version uint32 (1); 4: sourceDomain uint32; 8: destinationDomain uint32;
+///      12: nonce bytes32; 44: sender bytes32 (remote TokenMessenger);
+///      76: recipient bytes32 (local TokenMessenger); 108: destinationCaller bytes32;
+///      140: minFinalityThreshold uint32; 144: finalityThresholdExecuted uint32; 148: body.
+///      Body offsets (228 fixed bytes, relative to 148):
+///      0: version uint32 (1); 4: burnToken bytes32; 36: mintRecipient bytes32;
+///      68: amount uint256; 100: messageSender bytes32; 132: maxFee uint256;
+///      164: feeExecuted uint256; 196: expirationBlock uint256; 228: optional hookData.
 library CctpMessageDecoder {
-    /// @dev Minimum message length: 116-byte header + 228-byte fixed V2 body
-    ///      (version + burnToken + mintRecipient + amount + messageSender +
-    ///       maxFee + feeExecuted + expirationBlock = 4+32+32+32+32+32+32+32 = 228).
-    ///      hookData (offset 228+) is optional and not read here.
-    uint256 internal constant MIN_MESSAGE_LEN = 116 + 228;
+    uint256 internal constant HEADER_LEN = 148;
+    uint256 internal constant MIN_MESSAGE_LEN = 148 + 228;
 
-    /// @dev Returns the `nonce` embedded in the outer CCTP message header.
-    ///      Header layout (bytes):
-    ///        [0..3]   version
-    ///        [4..7]   sourceDomain
-    ///        [8..11]  destinationDomain
-    ///        [12..19] nonce (uint64)
-    ///        ... (rest unused here)
-    function decodeNonce(bytes calldata message) internal pure returns (uint64 nonce) {
-        require(message.length >= 20, "CCTP: message too short");
-        nonce = uint64(bytes8(bytes20(message[12:20])));
+    error InvalidMessageRange(uint256 length, uint256 offset, uint256 size);
+    error WrongHeaderVersion(uint32 actual);
+    error WrongBodyVersion(uint32 actual);
+
+    struct Header {
+        uint32 sourceDomain;
+        uint32 destinationDomain;
+        bytes32 nonce;
+        bytes32 sender;
+        bytes32 recipient;
+        bytes32 destinationCaller;
     }
 
-    /// @dev Returns `amount`, `mintRecipient`, and `feeExecuted` from the V2 BurnMessage body.
-    ///      The outer message header is 116 bytes; the body starts at offset 116.
-    ///      For Standard Transfer, `feeExecuted` is zero and the full `amount` is minted.
-    ///      For Fast Transfer, `feeExecuted` > 0 and the net minted amount is
-    ///      `amount - feeExecuted`.
-    function decodeBody(bytes calldata message)
-        internal
-        pure
-        returns (uint256 amount, bytes32 mintRecipient, uint256 feeExecuted)
+    /// @dev Subtraction-based bounds checks also reject oversized offsets without arithmetic panic.
+    function _field(bytes calldata message, uint256 offset, uint256 size)
+        internal pure returns (bytes calldata)
     {
-        require(message.length >= MIN_MESSAGE_LEN, "CCTP: message body too short");
-        // body offset 36..67  = mintRecipient (32 bytes)
-        mintRecipient = bytes32(message[116 + 36 : 116 + 68]);
-        // body offset 68..99  = amount (uint256, gross before fee deduction)
-        amount        = uint256(bytes32(message[116 + 68 : 116 + 100]));
-        // body offset 132..163 = maxFee  (not read — ceil only, not the actual fee taken)
-        // body offset 164..195 = feeExecuted (zero for Standard Transfer; > 0 for Fast Transfer)
-        feeExecuted   = uint256(bytes32(message[116 + 164 : 116 + 196]));
+        if (offset > message.length || size > message.length - offset) {
+            revert InvalidMessageRange(message.length, offset, size);
+        }
+        return message[offset:offset + size];
+    }
+
+    function decodeHeader(bytes calldata message) internal pure returns (Header memory h) {
+        _field(message, 0, HEADER_LEN);
+        uint32 version = uint32(bytes4(_field(message, 0, 4)));
+        if (version != 1) revert WrongHeaderVersion(version);
+        h.sourceDomain = uint32(bytes4(_field(message, 4, 4)));
+        h.destinationDomain = uint32(bytes4(_field(message, 8, 4)));
+        h.nonce = bytes32(_field(message, 12, 32));
+        h.sender = bytes32(_field(message, 44, 32));
+        h.recipient = bytes32(_field(message, 76, 32));
+        h.destinationCaller = bytes32(_field(message, 108, 32));
+    }
+
+    function decodeBody(bytes calldata message)
+        internal pure returns (uint256 amount, bytes32 mintRecipient, uint256 feeExecuted)
+    {
+        _field(message, 0, MIN_MESSAGE_LEN);
+        uint32 version = uint32(bytes4(_field(message, HEADER_LEN, 4)));
+        if (version != 1) revert WrongBodyVersion(version);
+        mintRecipient = bytes32(_field(message, HEADER_LEN + 36, 32));
+        amount = uint256(bytes32(_field(message, HEADER_LEN + 68, 32)));
+        feeExecuted = uint256(bytes32(_field(message, HEADER_LEN + 164, 32)));
     }
 }
 
+/// @notice ERC-4626 vault with native Circle CCTP V2 burns and atomic return settlement.
+/// @dev Pending uint64 keys are local position IDs; inbound Circle nonces are bytes32.
 contract AutonomousVault is ERC4626, Ownable2Step {
     using SafeERC20 for IERC20;
 
@@ -103,7 +99,14 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     error InvalidBps();
     error CrossChainNotConfigured();
     error SameDomainDeploy();
-    error NonceMismatch(uint64 nonce);
+    error NonceMismatch(uint64 expected, uint64 actual);
+    error ZeroAddress();
+    error WrongDestinationDomain(uint32 expected, uint32 actual);
+    error WrongSourceDomain(uint32 expected, uint32 actual);
+    error WrongMessageRecipient(bytes32 actual);
+    error InboundAlreadyConsumed();
+    error WrongDestinationCaller(bytes32 actual);
+    error LocalDomainMismatch(uint32 expected, uint32 actual);
     /// @notice Thrown when a cross-chain deploy would push pending cross-chain > maxPendingCrossChainBps.
     error PendingCrossChainCapExceeded();
     /// @notice Thrown when profitUnlockPeriod is set above MAX_PROFIT_UNLOCK_PERIOD.
@@ -115,6 +118,38 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     error MessageAmountMismatch(uint256 expectedNet, uint256 balanceDelta);
     /// @notice Thrown by the write-off path when received > 0 (write-off must book a full loss).
     error WriteOffMustBeZero();
+    error InvalidCrossChainMinFinality();
+    error RemoteMessengerNotSet(uint32 domain);
+    error WrongRemoteSender(bytes32 expected, bytes32 actual);
+    error MessageReceiveFailed();
+
+    event CrossChainMinFinalityUpdated(uint32 previous, uint32 updated);
+    event CrossChainMaxFeeBpsUpdated(uint256 previous, uint256 updated);
+    event RemoteTokenMessengerUpdated(uint32 indexed domain, bytes32 messenger);
+
+    uint64 public crossChainPositionCounter;
+    uint32 public crossChainMinFinality = 2000;
+    uint256 public crossChainMaxFeeBps;
+    uint256 public constant MAX_CROSS_CHAIN_FEE_BPS = 100;
+    mapping(uint32 => bytes32) public remoteTokenMessenger;
+
+    function setCrossChainMinFinality(uint32 finality) external onlyOwner {
+        if (finality != 1000 && finality != 2000) revert InvalidCrossChainMinFinality();
+        emit CrossChainMinFinalityUpdated(crossChainMinFinality, finality);
+        crossChainMinFinality = finality;
+    }
+
+    function setCrossChainMaxFeeBps(uint256 bps) external onlyOwner {
+        if (bps > MAX_CROSS_CHAIN_FEE_BPS) revert InvalidBps();
+        emit CrossChainMaxFeeBpsUpdated(crossChainMaxFeeBps, bps);
+        crossChainMaxFeeBps = bps;
+    }
+
+    function setRemoteTokenMessenger(uint32 domain, bytes32 messenger) external onlyOwner {
+        if (messenger == bytes32(0)) revert ZeroAddress();
+        remoteTokenMessenger[domain] = messenger;
+        emit RemoteTokenMessengerUpdated(domain, messenger);
+    }
 
     event ManagerUpdated(address indexed previousManager, address indexed newManager);
     event MaxAllocationBpsUpdated(uint256 previousBps, uint256 newBps);
@@ -122,16 +157,17 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     event CapitalDeployed(address indexed strategy, uint256 amount);
     event CapitalReturned(address indexed strategy, uint256 amount);
     event CapitalRecalledFromAdapter(address indexed adapter, uint256 requested, uint256 returned);
+    /// @notice positionId is a local pending-position key, not Circle's offchain bytes32 nonce.
     event CapitalDeployedCrossChain(
         uint32 indexed destinationDomain,
         bytes32 indexed recipient,
         uint256 amount,
-        uint64 nonce
+        uint64 positionId
     );
-    event CrossChainSettled(uint64 indexed nonce, uint256 amount, uint256 shortfall);
+    event CrossChainSettled(uint64 indexed positionId, uint256 amount, uint256 shortfall);
     /// @notice Emitted when a CCTP Fast Transfer fee is deducted from the minted amount.
     ///         `feeExecuted` is booked as part of the cross-chain cost alongside any strategy loss.
-    event CrossChainFeeDeducted(uint64 indexed nonce, uint256 feeExecuted);
+    event CrossChainFeeDeducted(uint64 indexed positionId, uint256 feeExecuted);
     event TokenMessengerUpdated(address indexed previousMessenger, address indexed newMessenger);
     event MessageTransmitterUpdated(address indexed previous, address indexed updated);
     event ProfitLocked(uint256 amount, uint256 unlockedAt);
@@ -144,8 +180,12 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     address public tokenMessenger;
     /// @dev The CCTP domain of THIS chain (set in constructor, used to guard deployCrossChain)
     uint32 public immutable sourceDomain;
-    /// @dev Tracks pending crosschain positions: nonce => amount, for settlement accounting
+    /// @dev Constructor domain is the fallback for transmitters without localDomain().
+    uint32 public localDomain;
+    /// @dev Tracks pending cross-chain positions: local positionId => amount.
     mapping(uint64 => uint256) public pendingCrossChain;
+    mapping(uint64 => uint32) public pendingCrossChainDestinationDomain;
+    mapping(uint32 => mapping(bytes32 => bool)) public consumedInbound;
     /// @dev Sum of all outstanding cross-chain positions (for cap enforcement — PR3.3).
     uint256 public totalPendingCrossChain;
     /// @notice Max fraction of totalAssets allowed in-flight cross-chain (default 2000 = 20%).
@@ -173,6 +213,7 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         Ownable(initialOwner)
     {
         sourceDomain = sourceDomain_;
+        localDomain = sourceDomain_;
     }
 
     /// @dev Virtual offset of 6 decimals (matching USDC) makes the first-depositor
@@ -190,8 +231,11 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     /// @notice Returns the current locked profit (linearly decreasing to 0 over profitUnlockPeriod).
     function _currentLockedProfit() internal view returns (uint256) {
         if (lockedProfit == 0 || block.timestamp >= unlockedAt) return 0;
-        uint256 elapsed  = block.timestamp - (unlockedAt - profitUnlockPeriod);
         uint256 duration = profitUnlockPeriod;
+        if (duration == 0 || unlockedAt < duration) return 0;
+        uint256 start = unlockedAt - duration;
+        if (start > block.timestamp) return 0;
+        uint256 elapsed = block.timestamp - start;
         // Linear: lockedProfit * (duration - elapsed) / duration
         if (elapsed >= duration) return 0;
         return (lockedProfit * (duration - elapsed)) / duration;
@@ -205,7 +249,7 @@ contract AutonomousVault is ERC4626, Ownable2Step {
 
     /**
      * @dev Internal helper — stacks amount on top of any remaining locked profit.
-     *      Called by lockProfit (external) and by ShariahVault.claimMusharakahProfit (internal).
+     *      Derived vaults decide which external entry points may lock profit.
      */
     function _lockProfitInternal(uint256 amount) internal {
         uint256 remaining = _currentLockedProfit();
@@ -214,20 +258,13 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         emit ProfitLocked(amount, unlockedAt);
     }
 
-    /**
-     * @notice Lock profit for linear streaming into NAV (PR3.2).
-     * @dev    Called by the manager/owner after profit is credited to the vault
-     *         (e.g. after claimMusharakahProfit deposits the depositorShare back).
-     *         New profit stacks on top of any remaining locked profit (Yearn pattern).
-     */
-    function lockProfit(uint256 amount) external onlyManagerOrOwner {
-        _lockProfitInternal(amount);
-    }
-
     /// @notice Owner updates profit unlock period (board-settable; max 14 days).
     function setProfitUnlockPeriod(uint256 period) external onlyOwner {
         if (period > MAX_PROFIT_UNLOCK_PERIOD) revert InvalidUnlockPeriod();
+        uint256 remaining = _currentLockedProfit();
+        lockedProfit = remaining;
         profitUnlockPeriod = period;
+        if (remaining > 0) unlockedAt = block.timestamp + period;
     }
 
     /// @notice Owner updates max pending cross-chain cap.
@@ -270,27 +307,21 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         uint256 maxPending = (totalAssets() * maxPendingCrossChainBps) / 10_000;
         if (totalPendingCrossChain + amount > maxPending) revert PendingCrossChainCapExceeded();
 
-        // Approve exact amount; always clear residual allowance after the call
-        IERC20(asset()).forceApprove(tokenMessenger, amount);
-        uint64 nonce = ITokenMessenger(tokenMessenger).depositForBurnWithCaller(
-            amount,
-            destinationDomain,
-            recipient,
-            asset(),
-            bytes32(0)
+        CctpSettlementLogic.burn(
+            asset(), tokenMessenger, destinationDomain, recipient, amount,
+            crossChainMaxFeeBps, crossChainMinFinality
         );
-        // Clear any leftover allowance to prevent tokenMessenger from pulling more later
+        // Preserve the position-counter update before clearing the burn allowance.
+        uint64 positionId = ++crossChainPositionCounter;
         IERC20(asset()).forceApprove(tokenMessenger, 0);
-
         totalDeployed += amount;
         totalPendingCrossChain += amount;
-        // Record pending position so settle can decrement totalDeployed on return.
-        pendingCrossChain[nonce] = amount;
-
-        emit CapitalDeployedCrossChain(destinationDomain, recipient, amount, nonce);
+        pendingCrossChain[positionId] = amount;
+        pendingCrossChainDestinationDomain[positionId] = destinationDomain;
+        emit CapitalDeployedCrossChain(destinationDomain, recipient, amount, positionId);
     }
 
-    function returnCapital(address strategy, uint256 amount) external onlyManagerOrOwner {
+    function returnCapital(address strategy, uint256 amount) external virtual onlyManagerOrOwner {
         if (paused) revert Paused();
         // Pull actual tokens back from the strategy before adjusting accounting
         IERC20(asset()).safeTransferFrom(strategy, address(this), amount);
@@ -304,7 +335,7 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     ///         so NAV accounting stays accurate even when slippage or fees reduce proceeds.
     /// @param adapter  Address implementing IStrategyAdapter (must have vault == address(this))
     /// @param amount   Requested USDC amount to recall (adapter may return less due to slippage)
-    function recallCapital(address adapter, uint256 amount) external onlyManagerOrOwner {
+    function recallCapital(address adapter, uint256 amount) external virtual onlyManagerOrOwner {
         if (paused) revert Paused();
         uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
         uint256 returned = IStrategyAdapter(adapter).recall(amount);
@@ -331,65 +362,59 @@ contract AutonomousVault is ERC4626, Ownable2Step {
      *         balance inside a single call, so `received` is always exact.
      *         Also verifies that the decoded mintRecipient is this vault and that the
      *         message-encoded amount matches the actual balance delta.
-     * @param nonce        CCTP burn nonce from the original deployCrossChain.
+     * @param positionId   Local pending-position ID emitted by deployCrossChain, not a CCTP nonce.
      * @param message      Attested CCTP message bytes (returned by the CCTP attestation API).
      * @param attestation  Corresponding attestation bytes.
      */
     function settleCrossChainWithMessage(
-        uint64 nonce,
+        uint64 positionId,
         bytes calldata message,
         bytes calldata attestation
     ) external onlyManagerOrOwner {
-        uint256 sent = pendingCrossChain[nonce];
-        if (sent == 0) revert NonceMismatch(nonce);
+        uint256 sent = pendingCrossChain[positionId];
+        if (sent == 0) revert NonceMismatch(positionId, 0);
 
-        // Decode and validate the message before minting.
-        // feeExecuted > 0 on CCTP V2 Fast Transfer — the transmitter mints (amount - feeExecuted).
-        (uint256 msgAmount, bytes32 mintRecipient, uint256 feeExecuted) =
-            CctpMessageDecoder.decodeBody(message);
-        if (mintRecipient != bytes32(uint256(uint160(address(this))))) {
-            revert WrongMintRecipient(mintRecipient);
-        }
-
-        // Net amount expected to be minted by the transmitter.
-        // feeExecuted must be <= msgAmount (defensive: treat > as full fee coverage = 0 net).
-        uint256 expectedNet = feeExecuted <= msgAmount ? msgAmount - feeExecuted : 0;
-
-        // Snapshot balance, call receiveMessage (mints USDC to this vault), measure delta.
-        uint256 balBefore = IERC20(asset()).balanceOf(address(this));
-        IMessageTransmitterV2(messageTransmitter).receiveMessage(message, attestation);
-        uint256 balAfter  = IERC20(asset()).balanceOf(address(this));
-        uint256 received  = balAfter > balBefore ? balAfter - balBefore : 0;
-
-        // Cross-check: the net expected amount must equal the actual minted amount.
-        // This guards against fee mis-encoding and transmitter bugs.
-        if (expectedNet != received) revert MessageAmountMismatch(expectedNet, received);
-
-        // Emit fee cost so callers can observe the total cross-chain cost
-        // (fee + any strategy shortfall = totalDeployed - received).
-        if (feeExecuted > 0) {
-            emit CrossChainFeeDeducted(nonce, feeExecuted);
-        }
-
-        _doSettle(nonce, sent, received);
+        if (messageTransmitter == address(0)) revert CrossChainNotConfigured();
+        uint256 received = CctpSettlementLogic.receiveSettlement(
+            _settlementConfig(positionId), remoteTokenMessenger, consumedInbound,
+            positionId, message, attestation
+        );
+        _doSettle(positionId, sent, received);
     }
 
     /**
      * @notice Write off a lost cross-chain transfer (USDC never arrives or is unrecoverable).
      * @dev    J1: Degraded path — `received` MUST be 0. Books the full sent amount as a loss.
      *         Only callable by the owner (not the manager) to prevent accidental write-offs.
-     * @param nonce  CCTP burn nonce from the original deployCrossChain.
+     * @param positionId  Local pending-position ID emitted by deployCrossChain.
      */
-    function settleCrossChain(uint64 nonce, uint256 received) external onlyOwner {
+    function settleCrossChain(uint64 positionId, uint256 received) external onlyOwner {
         if (received != 0) revert WriteOffMustBeZero();
-        uint256 sent = pendingCrossChain[nonce];
-        if (sent == 0) revert NonceMismatch(nonce);
-        _doSettle(nonce, sent, 0);
+        uint256 sent = pendingCrossChain[positionId];
+        if (sent == 0) revert NonceMismatch(positionId, 0);
+        _doSettle(positionId, sent, 0);
+    }
+
+    /// @dev Values are passed explicitly; mappings retain their original storage roots.
+    function _settlementConfig(uint64 positionId) internal view returns (CctpSettlementLogic.Config memory) {
+        return CctpSettlementLogic.Config(
+            asset(), messageTransmitter, tokenMessenger, localDomain,
+            pendingCrossChainDestinationDomain[positionId]
+        );
+    }
+
+    function _validateSettlementHeader(uint64 positionId, bytes calldata message) internal view {
+        CctpSettlementLogic.validateHeader(_settlementConfig(positionId), remoteTokenMessenger, message);
+    }
+
+    function _consumeInbound(bytes calldata message) internal {
+        CctpSettlementLogic.consumeInbound(consumedInbound, message);
     }
 
     /// @dev Shared accounting for both settle paths.
-    function _doSettle(uint64 nonce, uint256 sent, uint256 received) internal {
-        delete pendingCrossChain[nonce];
+    function _doSettle(uint64 positionId, uint256 sent, uint256 received) internal {
+        delete pendingCrossChain[positionId];
+        delete pendingCrossChainDestinationDomain[positionId];
 
         uint256 shortfall = sent > received ? sent - received : 0;
         // Decrement totalDeployed by the full sent amount. The received USDC tokens are
@@ -398,7 +423,7 @@ contract AutonomousVault is ERC4626, Ownable2Step {
         totalDeployed          = totalDeployed >= sent ? totalDeployed - sent : 0;
         totalPendingCrossChain = totalPendingCrossChain >= sent ? totalPendingCrossChain - sent : 0;
 
-        emit CrossChainSettled(nonce, received, shortfall);
+        emit CrossChainSettled(positionId, received, shortfall);
     }
 
     function setManager(address newManager) external onlyOwner {
@@ -416,12 +441,30 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     }
 
     function setTokenMessenger(address messenger) external onlyOwner {
+        if (messenger == address(0)) revert ZeroAddress();
         address previous = tokenMessenger;
         tokenMessenger = messenger;
         emit TokenMessengerUpdated(previous, messenger);
     }
 
+    event LocalDomainUpdated(uint32 domain);
+
+    function setLocalDomain(uint32 domain) external onlyOwner {
+        if (messageTransmitter == address(0)) revert ZeroAddress();
+        (bool ok, bytes memory data) = messageTransmitter.staticcall(abi.encodeWithSignature("localDomain()"));
+        if (ok && data.length == 32) {
+            uint32 reported = abi.decode(data, (uint32));
+            if (domain != reported) revert LocalDomainMismatch(reported, domain);
+        }
+        localDomain = domain; // Domain zero is valid.
+        emit LocalDomainUpdated(domain);
+    }
+
     function setMessageTransmitter(address transmitter) external onlyOwner {
+        if (transmitter == address(0)) revert ZeroAddress();
+        (bool ok, bytes memory data) = transmitter.staticcall(abi.encodeWithSignature("localDomain()"));
+        localDomain = ok && data.length == 32 ? abi.decode(data, (uint32)) : sourceDomain;
+        emit LocalDomainUpdated(localDomain);
         address previous = messageTransmitter;
         messageTransmitter = transmitter;
         emit MessageTransmitterUpdated(previous, transmitter);
@@ -440,5 +483,96 @@ contract AutonomousVault is ERC4626, Ownable2Step {
     function mint(uint256 shares, address receiver) public virtual override returns (uint256) {
         if (paused) revert Paused();
         return super.mint(shares, receiver);
+    }
+}
+
+/// @dev Linked CCTP execution in the vault's context; no independent storage or authority.
+library CctpSettlementLogic {
+    using SafeERC20 for IERC20;
+
+    struct Config {
+        address asset;
+        address transmitter;
+        address messenger;
+        uint32 fallbackDomain;
+        uint32 expectedSource;
+    }
+
+    function burn(
+        address token, address messenger, uint32 destinationDomain, bytes32 recipient,
+        uint256 amount, uint256 maxFeeBps, uint32 minFinality
+    ) external {
+        IERC20(token).forceApprove(messenger, amount);
+        ITokenMessenger(messenger).depositForBurn(
+            amount, destinationDomain, recipient, token, bytes32(0),
+            (amount * maxFeeBps) / 10_000, minFinality
+        );
+    }
+
+    function validateHeader(
+        Config memory c, mapping(uint32 => bytes32) storage remoteMessenger, bytes calldata message
+    ) external view {
+        _validateHeader(c, remoteMessenger, message);
+    }
+
+    function _validateHeader(
+        Config memory c, mapping(uint32 => bytes32) storage remoteMessenger, bytes calldata message
+    ) private view {
+        CctpMessageDecoder.Header memory h = CctpMessageDecoder.decodeHeader(message);
+        uint32 domain = c.fallbackDomain;
+        (bool ok, bytes memory data) = c.transmitter.staticcall(abi.encodeWithSignature("localDomain()"));
+        if (ok && data.length == 32) domain = abi.decode(data, (uint32));
+        if (h.destinationDomain != domain) revert AutonomousVault.WrongDestinationDomain(domain, h.destinationDomain);
+        if (h.sourceDomain != c.expectedSource) revert AutonomousVault.WrongSourceDomain(c.expectedSource, h.sourceDomain);
+        if (h.recipient != bytes32(uint256(uint160(c.messenger)))) revert AutonomousVault.WrongMessageRecipient(h.recipient);
+        if (h.destinationCaller != bytes32(uint256(uint160(address(this))))) {
+            revert AutonomousVault.WrongDestinationCaller(h.destinationCaller);
+        }
+        bytes32 expectedSender = remoteMessenger[h.sourceDomain];
+        if (expectedSender == bytes32(0)) revert AutonomousVault.RemoteMessengerNotSet(h.sourceDomain);
+        if (h.sender != expectedSender) revert AutonomousVault.WrongRemoteSender(expectedSender, h.sender);
+    }
+
+    function consumeInbound(
+        mapping(uint32 => mapping(bytes32 => bool)) storage consumed, bytes calldata message
+    ) external {
+        _consumeInbound(consumed, message);
+    }
+
+    function _consumeInbound(
+        mapping(uint32 => mapping(bytes32 => bool)) storage consumed, bytes calldata message
+    ) private {
+        CctpMessageDecoder.Header memory h = CctpMessageDecoder.decodeHeader(message);
+        if (consumed[h.sourceDomain][h.nonce]) revert AutonomousVault.InboundAlreadyConsumed();
+        consumed[h.sourceDomain][h.nonce] = true;
+    }
+
+    function receiveSettlement(
+        Config memory c,
+        mapping(uint32 => bytes32) storage remoteMessenger,
+        mapping(uint32 => mapping(bytes32 => bool)) storage consumed,
+        uint64 positionId, bytes calldata message, bytes calldata attestation
+    ) external returns (uint256 received) {
+        _validateHeader(c, remoteMessenger, message);
+        (uint256 msgAmount, bytes32 mintRecipient, uint256 feeExecuted) = CctpMessageDecoder.decodeBody(message);
+        if (mintRecipient != bytes32(uint256(uint160(address(this))))) {
+            revert AutonomousVault.WrongMintRecipient(mintRecipient);
+        }
+        _consumeInbound(consumed, message);
+        uint256 expectedNet = feeExecuted <= msgAmount ? msgAmount - feeExecuted : 0;
+        received = _receive(c, message, attestation, expectedNet);
+        if (feeExecuted > 0) emit AutonomousVault.CrossChainFeeDeducted(positionId, feeExecuted);
+    }
+
+    function _receive(Config memory c, bytes calldata message, bytes calldata attestation, uint256 expectedNet)
+        private returns (uint256 received)
+    {
+        uint256 balBefore = IERC20(c.asset).balanceOf(address(this));
+        if (!IMessageTransmitterV2(c.transmitter).receiveMessage(message, attestation)) {
+            revert AutonomousVault.MessageReceiveFailed();
+        }
+        uint256 balAfter = IERC20(c.asset).balanceOf(address(this));
+        received = balAfter > balBefore ? balAfter - balBefore : 0;
+        if (expectedNet != received) revert AutonomousVault.MessageAmountMismatch(expectedNet, received);
     }
 }

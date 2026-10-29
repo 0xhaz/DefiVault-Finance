@@ -10,6 +10,7 @@ import {TreasuryModule}         from "../TreasuryModule.sol";
 import {CharityModule}          from "../CharityModule.sol";
 import {PurificationEscrow}     from "../PurificationEscrow.sol";
 import {AutonomousVault}        from "../AutonomousVault.sol";
+import {AutonomousVaultHarness} from "../test-helpers/AutonomousVaultHarness.sol";
 
 import {MockERC20}              from "../test-helpers/MockERC20.sol";
 import {MockXAUT}               from "../test-helpers/MockXAUT.sol";
@@ -33,17 +34,12 @@ contract RevertingOracle {
 //  Burns (transfers) USDC from the caller to simulate real CCTP behavior.
 // ---------------------------------------------------------------------------
 contract MockTokenMessengerH {
-    uint64 public nextNonce = 1;
-    function depositForBurnWithCaller(
-        uint256 amount,
-        uint32  /*destinationDomain*/,
-        bytes32 /*mintRecipient*/,
-        address burnToken,
-        bytes32 /*destinationCaller*/
-    ) external returns (uint64 nonce) {
-        // Pull tokens from caller (vault) to simulate the CCTP burn
+    // Task M: preserve the simulated burn but record V2 arguments and return no nonce.
+    bytes public lastCall;
+    function depositForBurn(uint256 amount, uint32 domain, bytes32 recipient, address burnToken,
+        bytes32 caller, uint256 maxFee, uint32 finality) external {
+        lastCall = abi.encode(amount, domain, recipient, burnToken, caller, maxFee, finality);
         IERC20(burnToken).transferFrom(msg.sender, address(this), amount);
-        nonce = nextNonce++;
     }
 }
 
@@ -67,12 +63,19 @@ contract MockMessageTransmitterH {
 
 // Helper library: build a minimal CCTP message for J1 tests.
 library TestCctpMsgH {
-    function build(uint64 nonce_, uint256 amount_, address recipient_) internal pure returns (bytes memory) {
-        bytes memory header = new bytes(116);
-        for (uint256 i = 0; i < 8; i++) header[19 - i] = bytes1(uint8(nonce_ >> (i * 8)));
+    function build(uint64 nonce_, uint256 amount_, address recipient_) internal view returns (bytes memory) {
+        AutonomousVault target = AutonomousVault(recipient_);
+        // Task M: native 148-byte V2 header, bytes32 nonce and registered remote sender.
+        uint32 remote = target.pendingCrossChainDestinationDomain(1);
+        bytes memory header = abi.encodePacked(
+            uint32(1), remote, target.localDomain(), bytes32(uint256(nonce_)),
+            target.remoteTokenMessenger(remote), bytes32(uint256(uint160(target.tokenMessenger()))),
+            bytes32(uint256(uint160(recipient_))), uint32(2000), uint32(2000) // destinationCaller = vault
+        );
         // BurnMessageV2 body: 228 bytes (version+burnToken+mintRecipient+amount+
         //   messageSender+maxFee+feeExecuted+expirationBlock = 4+32+32+32+32+32+32+32).
         bytes memory body = new bytes(228);
+        body[3] = 0x01; // Task M: native BurnMessageV2 version.
         bytes32 rw = bytes32(uint256(uint160(recipient_)));
         for (uint256 i = 0; i < 32; i++) body[36 + i] = rw[i];
         bytes32 aw = bytes32(amount_);
@@ -293,9 +296,7 @@ contract TaskHTest is Test {
     /// @dev Deploy capital from vault to adapter and execute the gold buy.
     function _deployCapital(uint256 amount) internal {
         vm.prank(owner);
-        vault.deployCapital(address(adapter), amount, "");
-        vm.prank(address(vault));
-        adapter.deploy(amount);
+        vault.deployCapitalAndExecute(address(adapter), amount, "");
     }
 
     /// @dev Make the oracle stale: advance time past maxStalenessSecs.
@@ -346,10 +347,8 @@ contract TaskHTest is Test {
     }
 
     // ─── Test 2 ─────────────────────────────────────────────────────────────
-    // currentValue() uses pool price (lower) when oracle stale + pool < lastGoodPrice.
-    // lastGoodPrice = $3300 oracle; pool shows $3200 (lower); oracle stale.
-    // currentValue = xautHeld * 3200 * 0.95 (pool is lower → use pool + haircut).
-    function test_PR1_currentValue_uses_pool_when_lower() public {
+    // Cached oracle valuation remains independent of a depressed pool during an outage.
+    function test_PR1_currentValue_ignores_pool_when_lower() public {
         // Deploy at $3300
         _deployCapital(3_300e6);
         uint256 xautHeld = adapter.xautHeld();
@@ -365,12 +364,12 @@ contract TaskHTest is Test {
 
         uint256 val = adapter.currentValue();
 
-        // Pool price $3200 < lastGoodPrice $3300 → stalePriceBase = 3200e6
-        uint256 expectedGross = (xautHeld * 3_200_000_000) / 1e6;
+        // A depressed spot must not change the cached-price fallback valuation.
+        uint256 expectedGross = (xautHeld * ORACLE_USDC) / 1e6;
         uint256 expectedHaircutValue = (expectedGross * (10_000 - 500)) / 10_000;
 
         assertApproxEqRel(val, expectedHaircutValue, 0.01e18,
-            "stale value should use pool price (lower) with haircut");
+            "stale value must ignore depressed spot and use cached oracle with haircut");
     }
 
     // ─── Test 3 ─────────────────────────────────────────────────────────────
@@ -445,10 +444,12 @@ contract TaskHTest is Test {
         // At construction lastGoodPrice == 0
         assertEq(adapter.lastGoodPrice(), 0, "initial lastGoodPrice == 0");
 
+        uint256 observedAt = block.timestamp - 60;
+        oracle.setUpdatedAt(observedAt);
         adapter.pokePrice();
 
         assertEq(adapter.lastGoodPrice(), ORACLE_USDC, "lastGoodPrice should be oracle USDC price");
-        assertEq(adapter.lastGoodPriceAt(), block.timestamp, "lastGoodPriceAt should be now");
+        assertEq(adapter.lastGoodPriceAt(), observedAt, "lastGoodPriceAt should be observation time");
     }
 
     // ─── Test 9 ─────────────────────────────────────────────────────────────
@@ -696,28 +697,12 @@ contract TaskHTest is Test {
         usdc.burn(address(lossy), 32_000e6);
         // lossy now holds 128_000e6 (it received 160_000e6, lost 20% = 32_000e6)
 
-        // Recall capital: lossy.recall(160_000e6) → transfers 128_000e6 back (80%)
-        // recallCapital computes actualReturn = balanceAfter - balanceBefore = 128_000e6
-        // then totalDeployed -= 128_000e6 → totalDeployed = 32_000e6
+        // N-06 retires all principal on the lossy exit so both depositors immediately bear the real loss.
         vm.prank(owner);
         vault.recallCapital(address(lossy), deployAmt);
-
-        // After recall: vault balance = 40_000e6 + 128_000e6 = 168_000e6
-        //               totalDeployed = 32_000e6 (reflects unrecovered capital)
-        //               totalAssets = 200_000e6 (loss still tracked as deployed)
-        // The vault tracks the 32k as outstanding deployed capital.
-        // Real-world: an admin writes it off by adjusting totalDeployed via a second
-        // recallCapital with 0 return. Simulate that second call:
-        vm.prank(owner);
-        vault.recallCapital(address(lossy), 1); // lossy has 0 tokens; returns 0
-        // totalDeployed -= max(balanceDelta=0, returned=0) = stays 32_000e6
-        // This won't help. The proper way is totalDeployed is decremented by actual return.
-        // The loss of 32k IS reflected: totalDeployed = 32_000e6 (outstanding deployed capital).
-        // totalAssets = 168_000e6 + 32_000e6 = 200_000e6 (before write-off).
-        // This is intentional vault design: outstanding capital is still counted.
-        //
-        // The KEY property we ARE testing: proportional shares.
-        // Alice's share == Bob's share (both deposited equally, both see the same NAV per share).
+        assertEq(vault.principalOf(address(lossy)), 0);
+        assertEq(vault.totalDeployed(), 0);
+        assertEq(vault.totalAssets(), 168_000e6);
 
         uint256 aliceShares = vault.balanceOf(alice);
         uint256 bobShares   = vault.balanceOf(bob);
@@ -743,29 +728,28 @@ contract TaskHTest is Test {
     // =====================================================================
 
     // ─── Test 20 ────────────────────────────────────────────────────────────
-    // deposit → claimMusharakahProfit (locks profit) → immediately redeem same shares:
-    // redeemable ≈ original (profit is locked; can't extract in same block).
+    // N-11/N-24: the claim no longer locks the depositor share. The gross profit is already in
+    // NAV before the claim, so a claim must never RAISE what a holder can redeem: it only removes
+    // the purification, charity and fee cut. Nothing can be extracted by claiming.
     function test_PR3_deposit_claim_redeem_earns_zero() public {
-        // Alice already deposited 100_000e6 in setUp
         uint256 aliceShares = vault.balanceOf(alice);
-        uint256 depositedAmount = 100_000e6;
 
-        // The vault now has some profit to claim (simulate by minting extra USDC to vault)
+        // The vault has profit to claim (simulate by minting extra USDC to vault)
         uint256 profitAmount = 10_000e6;
         usdc.mint(address(vault), profitAmount);
+        uint256 redeemableBefore = vault.previewRedeem(aliceShares);
 
-        // claimMusharakahProfit — this will lock the depositorShare
         vm.prank(owner);
         vault.claimMusharakahProfit(profitAmount);
 
-        // Immediately redeem alice's shares in the SAME block
-        // Profit is locked → she should get back approximately her original deposit
-        uint256 assetsNow = vault.previewRedeem(aliceShares);
+        assertEq(vault.lockedProfit(), 0, "claim must not lock the depositor share");
+        uint256 redeemableAfter = vault.previewRedeem(aliceShares);
 
-        // The locked profit is subtracted from totalAssets, so she shouldn't extract the profit
-        // She should get back at most her original deposit (profit locked)
-        assertLe(assetsNow, depositedAmount + 1, // +1 for rounding
-            "immediately after lock, redeemable should not include locked profit");
+        // F-01: the escrow returns the manager's vaultShare tokens to the vault; in this fixture
+        // fees sit in a separate treasury, so allow exactly that amount plus 1 for rounding.
+        uint256 returnedVaultShare = escrowTreasury.pendingFees();
+        assertLe(redeemableAfter, redeemableBefore + returnedVaultShare + 1,
+            "claiming must not increase what a holder can redeem");
     }
 
     // ─── Test 21 ────────────────────────────────────────────────────────────
@@ -775,7 +759,8 @@ contract TaskHTest is Test {
         // Deploy a standalone AutonomousVault for precise profit lock testing
         MockERC20 testUsdc = new MockERC20("Test USDC", "tUSDC", 6);
         vm.prank(owner);
-        AutonomousVault avault = new AutonomousVault(IERC20(address(testUsdc)), owner, 99);
+        // N-15 keeps raw streaming access test-only after removing the base entry point.
+        AutonomousVaultHarness avault = new AutonomousVaultHarness(IERC20(address(testUsdc)), owner, 99);
 
         // Deposit 1000e6
         testUsdc.mint(alice, 1_000e6);
@@ -811,7 +796,8 @@ contract TaskHTest is Test {
     function test_PR3_full_unlock_after_period() public {
         MockERC20 testUsdc = new MockERC20("Test USDC", "tUSDC", 6);
         vm.prank(owner);
-        AutonomousVault avault = new AutonomousVault(IERC20(address(testUsdc)), owner, 99);
+        // N-15 keeps raw streaming access test-only after removing the base entry point.
+        AutonomousVaultHarness avault = new AutonomousVaultHarness(IERC20(address(testUsdc)), owner, 99);
 
         testUsdc.mint(alice, 1_000e6);
         vm.startPrank(alice);
@@ -964,8 +950,10 @@ contract TaskHTest is Test {
             new MockMessageTransmitterH(address(testUsdc2), address(avault), 90e6);
         vm.prank(owner);
         avault.setMessageTransmitter(address(transmitter));
+        vm.prank(owner);
+        avault.setRemoteTokenMessenger(2, bytes32(uint256(0xCC7)));
 
-        bytes memory msg_ = TestCctpMsgH.build(1, 90e6, address(avault));
+        bytes memory msg_ = TestCctpMsgH.build(99, 90e6, address(avault));
         vm.prank(owner);
         avault.settleCrossChainWithMessage(1, msg_, "");
 
@@ -1001,8 +989,10 @@ contract TaskHTest is Test {
             new MockMessageTransmitterH(address(testUsdc2), address(avault), 90e6);
         vm.prank(owner);
         avault.setMessageTransmitter(address(transmitter));
+        vm.prank(owner);
+        avault.setRemoteTokenMessenger(2, bytes32(uint256(0xCC7)));
 
-        bytes memory msg_ = TestCctpMsgH.build(1, 90e6, address(avault));
+        bytes memory msg_ = TestCctpMsgH.build(99, 90e6, address(avault));
 
         vm.expectEmit(true, false, false, true, address(avault));
         emit AutonomousVault.CrossChainSettled(uint64(1), 90e6, 10e6);

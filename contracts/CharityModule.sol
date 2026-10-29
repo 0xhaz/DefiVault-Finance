@@ -36,6 +36,7 @@ contract CharityModule is Ownable2Step {
     error NotVault();
     error ZeroAmount();
     error ZeroWallet();
+    error EscrowAlreadySet();
     error NoPendingChange();
     error TimelockNotElapsed(uint256 remaining);
     /// @dev Thrown when a proposed charityBps exceeds MAX_CHARITY_BPS.
@@ -144,6 +145,7 @@ contract CharityModule is Ownable2Step {
     ///         Must be called once by the owner before any profit claim.
     ///         The escrow calls distributeCharity() as part of executeWaterfall().
     function setEscrow(address escrow_) external onlyOwner {
+        if (escrow != address(0)) revert EscrowAlreadySet();
         if (escrow_ == address(0)) revert ZeroWallet();
         escrow = escrow_;
         emit EscrowSet(escrow_);

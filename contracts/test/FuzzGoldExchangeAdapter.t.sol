@@ -16,8 +16,7 @@ import {MockXauUsdAggregator}   from "../test-helpers/MockXauUsdAggregator.sol";
 /// @notice Property-based tests for GoldExchangeAdapter and ShariahVault Task C guard.
 ///
 /// Execution model (same as unit tests):
-///   vault.deployCapital(adapter, amount, "")  — pushes USDC; no swap yet.
-///   vm.prank(vault); adapter.deploy(amount)   — executes the swap.
+///   vault.deployCapitalAndExecute(adapter, amount, "") — funds and swaps atomically.
 ///   vault.recallCapital(adapter, amount)      — calls adapter.recall().
 
 // ─── Ratio-configurable mock swap router ─────────────────────────────────────
@@ -26,6 +25,10 @@ import {MockXauUsdAggregator}   from "../test-helpers/MockXauUsdAggregator.sol";
 
 contract RatioSwapRouter {
     uint256 public outputRatioBps;
+    uint256 public lastMinOut;
+    uint256 public priceUsdc = 3_300e6;
+
+    function setPrice(uint256 price) external { priceUsdc = price; }
 
     constructor(uint256 ratio) { outputRatioBps = ratio; }
 
@@ -46,7 +49,11 @@ contract RatioSwapRouter {
         external returns (uint256 amountOut)
     {
         IERC20(p.tokenIn).transferFrom(msg.sender, address(this), p.amountIn);
-        amountOut = (p.amountIn * outputRatioBps) / 10_000;
+        lastMinOut = p.amountOutMinimum;
+        uint256 expected = MockERC20(p.tokenIn).decimals() == 6
+            ? p.amountIn * 1e18 / priceUsdc
+            : p.amountIn * priceUsdc / 1e18;
+        amountOut = (expected * outputRatioBps) / 10_000;
         if (amountOut < p.amountOutMinimum) revert("RatioSwapRouter: slippage");
         if (amountOut > 0) IERC20(p.tokenOut).transfer(p.recipient, amountOut);
     }
@@ -89,6 +96,8 @@ contract FuzzGoldExchangeAdapter is Test {
             address(vault), owner, address(xauOracle)
         );
         vault.setScreened(address(adapter), true);
+        // N-23: swap properties must exercise a tracked position and its gold cap.
+        vault.setGoldSpreadAdapter(address(adapter));
         // Widen slippage floor so ratio router variations still pass the 99% check
         adapter.setMinOutBps(9000);
         vm.stopPrank();
@@ -98,13 +107,28 @@ contract FuzzGoldExchangeAdapter is Test {
         IERC20(address(mag)).transfer(address(router), 200_000_000e18);
     }
 
+    function testFuzz_minOut_neverBelowOracleBound(uint64 rawAmount, uint32 rawPrice, uint16 rawBps) public {
+        uint256 amount = bound(rawAmount, 1, 1_000_000e6);
+        uint256 price = bound(rawPrice, 100e6, 20_000e6);
+        uint256 bps = bound(rawBps, 9000, 10_000);
+        xauOracle.setPrice(int256(price * 100));
+        router.setPrice(price);
+        vm.prank(owner);
+        adapter.setMinOutBps(bps);
+        usdc.mint(address(adapter), amount);
+        vm.prank(address(vault));
+        adapter.deploy(amount);
+        uint256 minimum = ((amount * 1e18 / price) * bps) / 10_000;
+        if (minimum == 0) minimum = 1;
+        assertEq(router.lastMinOut(), minimum);
+    }
+
     // ── Two-step deploy helper ──────────────────────────────────────────────
 
     function _pushAndSwap(uint256 amount) internal {
         vm.prank(manager);
-        vault.deployCapital(address(adapter), amount, "");
-        vm.prank(address(vault));
-        adapter.deploy(amount);
+        // Exercise atomic funding and the real onlyVault caller for all swap properties.
+        vault.deployCapitalAndExecute(address(adapter), amount, "");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -112,7 +136,8 @@ contract FuzzGoldExchangeAdapter is Test {
     // ─────────────────────────────────────────────────────────────────────────
     function testFuzz_deploy_no_usdc_stranded(uint64 rawAmount) public {
         uint256 depositAmt = bound(rawAmount, 1_000e6, 10_000_000e6);
-        uint256 deployAmt  = (depositAmt * 7_000) / 10_000;
+        // N-23: retain swap/recall properties within the enforced 30% gold cap.
+        uint256 deployAmt  = (depositAmt * 2_000) / 10_000;
 
         usdc.mint(alice, depositAmt);
         vm.startPrank(alice);
@@ -131,7 +156,8 @@ contract FuzzGoldExchangeAdapter is Test {
     // ─────────────────────────────────────────────────────────────────────────
     function testFuzz_recall_no_mag_stranded(uint64 rawAmount) public {
         uint256 depositAmt = bound(rawAmount, 1_000e6, 10_000_000e6);
-        uint256 deployAmt  = (depositAmt * 7_000) / 10_000;
+        // N-23: retain swap/recall properties within the enforced 30% gold cap.
+        uint256 deployAmt  = (depositAmt * 2_000) / 10_000;
 
         usdc.mint(alice, depositAmt);
         vm.startPrank(alice);
@@ -160,7 +186,8 @@ contract FuzzGoldExchangeAdapter is Test {
     // ─────────────────────────────────────────────────────────────────────────
     function testFuzz_totalDeployed_zeros_on_recall(uint64 rawAmount, uint16 exitRatioBps_) public {
         uint256 depositAmt = bound(rawAmount, 1_000e6, 5_000_000e6);
-        uint256 deployAmt  = (depositAmt * 5_000) / 10_000;
+        // N-23: keep gain/loss exit coverage within the linked gold allocation limit.
+        uint256 deployAmt  = (depositAmt * 2_000) / 10_000;
         // Simulate exit ratio 90%–110% (loss or gain)
         uint256 exitRatio  = bound(exitRatioBps_, 9000, 11_000);
 
@@ -183,6 +210,10 @@ contract FuzzGoldExchangeAdapter is Test {
 
         assertEq(adapter.totalDeployed(), 0,
             "Invariant: totalDeployed must zero on full exit regardless of exit price");
+        // N-06 must retire vault principal too, including loss-making exits.
+        assertEq(vault.totalDeployed(), 0);
+        assertEq(vault.principalOf(address(adapter)), 0);
+        assertEq(vault.totalAssets(), usdc.balanceOf(address(vault)));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -190,7 +221,8 @@ contract FuzzGoldExchangeAdapter is Test {
     // ─────────────────────────────────────────────────────────────────────────
     function testFuzz_paxgHeld_equals_balance(uint64 rawAmt1, uint16 splitBps) public {
         uint256 total  = bound(rawAmt1, 10_000e6, 5_000_000e6);
-        uint256 frac   = bound(splitBps, 1000, 3000);
+        // N-23: reserve room for the second 10% buy under the combined gold cap.
+        uint256 frac   = bound(splitBps, 1000, 1900);
         uint256 d1     = (total * frac) / 10_000;
         uint256 d2     = (total * 1000) / 10_000;
         vm.assume(d1 + d2 <= (total * 7_500) / 10_000);
@@ -215,7 +247,8 @@ contract FuzzGoldExchangeAdapter is Test {
     // ─────────────────────────────────────────────────────────────────────────
     function testFuzz_totalAssets_invariant(uint64 rawDeposit, uint16 deployFrac) public {
         uint256 depositAmt = bound(rawDeposit, 100e6, 10_000_000e6);
-        uint256 fraction   = bound(deployFrac, 0, 7_000);
+        // N-23: the accounting property now runs inside the tracked gold cap.
+        uint256 fraction   = bound(deployFrac, 0, 3_000);
 
         usdc.mint(alice, depositAmt);
         vm.startPrank(alice);
@@ -228,31 +261,32 @@ contract FuzzGoldExchangeAdapter is Test {
             _pushAndSwap(deployAmt);
         }
 
-        assertEq(
+        // N-23: tracked gold marks the one-unit swap rounding loss instead of treating cost as exact value.
+        assertApproxEqAbs(
             vault.totalAssets(),
             usdc.balanceOf(address(vault)) + vault.totalDeployed(),
-            "totalAssets must equal vaultBalance + totalDeployed"
+            1,
+            "totalAssets matches funded cost within swap rounding"
         );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // INVARIANT 6: deployCrossChain always reverts NonAtomicGoldExchange
-    //              when goldCrossChainBlocked is true, for any domain/recipient/amount
+    // INVARIANT 6: Both gold indices reject every nonzero domain, recipient and amount.
     // ─────────────────────────────────────────────────────────────────────────
-    function testFuzz_deployCrossChain_always_blocked(
+    function testFuzz_deployCrossChain_gold_strategies_blocked(
         uint32 domain,
         bytes32 recipient,
-        uint64 amount
+        uint256 amount
     ) public {
-        vm.assume(domain != SRC && domain != 0);
-        vm.assume(amount > 0);
-
-        vm.prank(owner);
-        vault.setGoldCrossChainBlocked(true);
+        vm.assume(domain != 0);
 
         vm.prank(manager);
         vm.expectRevert(ShariahVault.NonAtomicGoldExchange.selector);
-        vault.deployCrossChain(domain, recipient, amount);
+        vault.deployCrossChainForStrategy(1, domain, recipient, amount);
+
+        vm.prank(manager);
+        vm.expectRevert(ShariahVault.NonAtomicGoldExchange.selector);
+        vault.deployCrossChainForStrategy(5, domain, recipient, amount);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -274,7 +308,8 @@ contract FuzzGoldExchangeAdapter is Test {
     // ─────────────────────────────────────────────────────────────────────────
     function testFuzz_deploy_within_cap_succeeds(uint64 rawDeposit, uint16 allocFrac) public {
         uint256 depositAmt = bound(rawDeposit, 1_000e6, 50_000_000e6);
-        uint256 fraction   = bound(allocFrac, 100, 7_000); // 1%–70%
+        // N-23: successful gold funding must satisfy the 30% gold cap as well as the base cap.
+        uint256 fraction   = bound(allocFrac, 100, 3_000); // 1%–30%
 
         usdc.mint(alice, depositAmt);
         vm.startPrank(alice);
@@ -287,9 +322,7 @@ contract FuzzGoldExchangeAdapter is Test {
 
         // Both steps should succeed
         vm.prank(manager);
-        vault.deployCapital(address(adapter), deployAmt, "");
-        vm.prank(address(vault));
-        adapter.deploy(deployAmt);
+        vault.deployCapitalAndExecute(address(adapter), deployAmt, "");
 
         assertGt(vault.totalDeployed(), 0);
     }
@@ -310,7 +343,7 @@ contract FuzzGoldExchangeAdapter is Test {
 
         vm.prank(manager);
         vm.expectRevert(AutonomousVault.AllocationExceedsLimit.selector);
-        vault.deployCapital(address(adapter), maxAllowed + 1e6, "");
+        vault.deployCapitalAndExecute(address(adapter), maxAllowed + 1e6, "");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -330,7 +363,7 @@ contract FuzzGoldExchangeAdapter is Test {
 
         vm.prank(manager);
         vm.expectRevert(AutonomousVault.Paused.selector);
-        vault.deployCapital(address(adapter), (amount * 5_000) / 10_000, "");
+        vault.deployCapitalAndExecute(address(adapter), (amount * 5_000) / 10_000, "");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -346,7 +379,8 @@ contract FuzzGoldExchangeAdapter is Test {
         uint256 shares = vault.deposit(amount, alice);
         vm.stopPrank();
 
-        uint256 deployAmt = (amount * 4_000) / 10_000; // 40%
+        // N-23: retain the complete round trip without exceeding the tracked gold cap.
+        uint256 deployAmt = (amount * 2_000) / 10_000; // 20%
         if (deployAmt < 1e6) return;
 
         _pushAndSwap(deployAmt);
@@ -357,13 +391,16 @@ contract FuzzGoldExchangeAdapter is Test {
         vm.prank(manager);
         vault.recallCapital(address(adapter), deployAmt);
 
+        // N-06 retires full principal on exit, so rounding losses no longer require capping redeemed shares.
+        assertEq(vault.principalOf(address(adapter)), 0);
+        assertEq(vault.totalDeployed(), 0);
         vm.startPrank(alice);
         vault.approve(address(vault), shares);
         uint256 redeemed = vault.redeem(shares, alice, alice);
         vm.stopPrank();
 
-        assertGe(redeemed + 1, amount,
-            "Invariant: depositor must recover at least amount-1 after round-trip");
+        assertGe(redeemed + 2, amount,
+            "Invariant: depositor must recover at least amount-2 after round-trip");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

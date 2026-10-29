@@ -11,6 +11,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 contract ConventionalVault is AutonomousVault {
     using SafeERC20 for IERC20;
 
+    error InsufficientFeeBalance(uint256 available, uint256 required);
+
     event AdminFeeAccrued(uint256 amount);
 
     TreasuryModule public immutable conventionalTreasury;
@@ -31,6 +33,18 @@ contract ConventionalVault is AutonomousVault {
         return "cvUSDC";
     }
 
+    /// @dev Accrued fees are held here but are not depositor assets.
+    function totalAssets() public view override returns (uint256) {
+        uint256 assets = super.totalAssets();
+        uint256 fees = conventionalTreasury.pendingFees();
+        return assets > fees ? assets - fees : 0;
+    }
+
+    /// @dev Preserve the former inherited entry point without changing conventional profit locking.
+    function lockProfit(uint256 amount) public virtual onlyManagerOrOwner {
+        _lockProfitInternal(amount);
+    }
+
     function accrueAdminFee() public {
         _accrueAdminFeeInternal();
     }
@@ -41,6 +55,7 @@ contract ConventionalVault is AutonomousVault {
         external
         onlyManagerOrOwner
     {
+        if (paused) revert Paused();
         data;
 
         uint256 currentAssets = totalAssets();
@@ -60,6 +75,8 @@ contract ConventionalVault is AutonomousVault {
     function sweepFeesToTreasury(address receiver, uint256 amount) external onlyOwner {
         uint256 pending = conventionalTreasury.pendingFees();
         if (amount > pending) revert AllocationExceedsLimit();
+        uint256 available = IERC20(asset()).balanceOf(address(this));
+        if (available < amount) revert InsufficientFeeBalance(available, amount);
         IERC20(asset()).safeTransfer(receiver, amount);
         conventionalTreasury.claimFees(receiver, amount);
     }

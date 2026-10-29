@@ -6,6 +6,7 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IStrategyAdapter} from "../IStrategyAdapter.sol";
 import {AggregatorV3Interface} from "../interfaces/AggregatorV3Interface.sol";
 
@@ -27,6 +28,8 @@ interface ISwapRouter {
 
 /// @notice Minimal pool interface for reading slot0 sqrtPriceX96.
 interface IUniswapV3PoolSlot0 {
+    function token0() external view returns (address);
+    function token1() external view returns (address);
     function slot0()
         external
         view
@@ -87,13 +90,18 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
     ///         Used as the conservative floor when the oracle goes stale (PR1).
     uint256 public lastGoodPrice;
 
-    /// @notice Timestamp of the last successful oracle read.
+    /// @notice Oracle observation timestamp of the last validated price.
     uint256 public lastGoodPriceAt;
 
     /// @notice Haircut applied to lastGoodPrice when oracle is stale (bps, default 500 = 5%).
     ///         Board-settable via the standard propose/execute timelock.
     ///         Hard cap: MAX_STALE_HAIRCUT_BPS = 2000.
     uint256 public staleHaircutBps;
+    uint256 public emergencySlippageBps = 1000;
+    uint256 public constant MAX_EMERGENCY_SLIPPAGE_BPS = 2500;
+    bytes32 public constant PARAM_EMERGENCY_SLIPPAGE = keccak256("emergencySlippageBps");
+    event EmergencySlippageBpsUpdated(uint256 previous, uint256 updated);
+    event ParamChangeCancelled(bytes32 indexed paramId);
 
     /// @notice Hard cap for the stale-price haircut.
     uint256 public constant MAX_STALE_HAIRCUT_BPS = 2000;
@@ -160,58 +168,85 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         return 10 ** uint256(d);
     }
 
-    function _getOraclePrice() internal view returns (uint256 oraclePriceUsdc) {
-        (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
-            = goldOracle.latestRoundData();
-
-        // Round completeness checks (Chainlink best practice)
-        if (startedAt == 0) revert StaleGoldPrice();            // round not started
-        if (answeredInRound < roundId) revert StaleGoldPrice(); // stale round
-        if (answer <= 0) revert StaleGoldPrice();               // invalid/negative price
-        if (block.timestamp - updatedAt > maxStalenessSecs) revert StaleGoldPrice(); // heartbeat
-
-        oraclePriceUsdc = (uint256(answer) * _pow10(usdcDecimals)) / _pow10(oracleDecimals);
+    function _getOraclePrice() internal view returns (uint256 price, uint256 observedAt) {
+        bool ok;
+        (price, ok, observedAt) = _getOraclePriceSafe();
+        if (!ok) revert StaleGoldPrice();
     }
 
-    /// @notice Non-reverting oracle read. Returns (price, true) when fresh and valid,
-    ///         or (0, false) when stale/invalid. Used by recall() so redemptions never brick.
-    function _getOraclePriceSafe() internal view returns (uint256 oraclePriceUsdc, bool ok) {
+    /// @notice Returns the validated price and observation timestamp, or ok=false.
+    ///         Used by recall() so oracle failure does not block redemptions.
+    function _getOraclePriceSafe() internal view returns (uint256 oraclePriceUsdc, bool ok, uint256 observedAt) {
         try goldOracle.latestRoundData() returns (
             uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
         ) {
-            if (startedAt == 0 || answeredInRound < roundId || answer <= 0) return (0, false);
-            if (block.timestamp - updatedAt > maxStalenessSecs) return (0, false);
-            oraclePriceUsdc = (uint256(answer) * _pow10(usdcDecimals)) / _pow10(oracleDecimals);
-            ok = true;
+            if (startedAt == 0 || answeredInRound < roundId || answer <= 0) return (0, false, 0);
+            if (updatedAt == 0 || updatedAt > block.timestamp) return (0, false, 0);
+            if (block.timestamp - updatedAt > maxStalenessSecs) return (0, false, 0);
+            // Normalize without an overflowing intermediate; malformed scales are invalid observations.
+            if (oracleDecimals >= usdcDecimals) {
+                uint8 shift = oracleDecimals - usdcDecimals;
+                if (shift > 77) return (0, false, 0);
+                oraclePriceUsdc = uint256(answer) / _pow10(shift);
+            } else {
+                uint8 shift = usdcDecimals - oracleDecimals;
+                if (shift > 77) return (0, false, 0);
+                uint256 scale = _pow10(shift);
+                if (uint256(answer) > type(uint256).max / scale) return (0, false, 0);
+                oraclePriceUsdc = uint256(answer) * scale;
+            }
+            ok = oraclePriceUsdc > 0;
+            observedAt = updatedAt;
         } catch {
-            return (0, false);
+            return (0, false, 0);
         }
     }
 
-    function _getPoolPrice(uint256 oraclePriceUsdc) internal view returns (uint256 poolPriceUsdc) {
-        (uint160 sqrtPriceX96,,,,,,) = IUniswapV3PoolSlot0(pool).slot0();
+    /// @dev USDC base units per whole XAUT; zero means unreadable or unrepresentable.
+    ///      The external boundary also catches arithmetic failures for NAV reads.
+    function _readPoolPrice() internal view returns (uint256 price) {
+        try this.poolPriceUsdc() returns (uint256 value) {
+            return value;
+        } catch {
+            return 0;
+        }
+    }
 
-        uint256 poolPriceRaw = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) >> 192;
+    /// @dev Read-only boundary for catching malformed pool responses and math failures.
+    function poolPriceUsdc() external view returns (uint256) {
+        address token0 = IUniswapV3PoolSlot0(pool).token0();
+        address token1 = IUniswapV3PoolSlot0(pool).token1();
+        bool xautFirst = token0 == address(xaut) && token1 == address(usdc);
+        bool usdcFirst = token0 == address(usdc) && token1 == address(xaut);
+        if (!xautFirst && !usdcFirst) return 0;
+        (uint160 sqrtP,,,,,,) = IUniswapV3PoolSlot0(pool).slot0();
+        if (sqrtP == 0) return 0;
+        uint256 scale = _pow10(xautDecimals);
+        if (xautFirst) {
+            return Math.mulDiv(Math.mulDiv(sqrtP, sqrtP, 1 << 64), scale, 1 << 128);
+        }
+        return Math.mulDiv(Math.mulDiv(scale, 1 << 96, sqrtP), 1 << 96, sqrtP);
+    }
 
-        poolPriceUsdc = (poolPriceRaw * _pow10(usdcDecimals)) / _pow10(xautDecimals);
-
-        if (poolPriceUsdc == 0) {
-            revert GoldPriceDeviation(poolPriceUsdc, oraclePriceUsdc, maxDeviationBps);
+    function _getPoolPrice(uint256 oraclePriceUsdc) internal view returns (uint256 poolPriceUsdc_) {
+        poolPriceUsdc_ = _readPoolPrice();
+        if (poolPriceUsdc_ == 0) {
+            revert GoldPriceDeviation(poolPriceUsdc_, oraclePriceUsdc, maxDeviationBps);
         }
     }
 
     /// @dev Called after every successful oracle read to cache the last known good price.
-    function _updateLastGoodPrice(uint256 price) internal {
+    function _updateLastGoodPrice(uint256 price, uint256 observedAt) internal {
         lastGoodPrice   = price;
-        lastGoodPriceAt = block.timestamp;
-        emit LastGoodPriceUpdated(price, block.timestamp);
+        lastGoodPriceAt = observedAt;
+        emit LastGoodPriceUpdated(price, observedAt);
     }
 
-    /// @notice Anyone may call this to refresh lastGoodPrice from the oracle.
-    ///         Useful to poke the cached price before the oracle goes stale.
+    /// @notice Refresh the cache only from a fresh, complete oracle observation.
     function pokePrice() external {
-        uint256 oraclePrice = _getOraclePrice();
-        _updateLastGoodPrice(oraclePrice);
+        (uint256 oraclePrice, bool ok, uint256 observedAt) = _getOraclePriceSafe();
+        if (!ok) return;
+        _updateLastGoodPrice(oraclePrice, observedAt);
     }
 
     function isPriceSane() public view returns (bool) {
@@ -223,7 +258,7 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
     }
 
     function _checkPriceSanity() external view {
-        uint256 oraclePrice = _getOraclePrice();
+        (uint256 oraclePrice,) = _getOraclePrice();
         uint256 poolPrice = _getPoolPrice(oraclePrice);
         uint256 diff = oraclePrice > poolPrice ? oraclePrice - poolPrice : poolPrice - oraclePrice;
         uint256 deviation = (diff * 10_000) / oraclePrice;
@@ -239,7 +274,7 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         // Block new gold buys when oracle is not sane (G1: deposits paused on insane price).
         if (!isPriceSane()) revert OracleNotSane();
 
-        uint256 oraclePrice = _getOraclePrice();
+        (uint256 oraclePrice, uint256 observedAt) = _getOraclePrice();
         uint256 poolPrice = _getPoolPrice(oraclePrice);
 
         uint256 diff = oraclePrice > poolPrice ? oraclePrice - poolPrice : poolPrice - oraclePrice;
@@ -273,44 +308,31 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         xautHeld += xautReceived;
         totalDeployed += usdcAmount;
 
-        _updateLastGoodPrice(oraclePrice);
+        _updateLastGoodPrice(oraclePrice, observedAt);
         emit GoldBought(usdcAmount, xautReceived, oraclePrice);
     }
 
     /// @notice Sell all held XAUT back to USDC and return proceeds to vault.
-    /// @dev    MUST NOT revert due to oracle failure — stale oracle bricks redemptions
-    ///         (G1 fix). When the oracle is unavailable, use `totalDeployed` as the
-    ///         conservative floor price so the swap still executes. Deposits are blocked
-    ///         separately via `deploy()` checking `isPriceSane()`.
+    /// @dev Fresh oracle floors never depend on spot pool state. During outages,
+    ///      cached price, stale haircut and emergency slippage bound the exit.
     function recall(uint256 usdcAmount) external onlyVault returns (uint256 usdcReturned) {
         if (usdcAmount == 0) revert ZeroAmount();
         if (xautHeld == 0) return 0;
 
-        // Use safe (non-reverting) oracle read. Fall back to totalDeployed-implied price
-        // when oracle is stale so redemptions are never bricked.
-        (uint256 oraclePrice, bool oracleOk) = _getOraclePriceSafe();
+        (uint256 oraclePrice, bool oracleOk, uint256 observedAt) = _getOraclePriceSafe();
 
         uint256 xautToSell = xautHeld;
         uint256 minUsdcOut;
 
         if (oracleOk) {
-            // Normal path: oracle fresh — update cache, apply deviation check and slippage floor.
-            _updateLastGoodPrice(oraclePrice);
-            uint256 poolPrice = _getPoolPrice(oraclePrice);
-            uint256 diff = oraclePrice > poolPrice ? oraclePrice - poolPrice : poolPrice - oraclePrice;
-            if ((diff * 10_000) / oraclePrice > maxDeviationBps) {
-                // Deviation too high — use conservative (lower) price as floor.
-                uint256 conservativePrice = oraclePrice < poolPrice ? oraclePrice : poolPrice;
-                uint256 expectedOut = (xautToSell * conservativePrice) / _pow10(xautDecimals);
-                minUsdcOut = (expectedOut * (10_000 - maxSlippageBps)) / 10_000;
-            } else {
-                uint256 expectedOut = (xautToSell * oraclePrice) / _pow10(xautDecimals);
-                minUsdcOut = (expectedOut * (10_000 - maxSlippageBps)) / 10_000;
-            }
+            _updateLastGoodPrice(oraclePrice, observedAt);
+            uint256 expectedOut = Math.mulDiv(xautToSell, oraclePrice, _pow10(xautDecimals));
+            minUsdcOut = Math.mulDiv(expectedOut, 10_000 - maxSlippageBps, 10_000);
         } else {
-            // Degraded path: oracle unavailable — use totalDeployed as conservative floor.
-            // minUsdcOut = totalDeployed * (1 - maxSlippage) gives depositor a fair floor.
-            minUsdcOut = (totalDeployed * (10_000 - maxSlippageBps)) / 10_000;
+            if (lastGoodPrice == 0) revert StaleGoldPrice();
+            uint256 expectedOut = Math.mulDiv(xautToSell, lastGoodPrice, _pow10(xautDecimals));
+            uint256 haircutValue = Math.mulDiv(expectedOut, 10_000 - staleHaircutBps, 10_000);
+            minUsdcOut = Math.mulDiv(haircutValue, 10_000 - emergencySlippageBps, 10_000);
         }
 
         if (minUsdcOut == 0) minUsdcOut = 1;
@@ -340,61 +362,28 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         emit GoldSold(xautToSell, usdcReturned, oraclePrice);
     }
 
-    /**
-     * @notice Returns the USDC value of the XAUT position. Never reverts (PR1).
-     *
-     * When the oracle is sane: `xautHeld * oraclePrice`.
-     * When not sane: `xautHeld * min(lastGoodPrice, poolPrice if readable) * (1 - staleHaircutBps)`.
-     *   - If lastGoodPrice is 0 (never deployed): returns 0 (nothing held).
-     *   - Pool read is wrapped in try/catch; if it also fails, lastGoodPrice alone is used.
-     *   - Haircut is applied as a conservative downward adjustment.
-     * Cost basis (totalDeployed) is NOT used — it may overstate value when gold has fallen.
-     */
+    /// @notice Oracle-only position value; stale/invalid observations use the cached price with haircut.
+    /// @dev Pool spot is reserved for execution sanity, never NAV. Read/math failures return zero.
     function currentValue() external view returns (uint256) {
-        if (xautHeld == 0) return 0;
-
-        // Try to get a fresh oracle price first.
-        (uint256 oraclePrice, bool oracleOk) = _getOraclePriceSafe();
-        if (oracleOk) {
-            // Cross-check with pool; use lower if deviated (conservative).
-            uint256 poolPrice = 0;
-            bool poolOk = false;
-            try IUniswapV3PoolSlot0(pool).slot0() returns (
-                uint160 sqrtPriceX96, int24, uint16, uint16, uint16, uint8, bool
-            ) {
-                uint256 raw = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) >> 192;
-                poolPrice = (raw * _pow10(usdcDecimals)) / _pow10(xautDecimals);
-                poolOk = poolPrice > 0;
-            } catch {}
-            uint256 effectivePrice = oraclePrice;
-            if (poolOk) {
-                // Use lower-of-two for conservative valuation.
-                uint256 diff = oraclePrice > poolPrice ? oraclePrice - poolPrice : poolPrice - oraclePrice;
-                if ((diff * 10_000) / oraclePrice > maxDeviationBps) {
-                    effectivePrice = oraclePrice < poolPrice ? oraclePrice : poolPrice;
-                }
-            }
-            return (xautHeld * effectivePrice) / _pow10(xautDecimals);
+        try this.positionValueUsdc() returns (uint256 value) {
+            return value;
+        } catch {
+            return 0;
         }
+    }
 
-        // Oracle not sane: use lastGoodPrice with pool cross-check if available, plus haircut.
-        if (lastGoodPrice == 0) return 0; // never been deployed
-        uint256 stalePriceBase = lastGoodPrice;
+    /// @dev Read-only boundary so malformed observations and unrepresentable values cannot revert NAV reads.
+    function positionValueUsdc() external view returns (uint256) {
+        if (xautHeld == 0) return 0;
+        (uint256 oraclePrice, bool oracleOk,) = _getOraclePriceSafe();
+        if (oracleOk) return Math.mulDiv(xautHeld, oraclePrice, _pow10(xautDecimals));
+        if (lastGoodPrice == 0) return 0;
+        uint256 grossValue = Math.mulDiv(xautHeld, lastGoodPrice, _pow10(xautDecimals));
+        return Math.mulDiv(grossValue, 10_000 - staleHaircutBps, 10_000);
+    }
 
-        // Try pool price as a secondary sanity check.
-        try IUniswapV3PoolSlot0(pool).slot0() returns (
-            uint160 sqrtPriceX96, int24, uint16, uint16, uint16, uint8, bool
-        ) {
-            uint256 raw = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) >> 192;
-            uint256 poolPrice = (raw * _pow10(usdcDecimals)) / _pow10(xautDecimals);
-            if (poolPrice > 0 && poolPrice < stalePriceBase) {
-                stalePriceBase = poolPrice; // use lower of the two (conservative)
-            }
-        } catch {}
-
-        // Apply stale haircut: value = xautHeld * stalePriceBase * (1 - staleHaircutBps).
-        uint256 grossValue = (xautHeld * stalePriceBase) / _pow10(xautDecimals);
-        return (grossValue * (10_000 - staleHaircutBps)) / 10_000;
+    function isGoldStrategy() external pure returns (bool) {
+        return true;
     }
 
     function protocolName() external pure returns (string memory) {
@@ -422,6 +411,10 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
             revert ParamAboveHardCap("staleHaircutBps", newValue, MAX_STALE_HAIRCUT_BPS);
         }
 
+        if (paramId == PARAM_EMERGENCY_SLIPPAGE && newValue > MAX_EMERGENCY_SLIPPAGE_BPS) {
+            revert ParamAboveHardCap("emergencySlippageBps", newValue, MAX_EMERGENCY_SLIPPAGE_BPS);
+        }
+
         uint256 executeAfter = block.timestamp + TIMELOCK_DELAY;
         pendingChanges[paramId] = PendingChange({newValue: newValue, executeAfter: executeAfter, pending: true});
 
@@ -440,8 +433,19 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         else if (paramId == PARAM_MAX_DEVIATION) maxDeviationBps = pc.newValue;
         else if (paramId == PARAM_POOL_FEE) poolFee = uint24(pc.newValue);
         else if (paramId == PARAM_STALE_HAIRCUT) staleHaircutBps = pc.newValue;
+        else if (paramId == PARAM_EMERGENCY_SLIPPAGE) {
+            uint256 previous = emergencySlippageBps;
+            emergencySlippageBps = pc.newValue;
+            emit EmergencySlippageBpsUpdated(previous, pc.newValue);
+        }
 
         emit ParamChangeExecuted(paramId, pc.newValue);
+    }
+
+    function cancelParamChange(bytes32 paramId) external onlyOwner {
+        if (!pendingChanges[paramId].pending) revert NoProposalPending();
+        delete pendingChanges[paramId];
+        emit ParamChangeCancelled(paramId);
     }
 
     function proposeAddressParamChange(bytes32 paramId, address newValue) external onlyOwner {
@@ -469,9 +473,41 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         emit ParamChangeExecuted(paramId, uint256(uint160(pc.newValue)));
     }
 
-    /// @dev Pool address setter — no timelock. Production: add timelock before mainnet.
+    event PoolProposed(address indexed proposed, uint256 executeAfter);
+    event PoolExecuted(address indexed previous, address indexed updated);
+    event PoolProposalCancelled();
+
+    PendingAddressChange public pendingPool;
+
+    /// @dev Retained ABI: this setter now proposes rather than immediately updating.
     function setPool(address pool_) external onlyOwner {
-        pool = pool_;
+        _proposePool(pool_);
+    }
+
+    function proposePool(address pool_) external onlyOwner {
+        _proposePool(pool_);
+    }
+
+    function _proposePool(address pool_) internal {
+        uint256 executeAfter = block.timestamp + TIMELOCK_DELAY;
+        pendingPool = PendingAddressChange({newValue: pool_, executeAfter: executeAfter, pending: true});
+        emit PoolProposed(pool_, executeAfter);
+    }
+
+    function executePool() external onlyOwner {
+        PendingAddressChange memory pc = pendingPool;
+        if (!pc.pending) revert NoProposalPending();
+        if (block.timestamp < pc.executeAfter) revert TimelockNotElapsed(pc.executeAfter, block.timestamp);
+        delete pendingPool;
+        address previous = pool;
+        pool = pc.newValue;
+        emit PoolExecuted(previous, pc.newValue);
+    }
+
+    function cancelPool() external onlyOwner {
+        if (!pendingPool.pending) revert NoProposalPending();
+        delete pendingPool;
+        emit PoolProposalCancelled();
     }
 
     /// @dev renounceOwnership disabled — owner controls gold capital allocation.

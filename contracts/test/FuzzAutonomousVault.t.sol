@@ -201,7 +201,9 @@ contract FuzzAutonomousVault is Test {
         vm.prank(owner);
         vault.deployCrossChain(2, recipient, crossAmt); // domain 2 != SRC=1
 
-        assertEq(vault.pendingCrossChain(1), crossAmt);
+        // Task M: pending keys come from the vault's local counter.
+        assertEq(vault.crossChainPositionCounter(), 1);
+        assertEq(vault.pendingCrossChain(vault.crossChainPositionCounter()), crossAmt);
         assertEq(vault.totalDeployed(), crossAmt);
     }
 
@@ -285,10 +287,10 @@ contract FuzzAutonomousVault is Test {
 
 // Inline mock messenger for cross-chain fuzz tests
 contract MockTokenMessenger {
-    uint64 public nextNonce = 1;
-    function depositForBurnWithCaller(
-        uint256, uint32, bytes32, address, bytes32
-    ) external returns (uint64 nonce) {
-        nonce = nextNonce++;
+    // Task M: record the V2 burn arguments without manufacturing a Circle nonce.
+    bytes public lastCall;
+    function depositForBurn(uint256 amount, uint32 domain, bytes32 recipient, address token,
+        bytes32 caller, uint256 maxFee, uint32 finality) external {
+        lastCall = abi.encode(amount, domain, recipient, token, caller, maxFee, finality);
     }
 }

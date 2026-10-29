@@ -170,6 +170,26 @@ contract PurificationEscrow is Ownable2Step {
             uint256 depositorShare
         )
     {
+        return _executeWaterfall(grossProfit, elapsed, principal, 0);
+    }
+
+    /// @notice Execute the waterfall after reserving recovery of the realized NAV deficit.
+    /// @param hwmDeficit Unrecovered loss in asset units, on the same basis as grossProfit.
+    function executeWaterfallHWM(
+        uint256 grossProfit,
+        uint256 elapsed,
+        uint256 principal,
+        uint256 hwmDeficit
+    ) external returns (uint256 purified, uint256 charity, uint256 vaultShare, uint256 depositorShare) {
+        return _executeWaterfall(grossProfit, elapsed, principal, hwmDeficit);
+    }
+
+    function _executeWaterfall(
+        uint256 grossProfit,
+        uint256 elapsed,
+        uint256 principal,
+        uint256 hwmDeficit
+    ) internal returns (uint256 purified, uint256 charity, uint256 vaultShare, uint256 depositorShare) {
         if (msg.sender != vault) revert NotVault();
         if (grossProfit == 0) revert ZeroAmount();
 
@@ -199,19 +219,24 @@ contract PurificationEscrow is Ownable2Step {
 
         // 4. Musharakah split on the remainder.
         (, uint256 vaultShareCalc, uint256 depositorShareCalc) =
-            shariahTreasury.calculateMusharakahSplit(afterCharity, elapsed, principal);
+            shariahTreasury.calculateMusharakahSplitHWM(afterCharity, elapsed, principal, hwmDeficit);
         vaultShare     = vaultShareCalc;
         depositorShare = depositorShareCalc;
 
-        // 5. Record vault's share in treasury (accounting only — no token transfer).
+        // 5. Record the fee liability and return its token backing to the vault.
         shariahTreasury.recordMusharakahProfit(vaultShare);
+        if (vaultShare > 0) {
+            IERC20(asset).safeTransfer(vault, vaultShare);
+        }
 
         // 6. Return depositor share to vault.
         if (depositorShare > 0) {
             IERC20(asset).safeTransfer(vault, depositorShare);
         }
 
-        // Sanity: any dust (rounding) stays in escrow — negligible in practice.
+        // Forward residual tokens without changing the gross-profit split.
+        uint256 dust = IERC20(asset).balanceOf(address(this));
+        if (dust > 0) IERC20(asset).safeTransfer(vault, dust);
         emit WaterfallExecuted(grossProfit, purified, charity, vaultShare, depositorShare);
     }
 

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
+import {stdStorage, StdStorage} from "forge-std/StdStorage.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
@@ -27,6 +28,7 @@ import {MockUniswapV3PoolXAUT}   from "../test-helpers/MockUniswapV3PoolXAUT.sol
 ///   Pool usdcPerXaut: 3_300_000_000 (raw USDC-units per raw XAUT-unit; both 6-dec)
 ///   After _updateSqrtPrice fix: poolPriceUsdc = usdcPerXaut = 3_300_000_000 ✓
 contract GoldAllocationAdapterTest is Test {
+    using stdStorage for StdStorage;
 
     // ── Actors ────────────────────────────────────────────────────────────────
     address internal owner        = makeAddr("owner");
@@ -159,9 +161,11 @@ contract GoldAllocationAdapterTest is Test {
 
     function _deployCapital(uint256 amount) internal {
         vm.prank(owner);
-        vault.deployCapital(address(adapter), amount, "");
-        vm.prank(address(vault));
-        adapter.deploy(amount);
+        vault.deployCapitalAndExecute(address(adapter), amount, "");
+    }
+
+    function test_isGoldStrategy_returnsTrue() public view {
+        assertTrue(adapter.isGoldStrategy());
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -227,19 +231,22 @@ contract GoldAllocationAdapterTest is Test {
         assertEq(dynamicExecutor.strategyMask(), 47, "SHARIAH_DYNAMIC mask must be 47 (0b101111)");
     }
 
-    /// @notice Cross-chain routing reverts NonAtomicGoldExchange when goldCrossChainBlocked == true.
-    /// @dev    The RiskTieredExecutor tries deployCrossChain when destinationDomain != 0, which hits
-    ///         ShariahVault.deployCrossChain → reverts NonAtomicGoldExchange.
-    ///         We test this by calling deployCrossChain directly as the owner.
+    /// @notice The executor rejects an aggregator-reported remote gold winner.
     function test_executor_bit5_crosschain_blocked() public {
-        // Enable gold cross-chain block (SR-007)
-        vm.prank(owner);
-        vault.setGoldCrossChainBlocked(true);
+        vm.startPrank(owner);
+        conservativeExecutor.setShariahAggregator(address(aggregator));
+        aggregator.setEnabled(ShariahScoreAggregator.ShariahStrategy.GOLD_ALLOCATION, true);
+        aggregator.writeScore(
+            ShariahScoreAggregator.ShariahStrategy.GOLD_ALLOCATION, 90, keccak256("remote gold"), 1
+        );
+        vm.stopPrank();
 
-        // deployCrossChain must revert NonAtomicGoldExchange regardless of adapter
+        vm.expectRevert(RiskTieredExecutor.NonAtomicGoldExchange.selector);
+        conservativeExecutor.executeWinner();
+
         vm.prank(owner);
         vm.expectRevert(ShariahVault.NonAtomicGoldExchange.selector);
-        vault.deployCrossChain(1, bytes32(uint256(uint160(address(adapter)))), 1_000e6);
+        vault.deployCrossChainForStrategy(5, 1, bytes32(uint256(uint160(address(adapter)))), 1_000e6);
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -295,34 +302,57 @@ contract GoldAllocationAdapterTest is Test {
     /// @notice Stale oracle (updatedAt > maxStalenessSecs ago) causes deploy to revert OracleNotSane
     ///         (G1: deploy() now checks isPriceSane() first, which returns false on stale oracle).
     function test_stale_oracle_reverts() public {
-        // Push USDC to adapter first (vault accounting step)
-        vm.prank(owner);
-        vault.deployCapital(address(adapter), 3_300e6, "");
-
         // Make oracle stale
         oracle.setUpdatedAt(block.timestamp - MAX_STALENESS - 1);
 
         // G1: deploy() now calls isPriceSane() first which returns false on stale oracle,
         // so the revert is OracleNotSane() (not StaleGoldPrice()).
-        vm.prank(address(vault));
+        vm.prank(owner);
         vm.expectRevert(GoldAllocationAdapter.OracleNotSane.selector);
-        adapter.deploy(3_300e6);
+        vault.deployCapitalAndExecute(address(adapter), 3_300e6, "");
+    }
+
+    function test_pokePrice_observationTimestamp_andInvalidAnswersIgnored() public {
+        uint256 observedAt = block.timestamp - 60;
+        oracle.setUpdatedAt(observedAt);
+        adapter.pokePrice();
+        assertEq(adapter.lastGoodPriceAt(), observedAt);
+        assertEq(adapter.lastGoodPrice(), ORACLE_USDC);
+        vm.warp(block.timestamp + MAX_STALENESS + 1);
+        adapter.pokePrice();
+        assertEq(adapter.lastGoodPriceAt(), observedAt);
+        oracle.setUpdatedAt(block.timestamp + 1);
+        adapter.pokePrice();
+        assertEq(adapter.lastGoodPriceAt(), observedAt);
+        oracle.setUpdatedAt(0);
+        adapter.pokePrice();
+        assertEq(adapter.lastGoodPriceAt(), observedAt);
+        oracle.setPrice(-1);
+        adapter.pokePrice();
+        assertEq(adapter.lastGoodPrice(), ORACLE_USDC);
+    }
+
+    function test_deployAndRecall_cacheOracleObservationTimestamp() public {
+        uint256 observedAt = block.timestamp - 60;
+        oracle.setUpdatedAt(observedAt);
+        _deployCapital(3_300e6);
+        assertEq(adapter.lastGoodPriceAt(), observedAt);
+        oracle.setUpdatedAt(observedAt + 1);
+        vm.prank(address(vault));
+        adapter.recall(3_300e6);
+        assertEq(adapter.lastGoodPriceAt(), observedAt + 1);
     }
 
     /// @notice Negative oracle price causes deploy to revert OracleNotSane (G1).
     function test_negative_oracle_price_reverts() public {
-        // Push USDC to adapter
-        vm.prank(owner);
-        vault.deployCapital(address(adapter), 3_300e6, "");
-
         // Set negative price
         oracle.setPrice(-1);
 
         // G1: deploy() now calls isPriceSane() first which returns false on negative price,
         // so the revert is OracleNotSane() (not StaleGoldPrice()).
-        vm.prank(address(vault));
+        vm.prank(owner);
         vm.expectRevert(GoldAllocationAdapter.OracleNotSane.selector);
-        adapter.deploy(3_300e6);
+        vault.deployCapitalAndExecute(address(adapter), 3_300e6, "");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -333,17 +363,15 @@ contract GoldAllocationAdapterTest is Test {
     /// @dev    G1: deploy() now calls isPriceSane() first. When pool deviates > maxDeviationBps,
     ///         isPriceSane() returns false, so deploy() reverts OracleNotSane() (not GoldPriceDeviation).
     function test_pool_deviation_too_high_reverts() public {
-        vm.prank(owner);
-        vault.deployCapital(address(adapter), 3_300e6, "");
 
         // Set pool price 5% above oracle (105% of oraclePriceUsdc).
         uint256 deviatedPrice = ORACLE_USDC * 21 / 20; // 3_465_000_000
         pool.setPrice(deviatedPrice);
 
         // G1: isPriceSane() returns false → deploy() reverts OracleNotSane (not GoldPriceDeviation).
-        vm.prank(address(vault));
+        vm.prank(owner);
         vm.expectRevert(GoldAllocationAdapter.OracleNotSane.selector);
-        adapter.deploy(3_300e6);
+        vault.deployCapitalAndExecute(address(adapter), 3_300e6, "");
     }
 
     /// @notice Pool price within 0.5% of oracle (< maxDeviationBps=100) — deploy succeeds.
@@ -369,17 +397,13 @@ contract GoldAllocationAdapterTest is Test {
 
     /// @notice When pool returns 0, deploy reverts (InsufficientOutput from pool or SlippageExceeded).
     function test_slippage_reverts_when_pool_returns_zero() public {
-        vm.prank(owner);
-        vault.deployCapital(address(adapter), 3_300e6, "");
 
         // Make the pool return 0 by setting swapFeeBps to 0 (output = 0)
         pool.setSwapFeeBps(0);
 
-        // Both InsufficientOutput and SlippageExceeded are acceptable
-        vm.prank(address(vault));
-        // Just expect a revert (either custom error is valid)
+        vm.prank(owner);
         vm.expectRevert();
-        adapter.deploy(3_300e6);
+        vault.deployCapitalAndExecute(address(adapter), 3_300e6, "");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -401,11 +425,7 @@ contract GoldAllocationAdapterTest is Test {
         // combined = 290 + 0 (xaut not yet deployed) + 1 = 291 < 30_000 → should pass
         // Note: vault.deployCapital adds `amount` to the combined check before deploy()
         vm.prank(owner);
-        vault.deployCapital(address(adapter), 1e6, "");
-
-        // Now execute the swap
-        vm.prank(address(vault));
-        adapter.deploy(1e6);
+        vault.deployCapitalAndExecute(address(adapter), 1e6, "");
 
         assertGt(adapter.xautHeld(), 0, "XAUT must be held");
     }
@@ -434,18 +454,22 @@ contract GoldAllocationAdapterTest is Test {
         // Use 29_995 USDC from spread + deploy 10 USDC: 29_995 + 10 = 30_005 > 30_000.
         // Let's reset mockSpread to return 29_995e6.
         MockGoldSpread mockSpread2 = new MockGoldSpread(29_995e6);
+        uint256 exposure = mockSpread.currentValue();
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(
+            ShariahVault.GoldAdapterHasExposure.selector, address(mockSpread), exposure
+        ));
+        vault.setGoldSpreadAdapter(address(mockSpread2));
+        mockSpread.setValue(0);
         vm.prank(owner);
         vault.setGoldSpreadAdapter(address(mockSpread2));
 
+        // G-1 marks the unseeded mock value as appreciation, so preserve the cap-plus-one intent at marked NAV.
+        uint256 cap = vault.totalAssets() * vault.MAX_GOLD_BPS() / 10_000;
+        uint256 amount = cap - mockSpread2.currentValue() + 1;
         vm.prank(owner);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                ShariahVault.GoldCapExceeded.selector,
-                uint256(29_995e6 + 0 + 10e6), // combined
-                uint256(100_000e6 * 3000 / 10_000) // goldCap = 30_000e6
-            )
-        );
-        vault.deployCapital(address(adapter), 10e6, "");
+        vm.expectRevert(abi.encodeWithSelector(ShariahVault.GoldCapExceeded.selector, cap + 1, cap));
+        vault.deployCapitalAndExecute(address(adapter), amount, "");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -626,12 +650,9 @@ contract GoldAllocationAdapterTest is Test {
         uint256 amount = 3_300e6;
 
         vm.prank(owner);
-        vault.deployCapital(address(adapter), amount, "");
-
-        vm.prank(address(vault));
         vm.expectEmit(false, false, false, false, address(adapter));
         emit GoldAllocationAdapter.GoldBought(amount, 0, 0); // args checked loosely
-        adapter.deploy(amount);
+        vault.deployCapitalAndExecute(address(adapter), amount, "");
     }
 
     /// @notice recall() emits GoldSold.
@@ -656,6 +677,155 @@ contract GoldAllocationAdapterTest is Test {
         vm.prank(address(vault));
         uint256 returned = adapter.recall(1e6);
         assertEq(returned, 0, "recall with xautHeld==0 must return 0");
+    }
+
+    function test_poolPrice_bothOrderings_matchOracle_6dec() public {
+        for (uint256 i; i < 2; ++i) {
+            pool.setTokenOrder(i == 0);
+            // sqrtPriceX96 is a rounded Q64.96 value, so allow 1e-6 relative error
+            assertApproxEqRel(adapter.poolPriceUsdc(), ORACLE_USDC, 1e12);
+            assertTrue(adapter.isPriceSane());
+        }
+    }
+
+    function test_poolPrice_differentDecimals_bothOrderings() public {
+        MockERC20 gold18 = new MockERC20("Gold18", "G18", 18);
+        MockUniswapV3PoolXAUT pool18 = new MockUniswapV3PoolXAUT(address(usdc), address(gold18), ORACLE_USDC);
+        GoldAllocationAdapter adapter18 = new GoldAllocationAdapter(
+            address(usdc), address(gold18), address(pool18), 3000, address(oracle), address(this), 3600, owner
+        );
+        for (uint256 i; i < 2; ++i) {
+            pool18.setTokenOrder(i == 0);
+            assertApproxEqRel(adapter18.poolPriceUsdc(), ORACLE_USDC, 1e12);
+            assertTrue(adapter18.isPriceSane());
+        }
+        gold18.mint(address(pool18), 100e18);
+        usdc.mint(address(adapter18), 3_300e6);
+        adapter18.deploy(3_300e6);
+        assertEq(adapter18.currentValue(), adapter18.xautHeld() * ORACLE_USDC / 1e18);
+        assertGt(adapter18.recall(3_300e6), 0);
+    }
+
+    function test_poolPrice_inverseHighPrice_doesNotTruncateToZero() public {
+        uint256 price = 100_000e6;
+        pool.setTokenOrder(false);
+        pool.setPrice(price);
+        oracle.setPrice(int256(price * 100));
+        // rounded sqrtPriceX96 encoding: 1e-6 relative tolerance
+        assertApproxEqRel(adapter.poolPriceUsdc(), price, 1e12);
+        assertTrue(adapter.isPriceSane());
+    }
+
+    function test_currentValue_ignoresDepressedInversePoolPrice() public {
+        _deployCapital(3_300e6);
+        uint256 nav = vault.totalAssets();
+        uint256 preview = vault.previewDeposit(100e6);
+        pool.setTokenOrder(false);
+        pool.setPrice(2_640e6);
+        assertEq(vault.totalAssets(), nav, "spot cannot write down oracle-valued NAV");
+        assertEq(vault.previewDeposit(100e6), preview);
+        assertEq(vault.maxDeposit(alice), 0, "deviating spot still blocks material new deposits");
+        // Spot deviations still gate entry, but cannot change fresh or fallback NAV.
+        assertFalse(adapter.isPriceSane());
+        uint256 expected = adapter.xautHeld() * ORACLE_USDC / 1e6;
+        assertEq(adapter.currentValue(), expected);
+        oracle.setUpdatedAt(0);
+        assertEq(adapter.currentValue(), expected * 9500 / 10_000);
+    }
+
+    function test_poolPrice_usdc18_xaut6_bothOrderings() public {
+        MockERC20 quote18 = new MockERC20("Quote18", "Q18", 18);
+        MockUniswapV3PoolXAUT pool18 = new MockUniswapV3PoolXAUT(address(quote18), address(xaut), 3_300e18);
+        GoldAllocationAdapter adapter18 = new GoldAllocationAdapter(
+            address(quote18), address(xaut), address(pool18), 3000, address(oracle), address(this), 3600, owner
+        );
+        for (uint256 i; i < 2; ++i) {
+            pool18.setTokenOrder(i == 0);
+            assertApproxEqRel(adapter18.poolPriceUsdc(), 3_300e18, 1e6);
+            assertTrue(adapter18.isPriceSane());
+        }
+    }
+
+    function test_poolPrice_largeSqrt_usesFullPrecisionProduct() public {
+        uint160 sqrtP = uint160(1 << 140);
+        vm.mockCall(address(pool), abi.encodeWithSignature("slot0()"),
+            abi.encode(sqrtP, int24(0), uint16(0), uint16(1), uint16(1), uint8(0), true));
+        assertEq(adapter.poolPriceUsdc(), uint256(1 << 88) * 1e6);
+    }
+
+    function test_poolPrice_fractionalRawRatio_keepsPrecision() public {
+        pool.setPrice(500_000); // Half a USDC per whole 6-dec token: raw ratio is below one.
+        oracle.setPrice(50_000_000);
+        assertApproxEqAbs(adapter.poolPriceUsdc(), 500_000, 1);
+        assertTrue(adapter.isPriceSane());
+    }
+
+    function test_recall_staleWithoutCachedPrice_reverts() public {
+        _deployCapital(3_300e6);
+        vm.mockCall(address(oracle), abi.encodeWithSignature("latestRoundData()"),
+            abi.encode(uint80(1), int256(0), block.timestamp, block.timestamp, uint80(1)));
+        // Simulate a legacy position without a populated cache; never substitute its principal.
+        stdstore.target(address(adapter)).sig("lastGoodPrice()").checked_write(uint256(0));
+        vm.prank(address(vault));
+        vm.expectRevert(GoldAllocationAdapter.StaleGoldPrice.selector);
+        adapter.recall(3_300e6);
+    }
+
+    function test_unreadablePool_blocksDeposits_notRecall() public {
+        _deployCapital(3_300e6);
+        vm.mockCallRevert(address(pool), abi.encodeWithSignature("token0()"), "unreadable");
+        assertFalse(adapter.isPriceSane());
+        assertGt(adapter.currentValue(), 0);
+        vm.prank(address(vault));
+        vm.expectRevert(GoldAllocationAdapter.OracleNotSane.selector);
+        adapter.deploy(1e6);
+        vm.prank(address(vault));
+        assertGt(adapter.recall(3_300e6), 0);
+    }
+
+    function test_wrongPoolPair_isUnreadable_andNavFallsBack() public {
+        _deployCapital(3_300e6);
+        vm.mockCall(address(pool), abi.encodeWithSignature("token1()"), abi.encode(address(0x1234)));
+        assertEq(adapter.poolPriceUsdc(), 0);
+        assertFalse(adapter.isPriceSane());
+        assertEq(adapter.currentValue(), adapter.xautHeld() * ORACLE_USDC / 1e6);
+        oracle.setUpdatedAt(0);
+        uint256 gross = adapter.xautHeld() * adapter.lastGoodPrice() / 1e6;
+        assertEq(adapter.currentValue(), gross * 9500 / 10_000);
+        vm.prank(address(vault));
+        assertGt(adapter.recall(3_300e6), 0);
+    }
+
+    function test_emergencySlippage_timelock_cap_cancel_ownerOnly() public {
+        bytes32 id = adapter.PARAM_EMERGENCY_SLIPPAGE();
+        assertEq(adapter.emergencySlippageBps(), 1000);
+        vm.startPrank(owner);
+        vm.expectRevert(abi.encodeWithSelector(GoldAllocationAdapter.ParamAboveHardCap.selector,
+            "emergencySlippageBps", uint256(2501), uint256(2500)));
+        adapter.proposeParamChange(id, 2501);
+        adapter.proposeParamChange(id, 2500);
+        assertEq(adapter.emergencySlippageBps(), 1000);
+        uint256 deadline = block.timestamp + 30 days;
+        vm.expectRevert(abi.encodeWithSelector(GoldAllocationAdapter.TimelockNotElapsed.selector, deadline, block.timestamp));
+        adapter.executeParamChange(id);
+        vm.warp(deadline);
+        vm.expectEmit(false, false, false, true, address(adapter));
+        emit GoldAllocationAdapter.EmergencySlippageBpsUpdated(1000, 2500);
+        adapter.executeParamChange(id);
+        assertEq(adapter.emergencySlippageBps(), 2500);
+        adapter.proposeParamChange(id, 0);
+        adapter.cancelParamChange(id);
+        vm.expectRevert(GoldAllocationAdapter.NoProposalPending.selector);
+        adapter.executeParamChange(id);
+        vm.stopPrank();
+        vm.startPrank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
+        adapter.proposeParamChange(id, 100);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
+        adapter.executeParamChange(id);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
+        adapter.cancelParamChange(id);
+        vm.stopPrank();
     }
 
     /// @notice protocolName() returns expected string.
@@ -704,6 +874,7 @@ contract GoldAllocationAdapterTest is Test {
 //  Mock helper: minimal IGoldAdapter stub returning a fixed currentValue
 // ─────────────────────────────────────────────────────────────────────────────
 contract MockGoldSpread {
+    function isGoldStrategy() external pure returns (bool) { return true; }
     uint256 private _value;
     constructor(uint256 value_) { _value = value_; }
     function currentValue() external view returns (uint256) { return _value; }

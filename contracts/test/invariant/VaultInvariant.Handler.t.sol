@@ -3,9 +3,11 @@ pragma solidity ^0.8.28;
 
 import {Test}   from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {VaultInvariantBase} from "./VaultInvariant.Base.t.sol";
 import {MockERC20}          from "../../test-helpers/MockERC20.sol";
+import {ShariahVault}       from "../../ShariahVault.sol";
 
 /// @dev Handler that exercises the ShariahVault stack for invariant testing.
 ///      PR2: extended with cross-chain actions, gold price drop, stale oracle,
@@ -27,6 +29,9 @@ contract VaultHandler is Test {
     uint256 public hwmDeficitBeforeClaim;
     uint256 public lastVaultShareFromClaim;
     bool    public claimWasAboveHWM;
+    bool public recoveryShareViolation;
+    uint256 public successfulClaims;
+    uint256 public recoveryOnlyClaims;
 
     // ── Ghost: cross-chain nonce tracking for totalPendingCrossChain invariant ─
     uint64[] public openNonces;
@@ -35,6 +40,23 @@ contract VaultHandler is Test {
     uint256 public pendingCrossChainGhost;          // sum of open pendingCrossChain[nonce]
 
     uint256 public callCount;
+    // N-06 caps apply at deployment; later market losses may reduce NAV without a new allocation.
+    bool public goldCapViolation;
+    bool public crossChainCapViolation;
+    bool public dilutionViolation;
+
+    function _checkUserDilution() internal {
+        uint256 assetsNow = s.vault().totalAssets();
+        uint256 supplyNow = s.vault().totalSupply();
+        for (uint256 i = 0; i < 3; i++) {
+            address actor = s.actors(i);
+            uint256 previousAssets = preActionAssets[actor];
+            if (preActionSupply[actor] == 0 || preActionShares[actor] == 0 || supplyNow == 0) continue;
+            if (assetsNow * preActionSupply[actor] + 2e6 * supplyNow < previousAssets * supplyNow) {
+                dilutionViolation = true;
+            }
+        }
+    }
 
     // Per-function call counts for -vv summary (PR2: report losses actually happen)
     uint256 public depositCalls;
@@ -93,6 +115,8 @@ contract VaultHandler is Test {
         vm.prank(actor);
         try s.vault().deposit(amount, actor) {
             hasDeposited[actor] = true;
+            // N-06 isolates dilution checks from subsequent market-driven NAV changes.
+            _checkUserDilution();
         } catch {}
     }
 
@@ -108,7 +132,8 @@ contract VaultHandler is Test {
         _snapshotAll();
 
         vm.prank(actor);
-        try s.vault().redeem(amount, actor, actor) {} catch {}
+        // N-06 checks dilution only around the user action, not around unrelated later losses.
+        try s.vault().redeem(amount, actor, actor) { _checkUserDilution(); } catch {}
     }
 
     // ── Action 3: deployToSpread ──────────────────────────────────────────────
@@ -129,8 +154,13 @@ contract VaultHandler is Test {
         uint256 vaultBal = s.usdc().balanceOf(address(s.vault()));
         if (vaultBal < amt) return;
 
+        // N-06 records cap compliance at entry so later losses cannot invalidate a permitted deployment.
+        uint256 combined = s.goldSpreadAdp().currentValue() + s.goldAllocAdp().currentValue() + amt;
+        uint256 cap = totalA * s.vault().MAX_GOLD_BPS() / 10_000;
         vm.prank(manager());
-        try s.vault().deployCapital(address(s.goldSpreadAdp()), amt, "") {} catch {}
+        try s.vault().deployCapitalAndExecute(address(s.goldSpreadAdp()), amt, "") {
+            if (combined > cap) goldCapViolation = true;
+        } catch {}
     }
 
     // ── Action 4: deployToAllocation ─────────────────────────────────────────
@@ -153,10 +183,12 @@ contract VaultHandler is Test {
         uint256 vaultBal = s.usdc().balanceOf(address(s.vault()));
         if (vaultBal < amt) return;
 
+        // N-06 records cap compliance at entry while retaining price-drop and loss-recall actions.
+        uint256 combined = s.goldSpreadAdp().currentValue() + s.goldAllocAdp().currentValue() + amt;
+        uint256 cap = totalA * s.vault().MAX_GOLD_BPS() / 10_000;
         vm.prank(manager());
-        try s.vault().deployCapital(address(s.goldAllocAdp()), amt, "") {
-            vm.prank(address(s.vault()));
-            try s.goldAllocAdp().deploy(amt) {} catch {}
+        try s.vault().deployCapitalAndExecute(address(s.goldAllocAdp()), amt, "") {
+            if (combined > cap) goldCapViolation = true;
         } catch {}
     }
 
@@ -187,13 +219,47 @@ contract VaultHandler is Test {
         callCount++; claimProfitCalls++;
         uint256 gross = bound(uint256(grossProfit), 1e6, 10_000e6);
 
-        hwmDeficitBeforeClaim = s.vault().hwmDeficit();
-        claimWasAboveHWM = (s.vault().totalAssets() > s.vault().highWaterMark());
-
         s.usdc().mint(address(s.vault()), gross);
+        // Bound claims to net realized profit so losses/locked profit never turn principal into fees.
+        uint256 available = s.vault().realizedProfit();
+        if (available == 0) return;
+        gross = bound(gross, 1, available);
+        // N-21: compare the pre-claim processed price and record only successful claims, excluding Wakala booking.
+        uint256 deficit = _preProfitDeficit();
+        uint256 fees = s.treasury().pendingFees();
+        uint256 unbooked = s.vault().pendingWakalaFee();
+        uint256 net = gross - gross * s.purificationEscrow().purificationBps() / 10_000;
+        net -= net * s.charityModule().charityBps() / 10_000;
+        // Resolve every external getter before the prank: a call in the try expression would consume it.
+        ShariahVault v = s.vault();
+        address mgr = manager();
+        vm.prank(mgr);
+        try v.claimMusharakahProfit(gross) {
+            successfulClaims++;
+            hwmDeficitBeforeClaim = deficit;
+            claimWasAboveHWM = deficit == 0;
+            lastVaultShareFromClaim = s.treasury().pendingFees() - fees - unbooked;
+            if (deficit > 0 && net <= deficit) {
+                recoveryOnlyClaims++;
+                if (lastVaultShareFromClaim != 0) recoveryShareViolation = true;
+            }
+        } catch {}
+    }
 
-        vm.prank(manager());
-        try s.vault().claimMusharakahProfit(gross) {} catch {}
+    function _preProfitDeficit() internal view returns (uint256) {
+        uint256 nav = s.vault().totalAssets();
+        uint256 gain = s.vault().goldUnrealizedGain();
+        nav = nav > gain ? nav - gain : 0;
+        uint256 period = s.vault().profitUnlockPeriod();
+        uint256 end = s.vault().unlockedAt();
+        if (period != 0 && block.timestamp < end && end >= period && end - period <= block.timestamp) {
+            nav += Math.mulDiv(s.vault().lockedProfit(), end - block.timestamp, period);
+        }
+        nav = Math.min(nav, s.vault().profitBase());
+        uint256 supply = s.vault().totalSupply() + 1e6;
+        uint256 price = Math.mulDiv(nav + 1, 1e18, supply);
+        uint256 high = s.vault().highWaterMarkPerShare();
+        return high > price ? Math.mulDiv(high - price, supply, 1e18) : 0;
     }
 
     // ── Action 8: warpTime ────────────────────────────────────────────────────
@@ -255,7 +321,11 @@ contract VaultHandler is Test {
             int256 np2 = cur2 - (cur2 * int256(drop)) / 10_000;
             if (np2 <= 0) np2 = 1e8;
             s.goldSpreadOracle().setPrice(np2);
+            s.paxgRouter().setPrice(uint256(np2) / 100);
         }
+        // N-06 refreshes cached gold values so the drop action immediately exercises vault writedowns.
+        s.goldSpreadAdp().pokePrice();
+        s.goldAllocAdp().pokePrice();
     }
 
     // ── Action 13 (PR2): deployCrossChain — put capital in-flight ────────────
@@ -285,10 +355,13 @@ contract VaultHandler is Test {
         uint256 vaultBal = s.usdc().balanceOf(address(s.vault()));
         if (vaultBal < amt) return;
 
-        uint64 nonceNow = s.mockMessenger().nextNonce();
+        // Task M: ghost keys track local positions rather than Circle's offchain nonce.
+        uint64 nonceNow = s.vault().crossChainPositionCounter() + 1;
 
         vm.prank(manager());
         try s.vault().deployCrossChain(6, bytes32(uint256(uint160(makeAddr("dest")))), amt) {
+            // N-06 checks the entry-time pending cap, not a smaller NAV after subsequent losses.
+            if (inFlight + amt > maxPending) crossChainCapViolation = true;
             nonceOpen[nonceNow]    = true;
             nonceSent[nonceNow]    = amt;
             openNonces.push(nonceNow);
@@ -309,13 +382,9 @@ contract VaultHandler is Test {
         uint256 feeAmt  = bound(uint256(feePctBps), 0, 300) * sent / 10_000;
         uint256 netAmt  = sent - feeAmt; // received after fee
 
-        // Mint net back to vault (simulates CCTP mint)
-        if (netAmt > 0) s.usdc().mint(address(s.vault()), netAmt);
-
-        // Build a fake CCTP V2 message
+        // Task M: mint inside receiveMessage so atomic balance-delta accounting is exercised.
         bytes memory msg_ = _buildCctpMsg(nonce, sent, feeAmt);
-        // Configure mock transmitter to mint nothing (we already minted above)
-        s.mockTransmitter().setMintAmount(0);
+        s.mockTransmitter().setMintAmount(netAmt);
 
         vm.prank(manager());
         try s.vault().settleCrossChainWithMessage(nonce, msg_, "") {
@@ -336,10 +405,9 @@ contract VaultHandler is Test {
         uint256 returnPct = bound(uint256(returnPctBps), 7000, 10_000); // 70%-100% returned
         uint256 netAmt    = sent * returnPct / 10_000;
 
-        if (netAmt > 0) s.usdc().mint(address(s.vault()), netAmt);
-
+        // Task M: the transmitter mints during the measured atomic settle call.
         bytes memory msg_ = _buildCctpMsg(nonce, netAmt, 0); // no fee, just shortfall
-        s.mockTransmitter().setMintAmount(0);
+        s.mockTransmitter().setMintAmount(netAmt);
 
         vm.prank(manager());
         try s.vault().settleCrossChainWithMessage(nonce, msg_, "") {
@@ -389,18 +457,22 @@ contract VaultHandler is Test {
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    /// @dev Build a minimal CCTP V2 BurnMessageV2 (344 bytes: 116 header + 228 body).
+    /// @dev Build a minimal CCTP V2 BurnMessageV2 (376 bytes: 148 header + 228 body).
     ///      Body layout: version(4)+burnToken(32)+mintRecipient(32)+amount(32)+
     ///                   messageSender(32)+maxFee(32)+feeExecuted(32)+expirationBlock(32).
     function _buildCctpMsg(uint64 nonce_, uint256 amount_, uint256 feeExecuted_)
         internal view returns (bytes memory)
     {
-        bytes memory header = new bytes(116);
-        // encode nonce at header bytes [12..19] (big-endian uint64)
-        for (uint256 i = 0; i < 8; i++) {
-            header[19 - i] = bytes1(uint8(nonce_ >> (i * 8)));
-        }
+        // Task M: native header with bytes32 nonce and registered remote messenger.
+        uint32 remoteDomain = s.vault().pendingCrossChainDestinationDomain(nonce_);
+        bytes memory header = abi.encodePacked(
+            uint32(1), remoteDomain, s.vault().localDomain(), bytes32(uint256(nonce_)),
+            s.vault().remoteTokenMessenger(remoteDomain),
+            bytes32(uint256(uint160(s.vault().tokenMessenger()))),
+            bytes32(uint256(uint160(address(s.vault())))), uint32(2000), uint32(2000) // destinationCaller = vault
+        );
         bytes memory body = new bytes(228);
+        body[3] = 0x01;
         // mintRecipient at body[36..67] = vault address
         bytes32 recipientWord = bytes32(uint256(uint160(address(s.vault()))));
         for (uint256 i = 0; i < 32; i++) {

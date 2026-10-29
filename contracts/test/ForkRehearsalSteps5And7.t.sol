@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {Test, console, Vm} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+// Task M: local legacy ABIs, messenger and 116-byte fixtures intentionally target deployed pre-Task-M bytecode.
 // ─── Minimal contract interfaces (deployed on Arc Testnet) ────────────────────
 
 interface IShariahVaultV2 {
@@ -16,7 +17,6 @@ interface IShariahVaultV2 {
     function claimMusharakahProfit(uint256 grossProfit) external;
     function setTokenMessenger(address messenger) external;
     function setMessageTransmitter(address transmitter) external;
-    function setGoldCrossChainBlocked(bool blocked) external;
     function deployCrossChain(uint32 destDomain, bytes32 recipient, uint256 amount) external;
     function settleCrossChainWithMessage(uint64 nonce, bytes calldata message, bytes calldata attestation) external;
     function tokenMessenger() external view returns (address);
@@ -25,7 +25,6 @@ interface IShariahVaultV2 {
     function maxPendingCrossChainBps() external view returns (uint256);
     function pendingCrossChain(uint64 nonce) external view returns (uint256);
     function owner() external view returns (address);
-    function goldCrossChainBlocked() external view returns (bool);
     function profitUnlockPeriod() external view returns (uint256);
     function hurdlePrincipal() external view returns (uint256);
     function purificationEscrow() external view returns (address);
@@ -154,7 +153,7 @@ contract EtchableUSDC {
 //    [8..11]   destDomain    uint32
 //    [12..19]  nonce         uint64
 //    [20..51]  sender        bytes32
-//    [52..83]  recipient     bytes32  (mintRecipient for the vault)
+//    [52..83]  recipient     bytes32  (local token messenger)
 //    [84..115] destCaller    bytes32
 //
 //  BurnMessageV2 body (228 bytes, body offset = header offset + field offset):
@@ -177,7 +176,7 @@ library CctpV2MsgBuilder {
         uint256 amount_,
         uint256 maxFee_,
         uint256 feeExecuted_
-    ) internal pure returns (bytes memory msg_) {
+    ) internal view returns (bytes memory msg_) {
         // ── Header (116 bytes) ─────────────────────────────────────────────
         bytes memory header = new bytes(116);
 
@@ -202,8 +201,9 @@ library CctpV2MsgBuilder {
         }
 
         // sender (bytes32) at [20..51] — leave zero (not checked by vault)
-        // recipient (bytes32) at [52..83] — leave zero (not checked in header,
-        //   mintRecipient lives in the body)
+        // Outer recipient is the local messenger; body mintRecipient is the vault.
+        bytes32 messengerWord = bytes32(uint256(uint160(IShariahVaultV2(mintRecipient_).tokenMessenger())));
+        for (uint256 i = 0; i < 32; i++) header[52 + i] = messengerWord[i];
         // destCaller (bytes32) at [84..115] — leave zero
 
         // ── Body (228 bytes) ──────────────────────────────────────────────
@@ -309,8 +309,7 @@ contract ForkRehearsalSteps5And7 is Test {
         vault.setTokenMessenger(address(messenger));
         vault.setMessageTransmitter(address(transmitter));
 
-        // goldCrossChainBlocked is true on-chain — disable it so deployCrossChain can run.
-        vault.setGoldCrossChainBlocked(false);
+        _unblockLegacyFlag();
 
         // Raise maxPendingCrossChainBps to allow a 100e6 deployment from ~500e6 assets.
         // Default 2000 bps = 20% of totalAssets (~100e6 of 500e6 is exactly 20%).
@@ -354,12 +353,12 @@ contract ForkRehearsalSteps5And7 is Test {
 
         // ── Step 4: build 344-byte CCTP V2 message ───────────────────────
         //   amount=100e6, maxFee=5e6 at body[132], feeExecuted=2e6 at body[164].
-        //   sourceDomain and nonce must match what the vault registered.
+        //   Return source matches the outbound destination; return nonce is independent.
         uint32 srcDomain = vault.sourceDomain(); // 26 = Arc Testnet
         bytes memory message = CctpV2MsgBuilder.build(
-            srcDomain,          // sourceDomain
-            destDomain,         // destDomain
-            emittedNonce,       // nonce matching pending position
+            destDomain,         // return source is the outbound destination
+            srcDomain,          // return destination is the local domain
+            emittedNonce + 1,   // independent return nonce
             VAULT,              // mintRecipient (must equal vault address)
             100e6,              // gross amount
             5e6,                // maxFee  — at body offset 132
@@ -442,8 +441,8 @@ contract ForkRehearsalSteps5And7 is Test {
 
         vault.setTokenMessenger(address(messenger));
         vault.setMessageTransmitter(address(transmitter));
-        vault.setGoldCrossChainBlocked(false);
         vault.setMaxPendingCrossChainBps(2_500);
+        _unblockLegacyFlag();
 
         vm.recordLogs();
         vault.deployCrossChain(0, bytes32(uint256(uint160(VAULT))), 100e6);
@@ -464,7 +463,7 @@ contract ForkRehearsalSteps5And7 is Test {
         // The decoder MUST read body[164] and get 2e6.
         // expectedNet = 100e6 - 2e6 = 98e6 == transmitter mint. No revert.
         bytes memory goodMessage = CctpV2MsgBuilder.build(
-            vault.sourceDomain(), 0, emittedNonce, VAULT,
+            0, vault.sourceDomain(), emittedNonce, VAULT,
             100e6, 5e6 /* maxFee at body[132] */, 2e6 /* feeExecuted at body[164] */
         );
 
@@ -599,5 +598,15 @@ contract ForkRehearsalSteps5And7 is Test {
         // The revert proves: CharityModule.vault must be PurificationEscrow, not ShariahVaultV2.
         (success); // suppress unused variable warning
         console.log("T2b PASS: executeWaterfall reverts with NotVault as expected (CharityModule wired to wrong caller)");
+    }
+
+    /// @dev The live Arc Testnet vault was deployed before Task N1 and still carries the old
+    ///      `goldCrossChainBlocked` flag (set true). N1 removes the flag from the source, so a
+    ///      fresh deployment has nothing to clear. Call it by raw selector if it exists; a
+    ///      redeployed vault simply has no such function and the call is a no-op.
+    ///      Remove this helper once the testnet vault is redeployed from the N1 source.
+    function _unblockLegacyFlag() internal {
+        (bool ok,) = VAULT.call(abi.encodeWithSignature("setGoldCrossChainBlocked(bool)", false));
+        ok;
     }
 }

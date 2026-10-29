@@ -6,6 +6,7 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {AutonomousVault} from "./AutonomousVault.sol";
+import {ShariahVault} from "./ShariahVault.sol";
 import {ScoreAggregator} from "./ScoreAggregator.sol";
 import {ShariahScoreAggregator} from "./ShariahScoreAggregator.sol";
 import {IStrategyAdapter} from "./IStrategyAdapter.sol";
@@ -33,6 +34,7 @@ contract RiskTieredExecutor is Ownable2Step {
     error GasPriceTooHigh();
     error NothingToExecute();
     error AdapterNotSet();
+    error NonAtomicGoldExchange();
 
     event ExecutionTriggered(
         ScoreAggregator.Strategy indexed strategy,
@@ -122,6 +124,9 @@ contract RiskTieredExecutor is Ownable2Step {
         }
     }
 
+    /// @notice Execute the winning strategy for this tier.
+    /// @dev Shariah tiers stay local-only: aggregator domain 0 is ambiguous with CCTP domain 0.
+    ///      Gold winners with a nonzero reported destination remain forbidden.
     function executeWinner() external {
         if (tx.gasprice > maxGasPrice) revert GasPriceTooHigh();
 
@@ -148,6 +153,12 @@ contract RiskTieredExecutor is Ownable2Step {
             if (((strategyMask >> idx) & 1) == 0) {
                 revert StrategyNotAllowedForTier(idx, strategyMask);
             }
+
+            uint32 reportedDomain = destinationDomain;
+            if (reportedDomain != 0 && (
+                idx == uint8(ShariahScoreAggregator.ShariahStrategy.GOLD_SPREAD)
+                    || idx == uint8(ShariahScoreAggregator.ShariahStrategy.GOLD_ALLOCATION)
+            )) revert NonAtomicGoldExchange();
 
             config = shariahStrategyConfigs[idx];
             destinationDomain = 0;
@@ -183,8 +194,12 @@ contract RiskTieredExecutor is Ownable2Step {
         bool isShariahTier = (riskTier == RiskTier.SHARIAH_CONSERVATIVE || riskTier == RiskTier.SHARIAH_DYNAMIC);
         lastExecutionTime = block.timestamp;
         if (isShariahTier || destinationDomain == 0) {
-            vault.deployCapital(config.adapter, amount, "");
-            IStrategyAdapter(config.adapter).deploy(amount);
+            if (isShariahTier) {
+                ShariahVault(address(vault)).deployCapitalAndExecute(config.adapter, amount, "");
+            } else {
+                vault.deployCapital(config.adapter, amount, "");
+                IStrategyAdapter(config.adapter).deploy(amount);
+            }
 
             if (isShariahTier) {
                 emit ShariahExecutionTriggered(shariahStrategy, score, amount, config.adapter, riskTier);

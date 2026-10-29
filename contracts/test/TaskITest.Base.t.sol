@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {AutonomousVault}       from "../AutonomousVault.sol";
@@ -15,25 +15,28 @@ import {MockERC20}              from "../test-helpers/MockERC20.sol";
 import {MockAllocatedGold}      from "../test-helpers/MockAllocatedGold.sol";
 import {MockXauUsdAggregator}   from "../test-helpers/MockXauUsdAggregator.sol";
 
-// ─── Minimal mock token messenger ────────────────────────────────────────────
-// Returns sequential nonces; does NOT burn real tokens (balance stays in vault).
-contract MockTokenMessengerI is Test {
-    uint64 public nextNonce = 1;
+/// @dev Shared fixture helper: never bypass governance storage or shorten its delay.
+library RemoteRecipientFixture {
+    function approve(Vm vm, ShariahVault target, address board, uint32 domain, bytes32 recipient) internal {
+        if (target.approvedRemoteRecipient(domain, recipient)) return;
+        vm.prank(board);
+        target.proposeRemoteRecipient(domain, recipient, true);
+        vm.warp(block.timestamp + 30 days);
+        vm.prank(board);
+        target.confirmRemoteRecipient(domain, recipient);
+    }
+}
 
-    function depositForBurnWithCaller(
-        uint256 /*amount*/,
-        uint32  /*destinationDomain*/,
-        bytes32 /*mintRecipient*/,
-        address /*burnToken*/,
-        bytes32 /*destinationCaller*/
-    ) external returns (uint64 nonce) {
-        nonce = nextNonce++;
-        // NOTE: tokens are NOT burned here — they stay in the vault.
-        // The vault computed balBefore BEFORE calling this, so
-        // pendingCrossChain[nonce] = amount.
-        // Because no burn occurred, vault.balanceOf == balBefore still.
-        // That means: arrived = balNow - snapBase = balBefore - (balBefore - amount) = amount.
-        // Tests must sim CCTP mint by minting extra USDC on top.
+// ─── Minimal mock token messenger ────────────────────────────────────────────
+// Records native V2 calls; does NOT burn real tokens (balance stays in vault).
+contract MockTokenMessengerI is Test {
+    // Task M: Circle returns no nonce; retain no-burn fixture intent and record V2 arguments.
+    bytes public lastCall;
+    uint64 public callCount;
+    function depositForBurn(uint256 amount, uint32 domain, bytes32 recipient, address token,
+        bytes32 caller, uint256 maxFee, uint32 finality) external {
+        lastCall = abi.encode(amount, domain, recipient, token, caller, maxFee, finality);
+        ++callCount;
     }
 }
 
@@ -58,13 +61,17 @@ contract MockSwapRouterI {
     {
         IERC20(p.tokenIn).transferFrom(msg.sender, address(this), p.amountIn);
         if (returnZero) return 0;
-        amountOut = p.amountIn; // 1:1 by default
+        amountOut = MockERC20(p.tokenIn).decimals() == 6
+            ? p.amountIn * 1e18 / 3_300e6
+            : p.amountIn * 3_300e6 / 1e18;
+        require(amountOut >= p.amountOutMinimum, "MockSwapRouterI: slippage");
         IERC20(p.tokenOut).transfer(p.recipient, amountOut);
     }
 }
 
 // ─── Mock IGoldAdapter for S6-H (GoldAllocationAdapter stub) ─────────────────
 contract MockGoldAllocationAdapterI {
+    function isGoldStrategy() external pure returns (bool) { return true; }
     bool public sane = true;
     uint256 public value;
 
@@ -73,6 +80,7 @@ contract MockGoldAllocationAdapterI {
 
     function isPriceSane() external view returns (bool) { return sane; }
     function currentValue() external view returns (uint256) { return value; }
+    function deploy(uint256) external returns (uint256) { return 0; } // N-23: vault-executed funding path for the value-only mock
 }
 
 // ─── Shared base ─────────────────────────────────────────────────────────────
@@ -201,19 +209,17 @@ abstract contract TaskITestBase is Test {
     }
 
     // ── Helper: deploy cross-chain from vault (I1) ──────────────────────────
-    // Returns the nonce returned by messenger.
-    function _deployCrossChainI1(uint256 amount) internal returns (uint64 nonce) {
-        // messenger's nextNonce before call
-        nonce = messenger.nextNonce();
+    // Task M: return the vault's local position ID, not an offchain CCTP nonce.
+    function _deployCrossChainI1(uint256 amount) internal returns (uint64 positionId) {
         vm.prank(manager);
         vault.deployCrossChain(DEST_DOMAIN, bytes32(uint256(uint160(alice))), amount);
+        positionId = vault.crossChainPositionCounter();
     }
 
     // ── Helper: deploy + swap via svault/goldAdapter ──────────────────────────
     function _deployAndSwapGold(uint256 usdcAmt) internal {
         vm.prank(manager);
-        svault.deployCapital(address(goldAdapter), usdcAmt, "");
-        vm.prank(address(svault));
-        goldAdapter.deploy(usdcAmt);
+        // Use the atomic entry point so the real vault satisfies adapter caller authorization.
+        svault.deployCapitalAndExecute(address(goldAdapter), usdcAmt, "");
     }
 }

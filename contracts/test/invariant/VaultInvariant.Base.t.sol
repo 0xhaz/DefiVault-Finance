@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import {RemoteRecipientFixture} from "../TaskITest.Base.t.sol";
 import {Test}      from "forge-std/Test.sol";
 import {IERC20}    from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -28,7 +29,9 @@ contract MockRegistryInv {
 contract MockPaxgRouter {
     IERC20 public usdc;
     IERC20 public paxg;
-    uint256 public constant USDC_PER_PAXG = 3_300_000_000;
+    uint256 public USDC_PER_PAXG = 3_300_000_000;
+
+    function setPrice(uint256 price) external { USDC_PER_PAXG = price; }
 
     constructor(address usdc_, address paxg_) {
         usdc = IERC20(usdc_);
@@ -61,14 +64,15 @@ contract MockPaxgRouter {
     }
 }
 
-// ── Mock CCTP TokenMessenger: returns sequential nonces, does NOT burn ────────
-// (vault balance is NOT decremented; tests sim cross-chain by calling settle)
+// ── Mock CCTP TokenMessenger V2: no return value, transfers out the burned amount ──
+// N-06 needs real idle-balance removal so cross-chain actions cannot hide gold losses with phantom funding.
 contract MockMessengerInv {
-    uint64 public nextNonce = 1;
-    function depositForBurnWithCaller(
-        uint256, uint32, bytes32, address, bytes32
-    ) external returns (uint64 nonce) {
-        nonce = nextNonce++;
+    // Task M: V2 burns have no return; the invariant handler tracks vault position IDs.
+    bytes public lastCall;
+    function depositForBurn(uint256 amount, uint32 domain, bytes32 recipient, address token,
+        bytes32 caller, uint256 maxFee, uint32 finality) external {
+        lastCall = abi.encode(amount, domain, recipient, token, caller, maxFee, finality);
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
     }
 }
 
@@ -170,6 +174,7 @@ abstract contract VaultInvariantBase is Test {
         xaut             = new MockXAUT();
         xauOracle        = new MockXauUsdAggregator();
         goldSpreadOracle_ = new MockXauUsdAggregator(); // K2: separate oracle for S2-H
+        goldSpreadOracle_.setPrice(ORACLE_PRICE);
         xautPool         = new MockUniswapV3PoolXAUT(address(usdc), address(xaut), POOL_USDC_PER_XAUT);
         paxgRouter       = new MockPaxgRouter(address(usdc), address(paxg));
 
@@ -223,6 +228,8 @@ abstract contract VaultInvariantBase is Test {
         vault.setMaxAllocationBps(8000);
         // Wire CCTP for cross-chain handler actions (PR2)
         vault.setTokenMessenger(address(mockMessenger_));
+        // Task M: authenticate return messages from the handler's remote domain.
+        vault.setRemoteTokenMessenger(6, bytes32(uint256(0xCC7)));
         vault.setMaxPendingCrossChainBps(2000); // 20% cap
 
         goldSpreadAdp = new GoldExchangeAdapter(
@@ -240,7 +247,6 @@ abstract contract VaultInvariantBase is Test {
             MAX_STALENESS,
             owner
         );
-        goldAllocAdp.setPool(address(xautPool));
 
         vault.setScreened(address(goldSpreadAdp), true);
         vault.setScreened(address(goldAllocAdp), true);
@@ -265,8 +271,15 @@ abstract contract VaultInvariantBase is Test {
 
         vm.startPrank(owner);
         vault.setPurificationEscrow(address(purificationEscrow));
+        // N-20: authorize time-based booking separately so strict deployment actions remain reachable.
+        treasury.setFeeSource(address(vault));
+        treasury.setProfitRecorder(address(purificationEscrow));
         vault.setMessageTransmitter(address(mockTransmitter_));
         vm.stopPrank();
+
+        RemoteRecipientFixture.approve(vm, vault, owner, 6, bytes32(uint256(uint160(makeAddr("dest")))));
+        xauOracle.setPrice(ORACLE_PRICE);
+        goldSpreadOracle_.setPrice(ORACLE_PRICE);
 
         // ── Seed depositors ────────────────────────────────────────────────────
         for (uint256 i = 0; i < actors.length; i++) {
@@ -283,6 +296,8 @@ abstract contract VaultInvariantBase is Test {
         uint256 ua = vault.unlockedAt();
         if (block.timestamp >= ua) return 0;
         uint256 period   = vault.profitUnlockPeriod();
+        // Mirror the defensive schedule guards so the NAV accounting oracle cannot underflow.
+        if (period == 0 || ua < period || ua - period > block.timestamp) return 0;
         uint256 elapsed  = block.timestamp - (ua - period);
         if (elapsed >= period) return 0;
         return (lp * (period - elapsed)) / period;

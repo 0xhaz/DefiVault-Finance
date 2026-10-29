@@ -3,6 +3,8 @@ pragma solidity ^0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @notice Stripped Uniswap V3-compatible mock for USDC/XAUT testing on Arc Testnet.
 /// @dev    Satisfies three call surfaces the GoldAllocationAdapter needs:
@@ -15,10 +17,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 ///
 ///         NOT a real Uniswap V3 pool. Arc Testnet only.
 ///
-/// @dev    sqrtPriceX96 formula (USDC/XAUT, both treated as raw amounts):
-///           price = (sqrtPriceX96 / 2^96)^2
-///           For USDC (6 dec) / XAUT (6 dec): price is in raw-unit ratio.
-///           To represent $3300: sqrtPriceX96 = sqrt(3300) * 2^96 = ~58.09 * 2^96.
+/// @dev    sqrtPriceX96 encodes the raw token1/token0 ratio, not the whole-token quote.
+///         Default ordering is XAUT/USDC; setTokenOrder(false) reverses it.
 contract MockUniswapV3PoolXAUT {
     using SafeERC20 for IERC20;
 
@@ -54,6 +54,9 @@ contract MockUniswapV3PoolXAUT {
 
     IERC20  public immutable usdc;
     IERC20  public immutable xaut;
+    address public token0;
+    address public token1;
+    uint256 public immutable xautScale;
 
     /// @notice Pool price in USDC-per-XAUT, both in their native decimals (e.g. 3_300_000_000 = $3300 at 6 dec each).
     uint256 public usdcPerXaut;
@@ -67,6 +70,9 @@ contract MockUniswapV3PoolXAUT {
     constructor(address usdc_, address xaut_, uint256 initialUsdcPerXaut) {
         usdc         = IERC20(usdc_);
         xaut         = IERC20(xaut_);
+        token0       = xaut_;
+        token1       = usdc_;
+        xautScale    = 10 ** uint256(IERC20Metadata(xaut_).decimals());
         usdcPerXaut  = initialUsdcPerXaut;
         swapFeeBps   = 9980; // simulate 0.2% pool fee
         _updateSqrtPrice(initialUsdcPerXaut);
@@ -96,10 +102,8 @@ contract MockUniswapV3PoolXAUT {
     //  ISwapRouter.exactInputSingle() surface
     // ─────────────────────────────────────────────────────────────
 
-    /// @notice Executes a single-hop swap at the configured price ratio.
-    ///         USDC → XAUT: amountOut = amountIn * 1e6 / usdcPerXaut * swapFeeBps / 10_000
-    ///         XAUT → USDC: amountOut = amountIn * usdcPerXaut / 1e6 * swapFeeBps / 10_000
-    ///         (Both tokens are 6 decimals so the 1e6 normalisation cancels — simplifies to ratio.)
+    /// @notice Executes a single-hop swap using USDC base units per whole XAUT.
+    ///         Token amounts are normalized by xautScale, then discounted by swapFeeBps.
     function exactInputSingle(ExactInputSingleParams calldata params)
         external
         returns (uint256 amountOut)
@@ -117,14 +121,11 @@ contract MockUniswapV3PoolXAUT {
         bool usdcToXaut = params.tokenIn == address(usdc);
 
         if (usdcToXaut) {
-            // USDC in → XAUT out: amountOut = amountIn * 1e6 / usdcPerXaut
-            // Both tokens 6 dec, so: amountOut_xaut = amountIn_usdc * 1e6 / usdcPerXaut_6dec
-            // usdcPerXaut is already in 6-dec USDC per 6-dec XAUT
-            // Example: 3_300_000_000 USDC-units per 1_000_000 XAUT-units = $3300/oz
-            amountOut = (params.amountIn * 1e6 * swapFeeBps) / (usdcPerXaut * 10_000);
+            // Normalize the whole-token quote to XAUT base units, preserving fixture swap outputs.
+            amountOut = Math.mulDiv(params.amountIn, xautScale * swapFeeBps, usdcPerXaut * 10_000);
         } else {
-            // XAUT in → USDC out: amountOut = amountIn * usdcPerXaut / 1e6
-            amountOut = (params.amountIn * usdcPerXaut * swapFeeBps) / (1e6 * 10_000);
+            // XAUT in → USDC out: normalize XAUT base units by xautScale.
+            amountOut = Math.mulDiv(params.amountIn, usdcPerXaut * swapFeeBps, xautScale * 10_000);
         }
 
         if (amountOut < params.amountOutMinimum) revert InsufficientOutput(amountOut, params.amountOutMinimum);
@@ -186,28 +187,20 @@ contract MockUniswapV3PoolXAUT {
     //  Internal helpers
     // ─────────────────────────────────────────────────────────────
 
-    /// @dev Compute sqrtPriceX96 = sqrt(usdcPerXaut) * 2^96.
-    ///      `usdcPerXaut` is already in raw-USDC-per-raw-XAUT units (6-dec each), which
-    ///      matches the unit scale used by GoldAllocationAdapter._getPoolPrice().
-    ///      No additional decimal normalisation needed — the adapter recovers the original
-    ///      raw-unit price via: poolPriceRaw = sqrtPriceX96^2 >> 192 = usdcPerXaut,
-    ///      then poolPriceUsdc = poolPriceRaw * 10^usdcDecimals / 10^xautDecimals = usdcPerXaut
-    ///      (both decimals cancel since usdcDecimals == xautDecimals == 6).
-    ///      This makes poolPriceUsdc == oraclePriceUsdc when both describe the same rate.
-    function _updateSqrtPrice(uint256 price6dec) internal {
-        // sqrtPriceX96 = sqrt(price6dec * 2^192)
-        uint256 sqrtVal = _sqrt(price6dec * (2 ** 192));
-        sqrtPriceX96 = uint160(sqrtVal);
+    /// @notice Configure either real token ordering and preserve the quoted whole-token price.
+    function setTokenOrder(bool xautFirst) external {
+        token0 = xautFirst ? address(xaut) : address(usdc);
+        token1 = xautFirst ? address(usdc) : address(xaut);
+        _updateSqrtPrice(usdcPerXaut);
     }
 
-    /// @dev Babylonian integer square root.
-    function _sqrt(uint256 x) internal pure returns (uint256 y) {
-        if (x == 0) return 0;
-        uint256 z = (x + 1) / 2;
-        y = x;
-        while (z < y) {
-            y = z;
-            z = (x / z + z) / 2;
-        }
+    /// @dev Price is USDC base units per whole XAUT; slot0 encodes token1/token0 raw units.
+    function _updateSqrtPrice(uint256 price) internal {
+        require(price > 0, "MockPool: zero price");
+        uint256 numerator = token0 == address(xaut) ? price : xautScale;
+        uint256 denominator = token0 == address(xaut) ? xautScale : price;
+        uint256 sqrtVal = Math.sqrt(Math.mulDiv(numerator, 1 << 192, denominator));
+        require(sqrtVal <= type(uint160).max && sqrtVal > 0, "MockPool: price out of range");
+        sqrtPriceX96 = uint160(sqrtVal);
     }
 }

@@ -98,7 +98,6 @@ contract DeployGoldAllocation is Script {
             MAX_STALENESS,
             e.deployer
         );
-        adapter.setPool(d.mockPool);
         d.adapter = address(adapter);
         console.log("GoldAllocationAdapter deployed:", d.adapter);
     }

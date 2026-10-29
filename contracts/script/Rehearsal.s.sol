@@ -44,7 +44,9 @@ contract TestnetRegistryShortTimelock is ShariahAdapterRegistry {
 
     constructor(address initialOwner, address initialBoardMember)
         ShariahAdapterRegistry(initialOwner, initialBoardMember)
-    {}
+    {
+        require(block.chainid != 5042, "mainnet forbidden");
+    }
 
     /// @notice Propose screening with the 2-minute testnet timelock.
     /// After 2 minutes call executeScreeningTestnet(adapter).
@@ -53,6 +55,7 @@ contract TestnetRegistryShortTimelock is ShariahAdapterRegistry {
         bytes32 pronouncementHash,
         uint256 expiresAt
     ) external {
+        require(block.chainid != 5042, "mainnet forbidden");
         require(boardRole[msg.sender], "TestnetReg: not board");
         require(pronouncementHash != bytes32(0), "TestnetReg: zero hash");
         require(expiresAt > block.timestamp, "TestnetReg: expiresAt in past");
@@ -64,6 +67,7 @@ contract TestnetRegistryShortTimelock is ShariahAdapterRegistry {
     /// @notice Execute screening after the 2-minute testnet timelock has elapsed.
     /// Writes directly to the parent's `screenings` mapping so the vault sees it.
     function executeScreeningTestnet(address adapter) external {
+        require(block.chainid != 5042, "mainnet forbidden");
         require(boardRole[msg.sender], "TestnetReg: not board");
         uint256 executeAfter = testnetExecuteAfter[adapter];
         require(executeAfter != 0, "TestnetReg: not proposed");
@@ -273,6 +277,8 @@ contract Rehearsal is Script {
         );
         _addrs.escrow = address(escrow);
         vault.setPurificationEscrow(_addrs.escrow);
+        // Escrow books the manager's Musharakah share in the vault's treasury.
+        TreasuryModule(_addrs.treasury).setProfitRecorder(_addrs.escrow);
         // Wire escrow back into CharityModule so distributeCharity() accepts the
         // escrow as caller (the waterfall path is: vault → escrow → charityModule).
         CharityModule(_addrs.charityModule).setEscrow(_addrs.escrow);
@@ -292,13 +298,11 @@ contract Rehearsal is Script {
             USDC, _addrs.mockXaut, _addrs.xautPool, 3000,
             _addrs.xauOracle, _addrs.vault, 30 days, deployer
         );
-        goldAlloc.setPool(_addrs.xautPool);
         _addrs.goldAllocAdap = address(goldAlloc);
 
         ShariahVaultV2 vault = ShariahVaultV2(_addrs.vault);
         vault.setGoldSpreadAdapter(_addrs.goldSpreadAdap);
         vault.setGoldAllocationAdapter(_addrs.goldAllocAdap);
-        vault.setGoldCrossChainBlocked(true);
 
         console.log("GoldExchangeAdapter   :", _addrs.goldSpreadAdap);
         console.log("GoldAllocationAdapter :", _addrs.goldAllocAdap);
@@ -405,34 +409,54 @@ contract Rehearsal is Script {
 
     // ── Step 5: Cross-chain round trip ────────────────────────────────────────
 
-    function step5_deployCrossChain() public returns (uint64 nonce) {
+    // Task M: this step requires a Task-M vault; return its local position ID, not a CCTP nonce.
+    function step5_deployCrossChain() public returns (uint64 positionId) {
         _loadAddrs();
         uint256 deployerPk = vm.envUint("DEPLOYER_PK");
         address deployer   = vm.addr(deployerPk);
         bytes32 recipient  = bytes32(uint256(uint160(deployer))); // return to deployer
 
+        // Live board: run step5_proposeRemoteRecipient first, let 30 days elapse,
+        // then run step5_confirmRemoteRecipient. No live-chain time warp is possible.
+        require(ShariahVault(_addrs.vault).approvedRemoteRecipient(ETH_SEP_DOMAIN, recipient), "remote approval required");
         console.log("=== STEP 5: Cross-chain deploy to ETH-SEPOLIA ===");
         vm.startBroadcast(deployerPk);
         ShariahVault(_addrs.vault).deployCrossChain(ETH_SEP_DOMAIN, recipient, CCTP_AMOUNT);
-        // nonce is emitted in CapitalDeployedCrossChain event; read from tx receipt
-        nonce = 0; // placeholder — read actual nonce from event
-        console.log("Cross-chain nonce:", nonce);
+        positionId = ShariahVault(_addrs.vault).crossChainPositionCounter();
+        console.log("Local position ID:", positionId);
         console.log("CCTP amount:      ", CCTP_AMOUNT);
-        console.log("Wait for CCTP attestation, then call step5b_settle(nonce, message, attestation)");
+        console.log("Wait for CCTP attestation, then call step5b_settle(positionId, message, attestation)");
+        vm.stopBroadcast();
+    }
+
+    /// @notice Board proposal helper; on a live board the full 30 days must elapse first.
+    function step5_proposeRemoteRecipient(bytes32 recipient) public {
+        _loadAddrs();
+        vm.startBroadcast(vm.envUint("BOARD_PK"));
+        ShariahVault(_addrs.vault).proposeRemoteRecipient(ETH_SEP_DOMAIN, recipient, true);
+        vm.stopBroadcast();
+    }
+
+    function step5_confirmRemoteRecipient(bytes32 recipient) public {
+        _loadAddrs();
+        vm.startBroadcast(vm.envUint("BOARD_PK"));
+        ShariahVault(_addrs.vault).confirmRemoteRecipient(ETH_SEP_DOMAIN, recipient);
         vm.stopBroadcast();
     }
 
     function step5b_settle(
-        uint64 nonce,
+        uint64 positionId,
         bytes calldata message,
         bytes calldata attestation
     ) public {
         _loadAddrs();
         uint256 deployerPk = vm.envUint("DEPLOYER_PK");
         console.log("=== STEP 5b: Settle cross-chain return ===");
-        console.log("Nonce:", nonce);
+        console.log("Local position ID:", positionId);
+        // Task M: supply native Circle V2 bytes (148-byte header plus >=228-byte body).
+        // The owner must first register the remote TokenMessenger for the return source domain.
         vm.startBroadcast(deployerPk);
-        ShariahVault(_addrs.vault).settleCrossChainWithMessage(nonce, message, attestation);
+        ShariahVault(_addrs.vault).settleCrossChainWithMessage(positionId, message, attestation);
         console.log("settleCrossChainWithMessage succeeded. NAV updated, feeExecuted absorbed.");
         vm.stopBroadcast();
     }
@@ -456,7 +480,7 @@ contract Rehearsal is Script {
         ShariahVaultV2 vault = ShariahVaultV2(_addrs.vault);
         uint256 maxDep = vault.maxDeposit(address(0));
         console.log("maxDeposit(0):", maxDep);
-        if (spread.currentValue() > vault.dustThreshold()) {
+        if (spread.currentValue() > vault.effectiveDustThreshold()) {
             console.log("Gold position > dustThreshold: deposits BLOCKED when stale. OK.");
         } else {
             console.log("Gold position <= dustThreshold: deposits NOT blocked (dust rule). OK.");
@@ -471,12 +495,9 @@ contract Rehearsal is Script {
         uint256 deployerPk = vm.envUint("DEPLOYER_PK");
         console.log("=== STEP 7: Claim profit - waterfall + 3-day unlock ===");
         vm.startBroadcast(deployerPk);
-        // Approve escrow to pull grossProfit from vault
-        IERC20(USDC).approve(_addrs.escrow, PROFIT_CLAIM);
-        // Fund vault with synthetic profit
-        // In real scenario, profit comes from adapter recall returning more than deployed.
-        // For rehearsal: mint PROFIT_CLAIM to vault then call claimMusharakahProfit.
-        // NOTE: vault.claimMusharakahProfit is callable by manager/owner.
+        // Transfer synthetic profit rather than depositing principal; the checkpoint requires realized profit.
+        require(IERC20(USDC).transfer(_addrs.vault, PROFIT_CLAIM), "profit funding failed");
+        require(ShariahVault(_addrs.vault).realizedProfit() >= PROFIT_CLAIM, "insufficient realized profit");
         ShariahVault(_addrs.vault).claimMusharakahProfit(PROFIT_CLAIM);
         console.log("claimMusharakahProfit(", PROFIT_CLAIM, ")");
         console.log("Waterfall executed. Check WaterfallExecuted + MusharakahProfitClaimed events.");

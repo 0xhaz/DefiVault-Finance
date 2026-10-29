@@ -28,7 +28,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *   a. For each adapter: proposeScreening → wait 30 days → executeScreening
  *   b. setPermittedAsset for each permitted asset
  *   c. setGoldSpreadAdapter / setGoldAllocationAdapter if applicable
- *   d. setGoldCrossChainBlocked(true) if gold adapters are live
  */
 contract DeployShariahV2 is Script {
 
@@ -147,6 +146,9 @@ contract DeployShariahV2 is Script {
         // 7. Wire escrow into vault
         vault.setPurificationEscrow(addrs.purificationEscrow);
         console.log("PurificationEscrow wired into vault.");
+
+        // 8. Let the escrow book the manager's Musharakah share in the treasury (treasury owner = deployer).
+        TreasuryModule(addrs.shariahTreasury).setProfitRecorder(addrs.purificationEscrow);
 
         return addrs;
     }

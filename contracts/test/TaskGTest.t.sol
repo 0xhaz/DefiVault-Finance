@@ -126,9 +126,7 @@ contract TaskGTest is Test {
     /// @dev Deploy `amount` USDC from vault to adapter (accounts + swaps).
     function _deployCapital(uint256 amount) internal {
         vm.prank(owner);
-        vault.deployCapital(address(adapter), amount, "");
-        vm.prank(address(vault));
-        adapter.deploy(amount);
+        vault.deployCapitalAndExecute(address(adapter), amount, "");
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -137,7 +135,7 @@ contract TaskGTest is Test {
 
     // ── G1-1 ─────────────────────────────────────────────────────────────────
 
-    /// @notice recall() MUST NOT revert when the oracle is stale.
+    // N-09 keeps stale exits open only when proceeds meet the discounted cached-price floor.
     function test_G1_recall_succeeds_when_oracle_stale() public {
         // Deploy 1000e6 USDC
         _deployCapital(1_000e6);
@@ -146,49 +144,60 @@ contract TaskGTest is Test {
         // Make oracle stale
         oracle.setUpdatedAt(0);
 
-        // recall MUST NOT revert — even with stale oracle
+        pool.setPrice(ORACLE_USDC * 90 / 100); // A 10% decline still clears the outage floor.
+        uint256 floor = adapter.xautHeld() * adapter.lastGoodPrice() / 1e6;
+        floor = floor * (10_000 - adapter.staleHaircutBps()) / 10_000;
+        floor = floor * (10_000 - adapter.emergencySlippageBps()) / 10_000;
         vm.prank(address(vault));
         uint256 usdcReturned = adapter.recall(1_000e6);
 
-        assertGt(usdcReturned, 0, "USDC returned must be > 0");
+        assertGe(usdcReturned, floor, "stale recall must meet cached-price floor");
         assertEq(adapter.xautHeld(), 0, "xautHeld must be 0 after recall");
     }
 
     // ── G1-2 ─────────────────────────────────────────────────────────────────
 
-    /// @notice When oracle is stale, recall uses totalDeployed as floor:
-    ///         usdcReturned >= totalDeployed * (10_000 - maxSlippageBps) / 10_000.
-    function test_G1_recall_uses_totalDeployed_floor_when_stale() public {
-        uint256 deployAmount = 1_000e6;
-        _deployCapital(deployAmount);
-
-        uint256 totalDeployedBefore = adapter.totalDeployed();
-        uint256 maxSlippageBps = adapter.maxSlippageBps();
-
-        // Make oracle stale
+    // N-09 replaces cost basis with cached market value and two explicit outage discounts.
+    function test_G1_recall_uses_lastGoodPrice_floor_when_stale() public {
+        _deployCapital(1_000e6);
+        oracle.setPrice(264_000_000_000);
+        adapter.pokePrice(); // A newer lower cached price must override entry cost basis.
+        uint256 gross = adapter.xautHeld() * adapter.lastGoodPrice() / 1e6;
+        uint256 expectedFloor = gross * (10_000 - adapter.staleHaircutBps()) / 10_000;
+        expectedFloor = expectedFloor * (10_000 - adapter.emergencySlippageBps()) / 10_000;
         oracle.setUpdatedAt(0);
-
+        pool.setPrice(ORACLE_USDC * 72 / 100);
         vm.prank(address(vault));
-        uint256 usdcReturned = adapter.recall(deployAmount);
+        uint256 returned = adapter.recall(1_000e6);
+        assertGe(returned, expectedFloor);
+        assertLt(returned, 995e6, "ordinary decline must not be blocked by principal floor");
+    }
 
-        uint256 expectedFloor = (totalDeployedBefore * (10_000 - maxSlippageBps)) / 10_000;
-        assertGe(usdcReturned, expectedFloor, "usdcReturned must be >= totalDeployed floor");
+    function test_G1_recall_below_stale_floor_reverts() public {
+        _deployCapital(1_000e6);
+        uint256 floor = adapter.xautHeld() * adapter.lastGoodPrice() / 1e6;
+        floor = floor * (10_000 - adapter.staleHaircutBps()) / 10_000;
+        floor = floor * (10_000 - adapter.emergencySlippageBps()) / 10_000;
+        oracle.setUpdatedAt(0);
+        vm.mockCall(address(pool), abi.encodeWithSelector(bytes4(keccak256(
+            "exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))"
+        ))), abi.encode(floor - 1));
+        vm.prank(address(vault));
+        vm.expectRevert(abi.encodeWithSelector(GoldAllocationAdapter.SlippageExceeded.selector, floor - 1, floor));
+        adapter.recall(1_000e6);
+        assertGt(adapter.xautHeld(), 0);
     }
 
     // ── G1-3 ─────────────────────────────────────────────────────────────────
 
     /// @notice deploy() MUST revert OracleNotSane() when the oracle is stale.
     function test_G1_deploy_reverts_when_oracle_not_sane() public {
-        // Push USDC accounting to vault side (no actual swap yet)
-        vm.prank(owner);
-        vault.deployCapital(address(adapter), 1_000e6, "");
-
-        // Make oracle stale
         oracle.setUpdatedAt(0);
-
-        vm.prank(address(vault));
+        vm.prank(owner);
         vm.expectRevert(GoldAllocationAdapter.OracleNotSane.selector);
-        adapter.deploy(1_000e6);
+        vault.deployCapitalAndExecute(address(adapter), 1_000e6, "");
+        assertEq(vault.totalDeployed(), 0);
+        assertEq(usdc.balanceOf(address(adapter)), 0);
     }
 
     // ── G1-4 ─────────────────────────────────────────────────────────────────
@@ -222,53 +231,54 @@ contract TaskGTest is Test {
 
     // ── G1-5 ─────────────────────────────────────────────────────────────────
 
-    /// @notice When pool has 5% deviation from oracle, recall MUST NOT revert —
-    ///         it should use the conservative (lower) price path.
+    // N-09 prevents a manipulated low spot price from lowering the fresh-oracle exit floor.
+    function test_G1_recall_reverts_when_pool_deviation_low() public {
+        _deployCapital(1_000e6);
+        uint256 held = adapter.xautHeld();
+        pool.setPrice(ORACLE_USDC * 95 / 100);
+        vm.prank(address(vault));
+        // the mock pool rejects output below the oracle-derived minimum (custom error carries args)
+        vm.expectRevert();
+        adapter.recall(1_000e6);
+        assertEq(adapter.xautHeld(), held);
+    }
+
+    // N-09 still permits favorable pool deviation when output clears the unchanged oracle floor.
     function test_G1_recall_succeeds_when_pool_deviation_high() public {
         _deployCapital(1_000e6);
-        assertGt(adapter.xautHeld(), 0, "must hold XAUT");
-
-        // Set pool price 5% above oracle — this causes deviation > maxDeviationBps (1%)
-        uint256 deviatedPrice = ORACLE_USDC * 105 / 100; // +5%
-        pool.setPrice(deviatedPrice);
-
-        // recall MUST NOT revert; it should use conservative price path
+        pool.setPrice(ORACLE_USDC * 105 / 100);
         vm.prank(address(vault));
-        uint256 usdcReturned = adapter.recall(1_000e6);
-
-        assertGt(usdcReturned, 0, "USDC returned must be > 0 even with high pool deviation");
-        assertEq(adapter.xautHeld(), 0, "xautHeld must be 0 after recall");
+        assertGt(adapter.recall(1_000e6), 0);
+        assertEq(adapter.xautHeld(), 0);
     }
 
     // ── G1-6 ─────────────────────────────────────────────────────────────────
 
-    /// @notice Fuzz: recall() must NEVER revert when oracle becomes stale.
-    /// @dev    Lower bound 3_300e6 (≈1 oz gold) ensures the deploy always acquires at least
-    ///         one XAUT unit so recall actually executes a swap (amount too small → 0 xaut → recall returns 0).
-    function testFuzz_G1_recall_never_reverts_on_stale(
+    // N-09 replaces unconditional stale-exit success with success exactly at the discounted floor.
+    function testFuzz_G1_recall_enforces_stale_floor(
         uint128 amount,
-        uint32 stalenessSeed
+        uint32 stalenessSeed,
+        bool belowFloor
     ) public {
-        // Bound amount: min 3_300e6 (1 oz gold in USDC) so the deploy always gets >0 XAUT.
-        // Max 1_000_000e6 (1M USDC) — well within pool liquidity (50M funded in setUp).
         amount = uint128(bound(amount, 3_300e6, 1_000_000e6));
-
         _deployCapital(amount);
-
-        // Sanity: must have acquired XAUT
-        assertGt(adapter.xautHeld(), 0, "xautHeld must be >0 after deploy");
-
-        // Make oracle stale by warping forward past staleness window
-        // stalenessSeed adds extra time beyond the staleness threshold
-        uint256 extraTime = bound(stalenessSeed, 1, 365 days);
-        vm.warp(block.timestamp + MAX_STALENESS + extraTime);
-
-        // recall MUST NOT revert regardless of staleness
+        uint256 floor = adapter.xautHeld() * adapter.lastGoodPrice() / 1e6;
+        floor = floor * (10_000 - adapter.staleHaircutBps()) / 10_000;
+        floor = floor * (10_000 - adapter.emergencySlippageBps()) / 10_000;
+        vm.warp(block.timestamp + MAX_STALENESS + bound(stalenessSeed, 1, 365 days));
+        uint256 payout = belowFloor ? floor - 1 : floor;
+        vm.mockCall(address(pool), abi.encodeWithSelector(bytes4(keccak256(
+            "exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))"
+        ))), abi.encode(payout));
         vm.prank(address(vault));
-        uint256 usdcReturned = adapter.recall(amount);
-
-        // Basic sanity: some USDC must come back
-        assertGt(usdcReturned, 0, "recall must return USDC even with stale oracle");
+        if (belowFloor) {
+            vm.expectRevert(abi.encodeWithSelector(GoldAllocationAdapter.SlippageExceeded.selector, payout, floor));
+            adapter.recall(amount);
+            assertGt(adapter.xautHeld(), 0);
+        } else {
+            assertEq(adapter.recall(amount), floor);
+            assertEq(adapter.xautHeld(), 0);
+        }
     }
 
     // ═════════════════════════════════════════════════════════════════════════

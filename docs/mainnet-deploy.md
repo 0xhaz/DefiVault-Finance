@@ -20,9 +20,9 @@ CCTP domain: `26`
 - [ ] Deployer wallet funded with USDC on Arc mainnet (for gas)
 - [ ] Private key held in an encrypted keystore (`cast wallet import`) — never in plaintext
 - [ ] `.env` added to `.gitignore` — verify with `git check-ignore -v .env`
-- [ ] `XAUT` mainnet address confirmed from Tether's official docs before wiring S6-H
-- [ ] Chainlink XAU/USD mainnet oracle address confirmed before deploying `GoldAllocationAdapter`
-- [ ] Uniswap V3 pool addresses (PAXG/USDC, XAUT/USDC) confirmed on Arc mainnet
+- [ ] `XAUT` Ethereum mainnet address confirmed: `0x68749665FF8D2d112Fa859AA293F07A622782F38` (6 decimals, Tether Gold). Confirm XAUT is bridged/available on Arc mainnet before wiring S6-H.
+- [ ] Chainlink XAU/USD Ethereum mainnet oracle: `0x214eD9Da11D2fbe465a6fc601a91E62EbEc1a0D6` (8 decimals, 0.3% deviation, ~24h heartbeat). Confirm equivalent feed on Arc mainnet.
+- [ ] Uniswap V3 XAUT/USDC Ethereum mainnet pool: `0x841EA2475A989EeCCd27fE39967c19CB097357A3` (0.3% fee, ~$300K TVL — thin). Confirm equivalent pool on Arc mainnet.
 - [ ] `BOARD_MULTISIG` address double-checked — board role changes require 30-day timelock after deploy
 
 ---
@@ -59,11 +59,15 @@ AGENT_WALLET=0x<agent-server-signing-address>
 TOKEN_MESSENGER_V2=0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d
 MSG_TRANSMITTER_V2=0x81D40F21F12A8F0E3252Bccb954D722d4c464B64
 
-# Gold adapter inputs — confirm from official sources before filling
-XAUT_ADDRESS=0x<xaut-on-arc-mainnet>
-XAU_USD_ORACLE=0x<chainlink-xau-usd-on-arc-mainnet>
+# Gold adapter inputs (Ethereum mainnet verified addresses — replace with Arc mainnet equivalents when available)
+# XAUT: Tether Gold ERC-20, 6 decimals, verified via decimals() call 2026-10-28
+XAUT_ADDRESS=0x68749665FF8D2d112Fa859AA293F07A622782F38
+# XAU/USD: Chainlink EACAggregatorProxy, 8 decimals, 0.3% deviation threshold, ~24h heartbeat
+XAU_USD_ORACLE=0x214eD9Da11D2fbe465a6fc601a91E62EbEc1a0D6
+# PAXG/USDC pool on Arc mainnet: not yet confirmed — leave blank until available
 PAXG_USDC_POOL=0x<uniswap-v3-paxg-usdc-pool-on-arc-mainnet>
-XAUT_USDC_POOL=0x<uniswap-v3-xaut-usdc-pool-on-arc-mainnet>
+# XAUT/USDC: Uniswap V3 0.3% fee tier on Ethereum mainnet, ~$300K TVL — thin liquidity
+XAUT_USDC_POOL=0x841EA2475A989EeCCd27fE39967c19CB097357A3
 
 # RPC (also in foundry.toml as `arc`)
 ARC_MAINNET_RPC=https://rpc.mainnet.arc.io
