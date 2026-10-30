@@ -130,9 +130,8 @@ contract Rehearsal is Script {
     uint32  constant ARC_DOMAIN      = 26;
     uint32  constant ETH_SEP_DOMAIN  = 0;  // Ethereum Sepolia CCTP domain
     address constant CCTP_MESSENGER  = 0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA;
-    // NOTE: Arc Testnet MessageTransmitter address — verify from Circle docs before use.
-    // Placeholder; replace with actual address from Circle developer docs.
-    address constant MSG_TRANSMITTER = address(0); // TODO: fill from Circle Arc Testnet docs
+    // Arc Testnet MessageTransmitterV2 (Circle CCTP contract addresses, domain 26).
+    address constant MSG_TRANSMITTER = 0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275;
 
     // ── Rehearsal config ─────────────────────────────────────────────────────
     uint256 constant DEPOSIT_AMOUNT  = 100e6;  // 100 USDC per depositor
@@ -164,21 +163,21 @@ contract Rehearsal is Script {
     // Add REHEARSAL_* vars to .env after step1_deploy() so steps 2-8 find the contracts.
 
     function _loadAddrs() internal {
-        // Defaults are the step-1 deploy from 2026-10-28 (Arc Testnet, second run).
-        _addrs.registry      = vm.envOr("REHEARSAL_REGISTRY",       address(0x23836611FDF05fAc07a12416e9c8C250F9cdF671));
-        _addrs.mockPaxg      = vm.envOr("REHEARSAL_MOCK_PAXG",      address(0x90476D68572E615a1E1447928c8c5d8AABaC6B51));
-        _addrs.mockXaut      = vm.envOr("REHEARSAL_MOCK_XAUT",      address(0xC57b6125d2a15C09E3624eb78df06e407F6A9912));
-        _addrs.xauOracle     = vm.envOr("REHEARSAL_XAU_ORACLE",     address(0x214a54F86B84589068Cf459749344b1F637A60f7));
-        _addrs.xautPool      = vm.envOr("REHEARSAL_XAUT_POOL",      address(0x6A46a3A9608437e832510EfD16a21898dA02dc66));
-        _addrs.zakatModule   = vm.envOr("REHEARSAL_ZAKAT_MODULE",   address(0xB3fC6A662196EE2c424B6bdfBf9343d96d29569c));
-        _addrs.treasury      = vm.envOr("REHEARSAL_TREASURY",       address(0xF5B550B87476a4359f1307AeFC425cCC6E2530f5));
-        _addrs.vault         = vm.envOr("REHEARSAL_VAULT",          address(0xba094D5B01F4fd245EA345Be6B8ac833488c81B0));
-        _addrs.charityModule = vm.envOr("REHEARSAL_CHARITY_MODULE", address(0x1D05a0010C78B984b0De2735A6E868E9c9f5d99F));
-        _addrs.escrow        = vm.envOr("REHEARSAL_ESCROW",         address(0xcC58b11c3Cd251a44989fEf1f05BdcB0e16375ff));
-        _addrs.goldSpreadAdap= vm.envOr("REHEARSAL_GOLD_SPREAD",    address(0x55907Fc4E60A5353D9afD17D56F229192Fd9c3ED));
-        _addrs.goldAllocAdap = vm.envOr("REHEARSAL_GOLD_ALLOC",     address(0x04FdFd46F0c93569F3b592C106dDc292fc2f975C));
-        _addrs.shariahAgg    = vm.envOr("REHEARSAL_SHARIAH_AGG",    address(0x13340E36E59F8b504faD9B1b731D51fde1697C8A));
-        _addrs.executor      = vm.envOr("REHEARSAL_EXECUTOR",       address(0xA800540A029120C475c15345d5D65FB9C898d85c));
+        // Defaults are the step-1 deploy from 2026-10-30 (Arc Testnet, size-refactor redeploy).
+        _addrs.registry      = vm.envOr("REHEARSAL_REGISTRY",       address(0x2D4AEFFA868aEf498fBa9B214ffa1F60a2A5986B));
+        _addrs.mockPaxg      = vm.envOr("REHEARSAL_MOCK_PAXG",      address(0x4e22e749cada3Da6Fd9A08cdbf2f89876a45385e));
+        _addrs.mockXaut      = vm.envOr("REHEARSAL_MOCK_XAUT",      address(0xFFC25A26B0123fD7f39C87f19bBdb2a49ECe294a));
+        _addrs.xauOracle     = vm.envOr("REHEARSAL_XAU_ORACLE",     address(0x6d2ec4355c9c08aCcda6732b09f5d4776CBEEC52));
+        _addrs.xautPool      = vm.envOr("REHEARSAL_XAUT_POOL",      address(0x0179b906669e754De5996E4557C781b56bbBce19));
+        _addrs.zakatModule   = vm.envOr("REHEARSAL_ZAKAT_MODULE",   address(0x6E2B7B9c065Bb8669C75bcd95b7A31aB2559A1Ff));
+        _addrs.treasury      = vm.envOr("REHEARSAL_TREASURY",       address(0xF590B3C9e8EfD25e1e13DcFd718AA6ADF1B9a957));
+        _addrs.vault         = vm.envOr("REHEARSAL_VAULT",          address(0x2046b3e560d578f8907ca4ec3812Be1CEd5f60fB));
+        _addrs.charityModule = vm.envOr("REHEARSAL_CHARITY_MODULE", address(0x29BdD154b3e33Fc7913cbb946BAC95D017A52754));
+        _addrs.escrow        = vm.envOr("REHEARSAL_ESCROW",         address(0x1511c7f141aC1C13305af3aCBDE1ead68dEa8207));
+        _addrs.goldSpreadAdap= vm.envOr("REHEARSAL_GOLD_SPREAD",    address(0x82Dc6699957913a74Df58237c4fC8416CB8d189c));
+        _addrs.goldAllocAdap = vm.envOr("REHEARSAL_GOLD_ALLOC",     address(0xD8f359a80942F5E3897e1cbf23273Cf9bC13a3E2));
+        _addrs.shariahAgg    = vm.envOr("REHEARSAL_SHARIAH_AGG",    address(0x1eb5Fc5832f8dD5943C2bF4F3c0Cf615c5Adb19a));
+        _addrs.executor      = vm.envOr("REHEARSAL_EXECUTOR",       address(0x6FBdbf49880650f3FAb02f0C4C133bD0881266C8));
     }
 
     // ── Step 1: Deploy full stack ─────────────────────────────────────────────
@@ -259,6 +258,8 @@ contract Rehearsal is Script {
         );
         _addrs.vault = address(vault);
         console.log("ShariahVaultV2:", _addrs.vault);
+        // The vault books the Wakala fee, so it must be the treasury's fee source.
+        TreasuryModule(_addrs.treasury).setFeeSource(_addrs.vault);
 
         vault.setTokenMessenger(CCTP_MESSENGER);
         if (MSG_TRANSMITTER != address(0)) {
@@ -547,7 +548,7 @@ contract Rehearsal is Script {
     function _logAddresses() internal view {
         console.log("\n=== Rehearsal Deployment Summary ===");
         console.log("TestnetRegistryShortTimelock:", _addrs.registry);
-        console.log("ShariahTreasury (redeploy needed for feeSource):", _addrs.treasury);
+        console.log("ShariahTreasury (feeSource = vault):", _addrs.treasury);
         console.log("ZakatModule (deprecated):", _addrs.zakatModule);
         console.log("ShariahVaultV2 (Conservative):", _addrs.vault);
         console.log("CharityModule:", _addrs.charityModule);

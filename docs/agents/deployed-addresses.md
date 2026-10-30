@@ -14,7 +14,35 @@ Tx: `0x6284050ab2f006a6fd23e4aae529bdfd8c749dbeaa32e310463b6bc9105a7338` Block: 
 
 ---
 
-## Deploy batch — 2026-10-28 run 2 (ACTIVE)
+## Deploy batch — 2026-10-30 run 3 (ACTIVE)
+
+Script: `contracts/script/Rehearsal.s.sol` → `step1_deploy()` (broadcast: `broadcast/Rehearsal.s.sol/5042002/step1_deploy-latest.json`)  
+Deployer: `0x3D23214d59CA3582628FffFE44D0Df1CC73D98f9`  
+Includes: no claim-time profit lock (N-11/N-24), vault split into external libraries to fit the 24,576-byte limit (runtime 23,677 B), treasury `feeSource` = vault.  
+Four linked libraries deployed first: `CctpSettlementLogic`, `ShariahAccountingLogic`, `ShariahGovernanceLogic`, `ShariahRegistryLogic` (addresses in the broadcast file).
+
+| Contract | Address | Notes |
+|---|---|---|
+| TestnetRegistryShortTimelock | `0x2D4AEFFA868aEf498fBa9B214ffa1F60a2A5986B` | 2-minute timelock, TESTNET ONLY |
+| ZakatModule | `0x6E2B7B9c065Bb8669C75bcd95b7A31aB2559A1Ff` | v1 compat shim |
+| TreasuryModule | `0xF590B3C9e8EfD25e1e13DcFd718AA6ADF1B9a957` | feeSource = vault |
+| ShariahVaultV2 (Conservative) | `0x2046b3e560d578f8907ca4ec3812Be1CEd5f60fB` | Primary vault |
+| CharityModule | `0x29BdD154b3e33Fc7913cbb946BAC95D017A52754` | escrow wired |
+| PurificationEscrow | `0x1511c7f141aC1C13305af3aCBDE1ead68dEa8207` | |
+| GoldExchangeAdapter (S2-H) | `0x82Dc6699957913a74Df58237c4fC8416CB8d189c` | |
+| GoldAllocationAdapter (S6-H) | `0xD8f359a80942F5E3897e1cbf23273Cf9bC13a3E2` | |
+| ShariahScoreAggregator | `0x1eb5Fc5832f8dD5943C2bF4F3c0Cf615c5Adb19a` | |
+| RiskTieredExecutor | `0x6FBdbf49880650f3FAb02f0C4C133bD0881266C8` | vault manager |
+| MockAllocatedGold (PAXG) | `0x4e22e749cada3Da6Fd9A08cdbf2f89876a45385e` | Testnet mock only |
+| MockXAUT | `0xFFC25A26B0123fD7f39C87f19bBdb2a49ECe294a` | Testnet mock only |
+| MockXauUsdAggregator | `0x6d2ec4355c9c08aCcda6732b09f5d4776CBEEC52` | Testnet mock only |
+| MockUniswapV3PoolXAUT | `0x0179b906669e754De5996E4557C781b56bbBce19` | Testnet mock only |
+
+The registry and gold adapters are fresh, so adapter screenings from run 2 must be repeated.
+
+---
+
+## Deploy batch — 2026-10-28 run 2 (SUPERSEDED by run 3)
 
 Script: `contracts/script/Rehearsal.s.sol` → `step1_deploy()`  
 Deployer: `0x3D23214d59CA3582628FffFE44D0Df1CC73D98f9`  

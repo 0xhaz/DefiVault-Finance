@@ -138,10 +138,11 @@ Fixed in the same round: zero-value deposits or redemptions can no longer erase 
 
 | ID | Severity | Status | Finding |
 |---|---|---|---|
-| N-30 | High | Open (deploy blocker) | `ShariahVaultV2` runtime is 27,468 bytes, 2,892 over the 24,576-byte limit. Arc Testnet enforces it (a 30,000-byte test deploy reverts with `CreateContractSizeLimit`), so the current code cannot be deployed. Lowering optimizer runs to 1 only reaches 26,890. The deployed Run-2 vault predates the Task M/N growth. Needs a size refactor (move cross-chain/CCTP settlement or other heavy logic into a library or companion contract). |
+| N-30 | High | **Fixed** | `ShariahVaultV2` runtime was 27,468 bytes, over the 24,576-byte limit Arc Testnet enforces. CCTP settlement, governance timelocks, registry timelock and gold accounting moved into four external linked libraries; runtime is now 23,677 bytes (899 B margin). ABI and behaviour unchanged, 987 Foundry tests pass. Redeployed in run 3. Margin is thin: further vault growth needs another split. |
+| N-31 | High | **Fixed** | Deploy scripts left the treasury `feeSource` as the deployer, so Wakala accrual was skipped. `Rehearsal.s.sol` and `DeployShariahV2.s.sol` now call `setFeeSource(vault)`. `DeployShariahV2.s.sol` also now wires `charity.setEscrow(escrow)`, without which profit claims revert. |
 | N-29 | Medium | Open | Exit before claim. Unclaimed yield sits in NAV at full value, including the part that will go to purification, charity and the vault fee. A holder who redeems before a claim leaves the remaining holders to bear that cut. Fixing it needs the non-depositor portion accrued out of the share price as profit is recognised. Not caused by, and not changed by, the removal of the claim-time lock. |
 
-N-11, N-24 and N-25 are closed for Shariah vaults. The Shariah vault now has no claim-time lock; the 983-test Foundry suite passes with the lock-dependent tests rewritten. Redeploy before relying on this: deployed vaults run the old bytecode.
+N-11, N-24 and N-25 are closed for Shariah vaults. The Shariah vault now has no claim-time lock; the 987-test Foundry suite passes with the lock-dependent tests rewritten. The fixes are live in Arc Testnet run 3 (see `docs/agents/deployed-addresses.md`); the run 2 vaults run the old bytecode.
 
 ---
 

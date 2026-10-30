@@ -98,6 +98,8 @@ Run with: `forge test --match-path 'contracts/test/invariant/*'`
 
 **Test status**: 983 Foundry tests including 8 invariants (256 runs x depth 50) after F-01..F-08, Task N and Task M. Check the latest `forge test` run for the current count. 48/48 bun screening tests pass (last run before the fixes). Open findings (N-05, N-18, N-26 to N-29, plus the remainder of N-09) are tracked in `docs/security-review.md`; N-01, N-02, N-03 (code), N-04, N-06 (Shariah), N-08, N-10, N-11 (Shariah, claim-time lock removed), N-12, N-15, N-16, N-17, N-19, N-24, N-25 are fixed.
 
+**Active deployment (2026-10-30, run 3)**: ShariahVaultV2 at `0x2046b3e560d578f8907ca4ec3812Be1CEd5f60fB` with no claim-time profit lock and the vault split into four linked libraries (runtime 23,677 B, limit 24,576). Full address list in `docs/agents/deployed-addresses.md`. Adapters must be re-screened on the fresh registry. The run 2 history below is superseded.
+
 **Rehearsal COMPLETE** (2026-10-28): Steps 1–4, 6, 8 executed on Arc Testnet. ShariahVaultV2 at `0xba094D5B01F4fd245EA345Be6B8ac833488c81B0`. Full run log in `docs/rehearsal.md`. Steps 5 and 7 skipped on live testnet but verified via fork tests (4/4 PASS — see `contracts/test/ForkRehearsalSteps5And7.t.sol`). CharityModule bug fixed: `distributeCharity` guard now accepts PurificationEscrow as caller; `setEscrow(address)` added. Tasks A–L complete. Task N (N1 per-strategy gold cross-chain guard, N2 dust-threshold cap + board timelock, N3 SHARIAH_REVIEW cleanup) complete; SR-023 is now SUPERSEDED by the N1 engineering fix.
 
 **Board review items**: SR-001 through SR-027. None approved; SR-015, SR-017 and SR-023 are SUPERSEDED. See `docs/agents/SHARIAH_REVIEW.md`.

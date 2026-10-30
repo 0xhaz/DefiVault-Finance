@@ -297,3 +297,20 @@ Result: **4/4 PASS**
 
 *Rehearsal script: `contracts/script/Rehearsal.s.sol`*  
 *Deployed addresses: `docs/agents/deployed-addresses.md`*
+
+---
+
+## Run 3 (2026-10-30) — redeployed stack, no claim-time lock
+
+Stack: see `docs/agents/deployed-addresses.md` (run 3). Executed on Arc Testnet with the fixed vault.
+
+| Step | Result |
+|---|---|
+| 1 Deploy | Libraries and full stack deployed; vault runtime 23,677 B; treasury `feeSource` = vault; charity escrow wired |
+| 2 Deposit | One 20 USDC deposit (the three configured test wallets are the same address, funded with about 28.6 USDC, so only one deposit fit) |
+| 3 Screen | Both gold adapters proposed, executed after the 2-minute testnet timelock, and marked screened |
+| 7 Claim | 5 USDC synthetic profit claimed. NAV 25.0 to 24.3875 USDC (cut for purification, charity and fee only), `lockedProfit` = 0, `hwmDeficit` = 0, treasury pending fees 0.4875 USDC. Realized profit back to 0, so nothing is claimable twice |
+| 8 Redeem | Full redeem returned 24.384719 USDC for the 20 USDC deposit plus its depositor share, immediately after the claim. Supply 0 |
+| Wiring | `setMessageTransmitter` set to Arc Testnet MessageTransmitterV2 `0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275`; vault `localDomain` = 26 |
+
+Not run live: step 5 (cross-chain round trip needs a 30-day remote-recipient approval and a real attestation) and step 6 (stale oracle needs more than a day of waiting).

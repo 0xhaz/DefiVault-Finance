@@ -184,6 +184,37 @@ contract PurificationEscrow is Ownable2Step {
         return _executeWaterfall(grossProfit, elapsed, principal, hwmDeficit);
     }
 
+    /// @notice Preview the exact purification, charity and HWM-aware Musharakah split.
+    /// @dev No caller restriction, token movement, fee booking or charity counter update.
+    function previewWaterfallHWM(
+        uint256 grossProfit,
+        uint256 elapsedSeconds,
+        uint256 principal,
+        uint256 hwmDeficit
+    ) external view returns (uint256 purified, uint256 charity, uint256 vaultShare, uint256 depositorShare) {
+        return _previewWaterfallHWM(grossProfit, elapsedSeconds, principal, hwmDeficit);
+    }
+
+    /// @dev Shared arithmetic for preview and execution, with identical integer rounding.
+    function _previewWaterfallHWM(
+        uint256 grossProfit,
+        uint256 elapsed,
+        uint256 principal,
+        uint256 hwmDeficit
+    ) internal view returns (uint256 purified, uint256 charity, uint256 vaultShare, uint256 depositorShare) {
+        uint256 charityBps = charityModule.charityBps();
+        uint256 combinedBps = purificationBps + charityBps;
+        if (combinedBps > MAX_COMBINED_DEDUCTION_BPS) {
+            revert CombinedDeductionAboveCap(combinedBps, MAX_COMBINED_DEDUCTION_BPS);
+        }
+        purified = (grossProfit * purificationBps) / 10_000;
+        uint256 afterPurification = grossProfit - purified;
+        charity = (afterPurification * charityBps) / 10_000;
+        (, vaultShare, depositorShare) = shariahTreasury.calculateMusharakahSplitHWM(
+            afterPurification - charity, elapsed, principal, hwmDeficit
+        );
+    }
+
     function _executeWaterfall(
         uint256 grossProfit,
         uint256 elapsed,
@@ -193,35 +224,26 @@ contract PurificationEscrow is Ownable2Step {
         if (msg.sender != vault) revert NotVault();
         if (grossProfit == 0) revert ZeroAmount();
 
-        // Validate combined deduction will not exceed cap before pulling funds.
-        uint256 combinedBps = purificationBps + charityModule.charityBps();
-        if (combinedBps > MAX_COMBINED_DEDUCTION_BPS) {
-            revert CombinedDeductionAboveCap(combinedBps, MAX_COMBINED_DEDUCTION_BPS);
-        }
+        // Validate and calculate once using exactly the same arithmetic as the preview.
+        (purified, charity, vaultShare, depositorShare) =
+            _previewWaterfallHWM(grossProfit, elapsed, principal, hwmDeficit);
 
         // 1. Pull grossProfit from vault into escrow.
         IERC20(asset).safeTransferFrom(vault, address(this), grossProfit);
 
         // 2. Purification: send directly to charity wallet, no CharityModule counter.
         if (purificationBps > 0) {
-            purified = (grossProfit * purificationBps) / 10_000;
             IERC20(asset).safeTransfer(charityModule.charityWallet(), purified);
         }
 
         uint256 afterPurification = grossProfit - purified;
 
-        // 3. Charitable contribution via CharityModule.
-        //    Approve charityModule to pull from escrow, then call distributeCharity.
+        // 3. Preserve CharityModule transfers, counter and event effects.
         IERC20(asset).forceApprove(address(charityModule), afterPurification);
-        (, uint256 afterCharity) = charityModule.distributeCharity(afterPurification);
-        charity = afterPurification - afterCharity;
+        charityModule.distributeCharity(afterPurification);
         IERC20(asset).forceApprove(address(charityModule), 0);
 
-        // 4. Musharakah split on the remainder.
-        (, uint256 vaultShareCalc, uint256 depositorShareCalc) =
-            shariahTreasury.calculateMusharakahSplitHWM(afterCharity, elapsed, principal, hwmDeficit);
-        vaultShare     = vaultShareCalc;
-        depositorShare = depositorShareCalc;
+        // 4. The Musharakah split was calculated by the shared preview above.
 
         // 5. Record the fee liability and return its token backing to the vault.
         shariahTreasury.recordMusharakahProfit(vaultShare);

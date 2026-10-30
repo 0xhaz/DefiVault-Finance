@@ -1,13 +1,17 @@
 import { useState } from 'react';
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { erc20Abi, formatUnits, parseUnits } from 'viem';
+import { arcTestnet } from 'viem/chains';
 import { toast } from 'sonner';
 import { VAULT_ADDRESS, VAULT_ABI, EXECUTOR_ADDRESS, EXECUTOR_ABI } from '../contracts';
-import { getUsdc, buildTxExplorerUrl } from '../onchain-facts';
 
-const ARC_CHAIN_ID = 5042002;
-const usdcFact = getUsdc(ARC_CHAIN_ID);
-const USDC_ADDRESS = (usdcFact?.address ?? '0x3600000000000000000000000000000000000000') as `0x${string}`;
+const ARC_CHAIN_ID = arcTestnet.id;
+// Arc Testnet USDC (ERC-20 view, 6 decimals)
+const USDC_ADDRESS = '0x3600000000000000000000000000000000000000' as `0x${string}`;
+
+function buildTxExplorerUrl(txHash: string): string {
+  return `${arcTestnet.blockExplorers.default.url}/tx/${txHash}`;
+}
 
 type Tab = 'deposit' | 'withdraw' | 'execute';
 
@@ -117,7 +121,7 @@ export function VaultActions() {
 
   if (isSuccess && txHash) {
     toast.success('Transaction confirmed', {
-      action: { label: 'View', onClick: () => window.open(buildTxExplorerUrl(ARC_CHAIN_ID, txHash), '_blank') },
+      action: { label: 'View', onClick: () => window.open(buildTxExplorerUrl(txHash), '_blank') },
     });
     reset();
     setAmount('');

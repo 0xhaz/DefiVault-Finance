@@ -72,6 +72,9 @@ contract VaultInvariantTest is VaultInvariantBase {
         // N-20: share NAV includes unbooked time fees even before a state-changing accrual.
         uint256 unbooked = vault.pendingWakalaFee();
         expected = expected > unbooked ? expected - unbooked : 0;
+        // N-29: share-pricing NAV also reserves the unclaimed purification/charity/manager cut.
+        uint256 cut = vault.pendingDistributionCut();
+        expected = expected > cut ? expected - cut : 0;
         uint256 actual        = vault.totalAssets();
 
         uint256 diff = actual > expected ? actual - expected : expected - actual;

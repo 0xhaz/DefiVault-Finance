@@ -121,16 +121,17 @@ abstract contract TaskMN01Base is Test {
         usdc.mint(address(vault), 40e6);
         _claim(40e6);
         uint256 gain = vault.goldUnrealizedGain();
-        assertEq(vault.hurdlePrincipal(), vault.totalAssets() - gain);
-        assertEq(vault.profitBase(), vault.totalAssets() - gain + vault.lockedProfit());
+        // N-29: checkpoints live on the pre-cut accounting basis, not the share-pricing NAV.
+        assertEq(vault.hurdlePrincipal(), vault.totalAssetsBeforeDistributionCut() - gain);
+        assertEq(vault.profitBase(), vault.totalAssetsBeforeDistributionCut() - gain + vault.lockedProfit());
         // Processed depositor profit raises the high while locked; paper gold still does not.
         assertEq(vault.highWaterMarkPerShare(), _processedPrice());
         skip(vault.profitUnlockPeriod());
         assertEq(vault.realizedProfit(), 0);
-        uint256 nav = vault.totalAssets();
+        uint256 nav = vault.totalAssetsBeforeDistributionCut();
         vm.prank(manager);
         vault.recallCapital(address(adapter), 200e6);
-        assertEq(vault.totalAssets(), nav, "recall changes realization, not marked NAV");
+        assertEq(vault.totalAssetsBeforeDistributionCut(), nav, "recall changes realization, not marked NAV");
         assertEq(vault.goldUnrealizedGain(), 0);
         assertEq(vault.realizedProfit(), gain, "only the recalled appreciation becomes available");
         _claim(gain);
@@ -195,15 +196,20 @@ abstract contract TaskMN01Base is Test {
         vault.lockProfit(100e6);
         uint256 end = vault.unlockedAt();
         skip(vault.profitUnlockPeriod() / 2);
-        uint256 nav = vault.totalAssets();
+        uint256 nav = vault.totalAssetsBeforeDistributionCut();
+        uint256 priced = vault.totalAssets();
         vm.prank(manager);
         vm.expectRevert(ShariahVault.ZeroAmount.selector);
         vault.lockProfit(0);
         assertEq(vault.unlockedAt(), end);
         assertEq(vault.lockedProfit(), 100e6);
-        assertEq(vault.totalAssets(), nav);
+        assertEq(vault.totalAssetsBeforeDistributionCut(), nav);
+        assertEq(vault.totalAssets(), priced);
         vm.warp(end);
-        assertEq(vault.totalAssets(), 1_100e6);
+        assertEq(vault.totalAssetsBeforeDistributionCut(), 1_100e6);
+        // Fully unlocked yield is unclaimed profit, so share pricing reserves its distribution cut.
+        assertEq(vault.totalAssets(), 1_100e6 - vault.pendingDistributionCut());
+        assertGt(vault.pendingDistributionCut(), 0);
     }
 
     // N-20/N-21 regressions share the V1/V2 fixture so inherited behavior cannot drift.
@@ -626,7 +632,7 @@ abstract contract TaskMN01Base is Test {
         uint256 firstShare = vault.profitBase() - baseBefore;
         assertGt(firstShare, 0, "waterfall returned a depositor share");
         assertEq(vault.lockedProfit(), 0);
-        assertEq(vault.hurdlePrincipal(), vault.totalAssets());
+        assertEq(vault.hurdlePrincipal(), vault.totalAssetsBeforeDistributionCut());
         // The processed price includes the depositor share and excludes the unprocessed remainder.
         assertApproxEqAbs(vault.highWaterMark(), vault.profitBase(), 2);
         // With no lock the unprocessed remainder is claimable immediately and exactly.
@@ -721,13 +727,25 @@ abstract contract TaskMN01Base is Test {
         _deposit(1_000e6);
         usdc.mint(address(vault), 100e6); // NAV 1_100
         uint256 base = vault.profitBase();
-        uint256 nav = vault.totalAssets();
+        uint256 supplyBefore = vault.totalSupply();
+        // N-29: shares price off the cut-adjusted NAV; 10% of the shares is the 10% exit.
+        uint256 assetsOut = vault.previewRedeem(vault.balanceOf(alice) / 10);
+        assertLt(assetsOut, 110e6, "exit pays its share of the pending cut");
         vm.prank(alice);
-        vault.withdraw(110e6, alice, alice); // 10% of NAV
-        assertEq(vault.profitBase(), base - Math.mulDiv(base, 110e6, nav));
-        assertEq(vault.profitBase(), 900e6);
-        assertEq(vault.realizedProfit(), 90e6, "profit shrinks pro rata with the exit");
-        _expectExceeds(90e6 + 1, 90e6);
+        vault.withdraw(assetsOut, alice, alice);
+        uint256 burned = supplyBefore - vault.totalSupply();
+        assertApproxEqAbs(burned, supplyBefore / 10, 1e12); // 1 asset-wei of rounding = 1e12 share-wei
+        assertEq(vault.profitBase(), base - Math.mulDiv(base, burned, supplyBefore));
+        assertApproxEqAbs(vault.profitBase(), 900e6, 1e3);
+        // N-29: the exit settled its pro-rata 10e6 of profit through the real claim path, so the
+        // leaver's cut (charity + manager share, 12.25% of 10e6) left NAV with it.
+        uint256 settledCut = treasury.pendingFees() + charity.totalCharityDistributed();
+        assertApproxEqAbs(settledCut, 1_225_000, 2, "leaver's pro-rata distribution cut was settled");
+        uint256 profit = vault.realizedProfit();
+        assertEq(profit, 1_100e6 - assetsOut - settledCut - vault.profitBase());
+        // Remaining profit is exactly the stayers' 90e6 (1 wei of virtual-share rounding).
+        assertApproxEqAbs(profit, 90e6, 1e3, "profit shrinks by exactly the leaver's pro-rata gross");
+        _expectExceeds(profit + 1, profit);
     }
 
     function test_redeem_partialThenAll_baseReachesZero() public {
@@ -735,17 +753,17 @@ abstract contract TaskMN01Base is Test {
         usdc.mint(address(vault), 100e6);
         uint256 half = vault.balanceOf(alice) / 2;
         uint256 base = vault.profitBase();
-        uint256 nav = vault.totalAssets();
+        uint256 supplyBefore = vault.totalSupply();
         vm.prank(alice);
-        uint256 assets = vault.redeem(half, alice, alice);
-        // checkpoint shrinks by shares burned / supply; allow 1-wei virtual-share rounding
-        assertApproxEqAbs(vault.profitBase(), base - Math.mulDiv(base, assets, nav), 2);
+        vault.redeem(half, alice, alice);
+        // checkpoint shrinks by shares burned / supply (N-29: not by assets / cut-adjusted NAV)
+        assertApproxEqAbs(vault.profitBase(), base - Math.mulDiv(base, half, supplyBefore), 2);
         uint256 rest = vault.balanceOf(alice);
         vm.prank(alice);
         vault.redeem(rest, alice, alice);
         // Virtual-share rounding can leave a 1-wei residue in both base and NAV.
         assertLe(vault.profitBase(), 1);
-        assertApproxEqAbs(vault.realizedProfit(), vault.totalAssets(), 1);
+        assertApproxEqAbs(vault.realizedProfit(), vault.totalAssetsBeforeDistributionCut(), 1);
         assertLe(vault.totalAssets(), 2);
     }
 

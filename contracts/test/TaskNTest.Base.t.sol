@@ -62,7 +62,15 @@ contract MockStrategyAdapterN {
         return amount;
     }
     function recall(uint256) external pure returns (uint256) { return 0; }
-    function currentValue() external pure returns (uint256) { return 0; }
+    // N-27: report true holdings (the vault asset held here) unless a value is explicitly configured.
+    bool public valueOverridden;
+    uint256 public valueOverride;
+    function setValue(uint256 v) external { valueOverridden = true; valueOverride = v; }
+    function clearValue() external { valueOverridden = false; }
+    function currentValue() external view returns (uint256) {
+        if (valueOverridden) return valueOverride;
+        return IERC20(ShariahVault(vault).asset()).balanceOf(address(this));
+    }
     function protocolName() external pure returns (string memory) { return "MockStrategyN"; }
 }
 

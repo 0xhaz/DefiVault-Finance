@@ -110,9 +110,7 @@ contract ShariahVaultV2 is ShariahVault {
     ///      Both inherited deployment entry points route here. Registry errors retain
     ///      precedence over pause/asset errors, independently of the legacy screening flag.
     function _checkDeploymentScreening(address strategy) internal view virtual override {
-        ShariahAdapterRegistry.Screening memory s = registry.getScreening(strategy);
-        if (s.pronouncementHash == bytes32(0)) revert NotScreened(strategy);
-        if (block.timestamp >= s.expiresAt) revert ScreeningExpired(strategy, s.expiresAt);
+        ShariahRegistryLogic.checkScreening(registry, strategy);
         if (paused) revert Paused();
         if (!permittedAssets[asset()]) revert AssetNotPermitted(asset());
     }
@@ -168,6 +166,13 @@ interface IGoldAdapterV2 {
 
 /// @dev Linked registry proposal storage operations; current-registry authorization stays on V2.
 library ShariahRegistryLogic {
+    /// @dev Keep registry decoding off the vault runtime without changing error precedence.
+    function checkScreening(ShariahAdapterRegistry registry, address strategy) external view {
+        ShariahAdapterRegistry.Screening memory s = registry.getScreening(strategy);
+        if (s.pronouncementHash == bytes32(0)) revert ShariahVaultV2.NotScreened(strategy);
+        if (block.timestamp >= s.expiresAt) revert ShariahVaultV2.ScreeningExpired(strategy, s.expiresAt);
+    }
+
     function propose(
         ShariahVaultV2.PendingRegistry storage pending, address currentRegistry, address proposed
     ) external {

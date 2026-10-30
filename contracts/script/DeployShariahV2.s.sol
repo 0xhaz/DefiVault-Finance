@@ -116,6 +116,8 @@ contract DeployShariahV2 is Script {
         );
         addrs.vault = address(vault);
         console.log("ShariahVaultV2:", addrs.vault);
+        // The vault books the Wakala fee, so it must be the treasury's fee source.
+        treasury.setFeeSource(addrs.vault);
 
         // 5. CharityModule — boardRegistry set to registry (I4: board changes propagate from registry)
         CharityModule charity = new CharityModule(
@@ -149,6 +151,9 @@ contract DeployShariahV2 is Script {
 
         // 8. Let the escrow book the manager's Musharakah share in the treasury (treasury owner = deployer).
         TreasuryModule(addrs.shariahTreasury).setProfitRecorder(addrs.purificationEscrow);
+
+        // 9. Let the escrow call CharityModule.distributeCharity during profit claims.
+        charity.setEscrow(addrs.purificationEscrow);
 
         return addrs;
     }
