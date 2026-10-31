@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14304b"/>
+      <stop offset="1" stop-color="#0d1b2f"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#cbdbf2"/>
+      <stop offset="1" stop-color="#8dd89f"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e3ecf9"/>
+      <stop offset="1" stop-color="#acc6e9"/>
+    </linearGradient>
+  </defs>
+  <!-- tile -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="16.5" y="16.5" width="479" height="479" rx="111.5" fill="none" stroke="#acc6e9" stroke-opacity="0.18"/>
+  <!-- vault door -->
+  <circle cx="256" cy="256" r="148" fill="none" stroke="url(#ring)" stroke-width="22"/>
+  <circle cx="256" cy="256" r="112" fill="#0a1628" stroke="#acc6e9" stroke-opacity="0.25" stroke-width="4"/>
+  <!-- door rivets -->
+  <g fill="#0a1628" fill-opacity="0.85">
+    <circle cx="392.7" cy="312.6" r="5.5"/>
+    <circle cx="312.6" cy="392.7" r="5.5"/>
+    <circle cx="199.4" cy="392.7" r="5.5"/>
+    <circle cx="119.3" cy="312.6" r="5.5"/>
+    <circle cx="119.3" cy="199.4" r="5.5"/>
+    <circle cx="199.4" cy="119.3" r="5.5"/>
+    <circle cx="312.6" cy="119.3" r="5.5"/>
+    <circle cx="392.7" cy="199.4" r="5.5"/>
+  </g>
+  <!-- AI agent: lightning mark (same motif as the app icon) -->
+  <path d="M276 168 L206 268 H252 L236 344 L306 240 H260 Z" fill="url(#bolt)" stroke="#0a1628" stroke-width="6" stroke-linejoin="round"/>
+</svg>
