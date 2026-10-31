@@ -99,7 +99,7 @@ Set the `GOLD_*` variables in the template and run `deployGold()` the same way. 
 
 ## 7. Screening and enabling (30 days minimum)
 
-Using the board multisig, for each adapter: `registry.proposeScreening(adapter, pronouncementHash, expiresAt)`, wait the 30-day timelock, then `registry.executeScreening(adapter)`. Then, with the owner multisig and only after the board has approved: enable the strategy in the aggregator (`setEnabled`), enable and size the executor config (`setShariahStrategyConfig`), and write scores from `ORACLE_OPERATOR`. The agent needs `maxGasPrice` above the live Arc gas price; adjust with `setMaxGasPrice` if needed.
+Using the board multisig, for each adapter: `registry.proposeScreening(adapter, pronouncementHash, expiresAt)`, wait the 30-day timelock, then `registry.executeScreening(adapter)`. Then, with the owner multisig and only after the board has approved: enable the strategy in the aggregator (`setEnabled`; only strategies inside the Conservative executor's mask 38, i.e. indexes 1, 2 and 5, otherwise a higher-scoring disallowed strategy stalls allocation: N-36), enable and size the executor config (`setShariahStrategyConfig`), and write scores from `ORACLE_OPERATOR`. Before an LP adapter is funded, the board's dust-threshold increase must already be confirmed (N-34; see `docs/mainnet-config.md`). The agent needs `maxGasPrice` above the live Arc gas price; adjust with `setMaxGasPrice` if needed.
 
 ## 8. Hand ownership to the multisig
 
