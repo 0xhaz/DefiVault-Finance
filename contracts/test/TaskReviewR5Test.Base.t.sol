@@ -31,13 +31,14 @@ abstract contract TaskR5Base is TaskN29Base {
     /// @dev Mirrors the contract's internal EXIT_SETTLE_GAS.
     uint256 internal constant SETTLE_GAS = 700_000;
     /// @dev Mirrors the contract's internal EXIT_SETTLE_GAS_PER_ADAPTER.
-    uint256 internal constant SETTLE_GAS_PER_ADAPTER = 250_000;
-    uint256 internal constant SEARCH_CEILING = 12_000_000;
+    uint256 internal constant SETTLE_GAS_PER_ADAPTER = 1_300_000;
+    /// @dev Arc block gas limit (mainnet and testnet, 2026-10-31); the 5-adapter floor is 14.4M (N-33).
+    uint256 internal constant SEARCH_CEILING = 30_000_000;
     uint256 internal constant SCAN_STEP = 500_000;
 
     GasAdapterR5[] internal adapters;
 
-    /// @dev Expected exit gas floor: 2 * (700k + funded adapters * 250k). Every adapter created here is funded.
+    /// @dev Expected exit gas floor: 2 * (700k + funded adapters * 1.3M) (N-33). Every adapter created here is funded.
     function _floor() internal view returns (uint256) {
         return 2 * (SETTLE_GAS + adapters.length * SETTLE_GAS_PER_ADAPTER);
     }
@@ -115,14 +116,17 @@ abstract contract TaskR5Base is TaskN29Base {
     /// @dev Smallest outer gas for which the exit does not revert (ascending scan then bisect).
     function _minOk(bool useWithdraw, bool part) internal returns (uint256 minG, bool settledThere) {
         (minG, settledThere) = _minOkOrZero(useWithdraw, part);
-        require(minG != 0, "never succeeds <= 12M");
+        require(minG != 0, "never succeeds <= SEARCH_CEILING");
     }
 
     /// @dev Same search, but returns (0,false) when the exit never succeeds up to SEARCH_CEILING.
     function _minOkOrZero(bool useWithdraw, bool part) internal returns (uint256 minG, bool settledThere) {
-        uint256 lo = 100_000;
+        // No exit with realized profit can succeed below the floor (InsufficientExitGas), so start there:
+        // scanning from 100k with heavy adapter reads exhausts the test's own gas budget (N-33).
+        uint256 start = _floor() > 100_000 ? _floor() : 100_000;
+        uint256 lo = start;
         uint256 hi;
-        for (uint256 g = 100_000; g <= SEARCH_CEILING; g += SCAN_STEP) {
+        for (uint256 g = start; g <= SEARCH_CEILING; g += SCAN_STEP) {
             (bool ok,,) = _attempt(g, useWithdraw, part);
             if (ok) {
                 hi = g;

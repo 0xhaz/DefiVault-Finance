@@ -22,7 +22,7 @@ Companion to `docs/mainnet-deploy.md`. Every value marked **REPLACE** is a place
 | `HURDLE_BPS` | Annual hurdle before the manager shares in profit | 0 to 2000 | 400 | **REPLACE**. |
 | `EXECUTOR_MAX_GAS_PRICE_GWEI` | Executor refuses to run above this gas price | 20 to 1000 | 200 | **REPLACE**. Arc drops transactions below 20 gwei maxFeePerGas, so a lower ceiling can never execute. |
 
-Hard-coded in contracts (change requires new deployment): charity rate default 2.5 percent (bounded by `MAX_CHARITY_BPS` = 5 percent; changes 30-day timelock); purification cap 10 percent per adapter and 50 percent combined deductions; gold combined cap 30 percent of NAV; max allocation 80 percent of NAV (owner adjustable); pending cross-chain cap 20 percent (max 50 percent); cross-chain fee cap 1 percent; profit unlock period 3 days (max 14); dust threshold 1 USDC (board-gated, cap 0.5 percent of NAV); max 10 funded non-gold adapters; adapter read gas cap 100,000.
+Hard-coded in contracts (change requires new deployment): charity rate default 2.5 percent (bounded by `MAX_CHARITY_BPS` = 5 percent; changes 30-day timelock); purification cap 10 percent per adapter and 50 percent combined deductions; gold combined cap 30 percent of NAV; max allocation 80 percent of NAV (owner adjustable); pending cross-chain cap 20 percent (max 50 percent); cross-chain fee cap 1 percent; profit unlock period 3 days (max 14); dust threshold 1 USDC (board-gated, cap 0.5 percent of NAV); max 5 funded non-gold adapters; adapter read gas cap 150,000; escrow preview gas cap 100,000 (N-33).
 
 ## 3. Timelocks
 

@@ -43,7 +43,8 @@ contract ShariahVault is AutonomousVault {
     ///         rather than silently skipped.
     error InsufficientExitGas();
     uint256 internal constant EXIT_SETTLE_GAS = 700_000;
-    uint256 internal constant EXIT_SETTLE_GAS_PER_ADAPTER = 250_000;
+    /// @dev N-33: settlement re-reads each funded adapter 8 times; 8 x ADAPTER_READ_GAS (150k) plus margin.
+    uint256 internal constant EXIT_SETTLE_GAS_PER_ADAPTER = 1_300_000;
     error UseAtomicDeploy(address adapter);
     error RemoteRecipientNotApproved(uint32 domain, bytes32 recipient);
     error NoPendingRemoteRecipient();
@@ -832,8 +833,15 @@ library ShariahGovernanceLogic {
 library ShariahAccountingLogic {
     using SafeERC20 for IERC20;
 
-    uint256 internal constant ADAPTER_READ_GAS = 100_000;
-    uint256 internal constant MAX_FUNDED_ADAPTERS = 10;
+    /// @dev N-33: a cold read of a real Uniswap V3 LP position (HalalLPAdapter on the Arc mainnet USDC/EURC
+    ///      pool) costs ~111k gas, so 100k failed every in-transaction read. 150k leaves room for pools with a
+    ///      larger observation buffer.
+    uint256 internal constant ADAPTER_READ_GAS = 150_000;
+    /// @dev Escrow waterfall preview budget, unchanged from the pre-N-33 shared 100k cap.
+    uint256 internal constant ESCROW_PREVIEW_GAS = 100_000;
+    /// @dev N-33: one exit reads every funded adapter ~23 times. At 150k per read, 5 adapters keep a
+    ///      worst-case exit (~17M gas of reads) inside Arc's 30M block gas limit; 10 would not.
+    uint256 internal constant MAX_FUNDED_ADAPTERS = 5;
 
     function retireGoldPrincipal(
         mapping(address => uint256) storage principalOf, address adapter,
@@ -1014,7 +1022,7 @@ library ShariahAccountingLogic {
         uint256[4] memory split;
         bool ok;
         assembly ("memory-safe") {
-            ok := staticcall(ADAPTER_READ_GAS, escrow, add(input, 32), mload(input), split, 128)
+            ok := staticcall(ESCROW_PREVIEW_GAS, escrow, add(input, 32), mload(input), split, 128)
             ok := and(ok, eq(returndatasize(), 128))
         }
         if (!ok) return 0;

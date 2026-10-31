@@ -48,7 +48,7 @@ abstract contract TaskR5Tests is TaskR5Base {
     }
 
     function test_floor_withdrawPartial_withDeficit() public {
-        _adapters(10, 0);
+        _adapters(5, 0);
         _yield(200e6);
         _writeHwm(1_200_000_000_000);
         _assertFloorBoundary(true, true);
@@ -246,15 +246,15 @@ abstract contract TaskR5Tests is TaskR5Base {
         _assertEstimateRoutesCut(true, true);
     }
 
-    function test_estimateGas_redeem_10adapters_deficit() public {
-        _adapters(10, 0);
+    function test_estimateGas_redeem_5adapters_deficit() public {
+        _adapters(5, 0);
         _yield(200e6);
         _writeHwm(1_200_000_000_000);
         _assertEstimateRoutesCut(false, false);
     }
 
-    function test_estimateGas_withdraw_10adapters_noDeficit() public {
-        _adapters(10, 0);
+    function test_estimateGas_withdraw_5adapters_noDeficit() public {
+        _adapters(5, 0);
         _yield(200e6);
         _assertEstimateRoutesCut(true, false);
     }

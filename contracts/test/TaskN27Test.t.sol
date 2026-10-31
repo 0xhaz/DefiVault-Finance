@@ -332,58 +332,58 @@ abstract contract TaskN27Tests is TaskN27Base {
         assertEq(vault.totalAssets(), D - 2 * P - 70e6);
     }
 
-    // ───────────── 10-adapter cap ─────────────
+    // ───────────── 5-adapter cap (N-33) ─────────────
 
     function _eleven() internal returns (AdapterN27[] memory ads) {
-        ads = new AdapterN27[](11);
-        address[] memory list = new address[](11);
-        for (uint256 i; i < 11; ++i) {
+        ads = new AdapterN27[](6);
+        address[] memory list = new address[](6);
+        for (uint256 i; i < 6; ++i) {
             ads[i] = new AdapterN27(address(vault), address(usdc));
             list[i] = address(ads[i]);
         }
         _screenBatch(list);
     }
 
-    function test_eleventhFundedAdapter_reverts_refundingExistingDoesNot() public {
+    function test_sixthFundedAdapter_reverts_refundingExistingDoesNot() public {
         AdapterN27[] memory ads = _eleven();
-        for (uint256 i; i < 10; ++i) _fund(ads[i], 1e6);
-        assertEq(vault.fundedAdapterCount(), 10);
-        assertEq(vault.MAX_FUNDED_ADAPTERS(), 10);
+        for (uint256 i; i < 5; ++i) _fund(ads[i], 1e6);
+        assertEq(vault.fundedAdapterCount(), 5);
+        assertEq(vault.MAX_FUNDED_ADAPTERS(), 5);
 
         vm.prank(manager);
         vm.expectRevert(ShariahVault.TooManyFundedAdapters.selector);
-        vault.deployCapital(address(ads[10]), 1e6, "");
+        vault.deployCapital(address(ads[5]), 1e6, "");
         vm.prank(manager);
         vm.expectRevert(ShariahVault.TooManyFundedAdapters.selector);
-        vault.deployCapitalAndExecute(address(ads[10]), 1e6, "");
-        assertEq(usdc.balanceOf(address(ads[10])), 0, "revert is atomic");
-        assertEq(vault.principalOf(address(ads[10])), 0);
+        vault.deployCapitalAndExecute(address(ads[5]), 1e6, "");
+        assertEq(usdc.balanceOf(address(ads[5])), 0, "revert is atomic");
+        assertEq(vault.principalOf(address(ads[5])), 0);
 
         // Topping up an existing member is not a new slot.
         vm.prank(manager);
-        vault.deployCapital(address(ads[5]), 1e6, "");
+        vault.deployCapital(address(ads[1]), 1e6, "");
         vm.prank(manager);
-        vault.deployCapitalAndExecute(address(ads[6]), 1e6, "");
-        assertEq(vault.fundedAdapterCount(), 10);
-        assertEq(vault.principalOf(address(ads[5])), 2e6);
-        assertEq(vault.principalOf(address(ads[6])), 2e6);
+        vault.deployCapitalAndExecute(address(ads[2]), 1e6, "");
+        assertEq(vault.fundedAdapterCount(), 5);
+        assertEq(vault.principalOf(address(ads[1])), 2e6);
+        assertEq(vault.principalOf(address(ads[2])), 2e6);
 
-        // Freeing a slot (write-off) lets the 11th in.
+        // Freeing a slot (write-off) lets the 6th in.
         ads[3].setValue(0);
         vm.prank(owner);
         vault.writeOffAdapterPrincipal(address(ads[3]));
-        assertEq(vault.fundedAdapterCount(), 9);
-        _fund(ads[10], 1e6);
-        assertEq(vault.fundedAdapterCount(), 10);
+        assertEq(vault.fundedAdapterCount(), 4);
+        _fund(ads[5], 1e6);
+        assertEq(vault.fundedAdapterCount(), 5);
     }
 
-    function test_tenGasBurningAdapters_boundedGas_entryRejected_exitsOpen() public {
+    function test_fiveGasBurningAdapters_boundedGas_entryRejected_exitsOpen() public {
         AdapterN27[] memory ads = _eleven();
-        for (uint256 i; i < 10; ++i) {
+        for (uint256 i; i < 5; ++i) {
             _fund(ads[i], 1e6);
             ads[i].setMode(AdapterN27.Mode.GasBurn);
         }
-        assertEq(vault.fundedAdapterCount(), 10);
+        assertEq(vault.fundedAdapterCount(), 5);
         usdc.mint(bob, 1_000e6);
 
         uint256 g = gasleft();
@@ -392,16 +392,16 @@ abstract contract TaskN27Tests is TaskN27Base {
         g = gasleft();
         assertEq(vault.maxDeposit(bob), 0);
         uint256 maxDepGas = g - gasleft();
-        console2.log("totalAssets gas, 10 gas burners", navGas);
-        console2.log("maxDeposit gas, 10 gas burners", maxDepGas);
+        console2.log("totalAssets gas, 5 gas burners", navGas);
+        console2.log("maxDeposit gas, 5 gas burners", maxDepGas);
         assertEq(nav, D, "burners contribute zero loss");
         assertEq(vault.unrealizedAdapterLoss(), 0);
         // Each read is capped at ADAPTER_READ_GAS; NAV reads the set twice (nav + fee base) and
         // N-29's distribution cut re-reads it twice more through realizedProfit() (zero profit
         // short-circuits before the hwmDeficit/escrow reads).
         uint256 cap = vault.ADAPTER_READ_GAS();
-        assertLt(navGas, 4 * 10 * cap + 600_000, "totalAssets gas bounded");
-        assertLt(maxDepGas, 4 * 10 * cap + 1_000_000, "maxDeposit gas bounded");
+        assertLt(navGas, 4 * 5 * cap + 600_000, "totalAssets gas bounded");
+        assertLt(maxDepGas, 4 * 5 * cap + 1_000_000, "maxDeposit gas bounded");
 
         // Entry rejected.
         assertFalse(vault.valuationHealthy());
@@ -419,7 +419,7 @@ abstract contract TaskN27Tests is TaskN27Base {
         vm.prank(alice);
         uint256 out = vault.redeem(shares, alice, alice);
         uint256 used = g - gasleft();
-        console2.log("redeem gas with 10 gas-burning adapters", used);
+        console2.log("redeem gas with 5 gas-burning adapters", used);
         assertEq(out, quote);
         assertLt(used, 30_000_000, "redeem must fit in a block");
     }
