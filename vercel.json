@@ -3,5 +3,11 @@
   "framework": "vite",
   "installCommand": "bun install",
   "buildCommand": "bunx vite build --mode mainnet",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://defivault-finance-production.up.railway.app/:path*"
+    }
+  ]
 }
