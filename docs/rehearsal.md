@@ -353,3 +353,15 @@ Stack: run 6 in `docs/agents/deployed-addresses.md` (vault `0x682EA638a167cf812a
 | Vault dust threshold 1.0 to 0.9 USDC | `0x4e2778e0a0295ae31e929b0e8d8112dea423e4e78b9e2531825ecf4d27141703` | Pending |
 | Remote recipient, CCTP domain 0 (ETH-Sepolia), deployer address | `0x583f7837a637ac5c8f1436e3fb4d7f41a061307bcc4c389644f33967b856c347` | Pending; needed for the live CCTP round trip (T-1) |
 | Charity rate 250 to 300 bps | `0xd89e00352646cf7a943b6b3bb048c714987315dd50b76526c2424c2cdefe43a1` | **Cancelled** (`0xdf5105f995ed169697f95b01ee168355cdb33f1e7eb16fe5f1105f07b5a6f845`): the cancel path works |
+
+### LP-6: live scenarios (2026-10-31, after the pool's 1800 s TWAP filled at 13:51 UTC)
+
+| Scenario | Tx | Expected | Actual |
+|---|---|---|---|
+| (a) `writeScore(HALAL_LP, 95)` by the oracle | `0x57a76af1c288d442cf29a55c357fd8a7ff43b92d723060c33249f45e6d26efc2` | HALAL_LP becomes the winner | Winner 2, score 95 |
+| (a) `executeWinner()` (permissionless) funds the LP | `0x5540ce7250b7b21ce1528d606d5e10cf91cb40867df4a6c10fa3f5064cd7f990` (1,276,663 gas) | 1 USDC (config max) swapped half to EURC, minted a full-range position | Position NFT #3, adapter value 0.999175 USDC; vault `principalOf` 1.0, funded adapters 1, `unrealizedAdapterLoss` 0.000825 marked into NAV (4.999123); `valuationHealthy` true, deposits open (loss far below the 1 USDC dust, so N-34 does not trigger at this size) |
+| (g) second `executeWinner()` | reverted at estimate | No second position | Blocked first by the executor cooldown, `CooldownNotElapsed(7176)`; the adapter's own `PositionAlreadyOpen` guard is covered by unit tests |
+| (c) partial `recallCapital(adapter, 0.4 USDC)` | `0xb45a751538f944ee5a525c51867cfa114fab7f42a7e9176ebabdd5de9d0bca2e` (494,000 gas) | Proportional unwind | 0.399948 USDC back; principal 1.0 to 0.6; value 0.599504, loss mark 0.000496 |
+| (c) full recall | `0xb6cbb75416986b6ac9184bf07536c6648a8e3828d02bb9a21157be366de88428` (454,135 gas) | Position closed, principal retired | NFT burned (`positionTokenId` 0), principal 0, funded adapters 0, idle 4.999495 of 5 USDC: round-trip cost 0.000505 USDC (0.05%, pool fee plus impact) |
+
+Still open from LP-6: (b) swap volume then fee collection, (d) live price move with mark-down (covered on the fork with USDC as token1), (e) spot vs TWAP deviation revert, (f) out-of-range position, (h) exit with realized profit while the LP is funded, (i) unreadable price, (j) write-off and replace, (k) fee tier 10000. LP-7 (concealed loss) depends on (i).
