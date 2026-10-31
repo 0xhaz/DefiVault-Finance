@@ -72,7 +72,7 @@ Phase 6  Mainnet preparation (board, Safes, gold deps, ops) runs in parallel fro
 | P-4 | Coverage: run `forge coverage` (with `--ir-minimum` if stack-too-deep) on the in-scope files. Add tests for uncovered branches in the vault, the libraries and the adapters | Line/branch coverage table in the audit handoff, and no untested revert path in the vault |
 | P-5 | Fix or document the `HalalLPAdapter` constructor zero-checks (Problems #4) | Test added |
 | P-6 | Library direct-call safety: test that calling each of the four linked libraries directly at its deployed address cannot change state or move funds (auditor question 2) | Tests in `LibraryTests.*` |
-| P-7 | Finish `docs/audit-handoff.md`: frozen commit hash, line count for `DeployHalalLP.s.sol`, contacts, coverage and static-analysis results, the LP scope decision (D-1) | No `<REPLACE>` left apart from the auditors' contact details |
+| P-7 | **Done 2026-10-31** on branch `p7-audit-handoff`, except the frozen commit hash (set when the PR stack is merged and tagged `audit-freeze-1`; the freeze procedure is written in the handoff) and contact details. Added: line counts (6,020 total, `DeployHalalLP.s.sol` 165), LP in scope (D-1), N-34/N-36 as accepted, fork/static-analysis/coverage/library evidence, funded-adapter cap 5, auditor question 9 (LP deposit gate) | No `<REPLACE>` left apart from the commit hash and contact details |
 
 ## Phase 2: LP testnet campaign (the main testnet gap)
 
@@ -166,7 +166,7 @@ Uniswap v4 is live on Arc Testnet and mainnet and seems to be where most Arc DEX
 
 | ID | Decision | Recommendation |
 |---|---|---|
-| D-1 | Is the LP adapter part of the mainnet launch? | Keep it **in audit scope** (it is already in the handoff and is the least tested code). A real venue now exists (official Uniswap V3 USDC/EURC on Arc mainnet, about $90k depth), so LP can launch if LP-1 to LP-6 pass, with a small per-deploy cap and a board ruling on EURC. Gold depends on M-3 the same way. Fallback: launch with idle USDC plus gold, or USDC only |
+| D-1 | Is the LP adapter part of the mainnet launch? | Keep it **in audit scope** (it is already in the handoff and is the least tested code). A real venue now exists (official Uniswap V3 USDC/EURC on Arc mainnet, about $90k depth), so LP can launch if LP-1 to LP-6 pass, with a small per-deploy cap and a board ruling on EURC. Gold depends on M-3 the same way. Fallback: launch with idle USDC plus gold, or USDC only. **Decided 2026-10-31:** LP stays in audit scope |
 | D-6 | N-34: keep the dust-based deposit gate for LP strategies (and run the board dust change before funding), or change the gate for LP adapters (for example, a threshold relative to the adapter's principal)? | **Decided 2026-10-31:** for V2, use the board dust mitigation (in `docs/mainnet-config.md` and step 7 of `docs/mainnet-deploy.md`; no vault bytes needed). Ask the auditors and the board about a better gate for V3 |
 | D-7 | N-36: change the aggregator/executor so a tier falls back to its best allowed strategy, or accept the limitation for V2? | **Decided 2026-10-31:** accept for V2. Mainnet has one aggregator serving one Conservative executor; enable only strategies inside mask 38 (GOLD_SPREAD, HALAL_LP, GOLD_ALLOCATION). A tier-aware winner is a V3 item |
 | D-5 | Uniswap v4 support | Defer to ShariahVaultV3 (Phase 7). It needs a new adapter and a price source, so it should not grow the current audit |
