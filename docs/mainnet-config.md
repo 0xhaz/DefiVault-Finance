@@ -24,6 +24,8 @@ Companion to `docs/mainnet-deploy.md`. Every value marked **REPLACE** is a place
 
 Hard-coded in contracts (change requires new deployment): charity rate default 2.5 percent (bounded by `MAX_CHARITY_BPS` = 5 percent; changes 30-day timelock); purification cap 10 percent per adapter and 50 percent combined deductions; gold combined cap 30 percent of NAV; max allocation 80 percent of NAV (owner adjustable); pending cross-chain cap 20 percent (max 50 percent); cross-chain fee cap 1 percent; profit unlock period 3 days (max 14); dust threshold 1 USDC (board-gated, cap 0.5 percent of NAV); max 5 funded non-gold adapters; adapter read gas cap 150,000; escrow preview gas cap 100,000 (N-33).
 
+**Before funding any LP adapter (N-34):** at the default 1 USDC dust threshold, LP entry costs alone close the deposit gate. The board must propose a higher dust threshold (cap: 0.5 percent of NAV, re-checked at confirmation, so leave about 10 percent headroom) at least 30 days before the LP adapter is funded.
+
 ## 3. Timelocks
 
 | Change | Delay | Who |
