@@ -35,14 +35,14 @@ Aderyn was not run (not installed). Running it is an open follow-up for P-3.
 
 ## Real finding
 
-### N-35: `returnCapital` pulls from any address with a vault allowance (Medium, open)
+### N-35: `returnCapital` pulls from any address with a vault allowance (Medium, fixed)
 
 `ShariahVault.returnCapital(strategy, amount)` (owner or manager) calls `ShariahAccountingLogic.returnCapital`, which runs `safeTransferFrom(strategy, vault, amount)` without checking that `strategy` is a funded adapter. Depositors normally leave an allowance to the vault (often unlimited), so the owner or the manager can pull a depositor's wallet USDC into the vault. The pulled USDC becomes NAV for all shareholders; the victim gets nothing. This contradicts the trust model in `docs/audit-handoff.md` ("Owner multisig cannot withdraw user funds directly").
 
 - Exposure: the owner multisig, and any manager. The production manager (`RiskTieredExecutor`) has no code path that calls `returnCapital`, so in practice this is the owner role.
 - The base `AutonomousVault.returnCapital` has the same pattern (conventional vault, out of scope).
 - Proof: `contracts/test/StaticAnalysisN35Test.t.sol` (V1 and V2, owner and manager), written as known-finding tests.
-- Proposed fix: require the strategy to hold booked principal (`principalOf[strategy] != 0`) before pulling. A funded adapter can still return principal plus profit in one call.
+- Fixed on branch `n35-returncapital-funded-only`: the library reverts `AdapterNotFunded(adapter)` unless the adapter holds booked principal. A funded adapter can still return principal plus profit in one call. The tests in `StaticAnalysisN35Test.t.sol` now assert the revert.
 
 ## Accepted or false positive, with reasons
 
@@ -60,7 +60,7 @@ Aderyn was not run (not installed). Running it is an open follow-up for P-3.
 
 ## Follow-ups
 
-1. Fix N-35 on its own branch and flip the known-finding tests to expect a revert.
+1. ~~Fix N-35~~ (done, `n35-returncapital-funded-only`).
 2. P-5: zero-address checks in the `HalalLPAdapter` constructor.
 3. Run Aderyn and add its results here.
 4. Re-run Slither on the frozen audit commit and attach the JSON to the audit package.
