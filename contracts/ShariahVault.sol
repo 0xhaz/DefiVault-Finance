@@ -672,7 +672,7 @@ contract ShariahVault is AutonomousVault {
 
     /// @notice Limits reflect what the vault can pay today: deployed capital is not instantly liquid.
     function maxWithdraw(address owner_) public view virtual override returns (uint256) {
-        return Math.min(super.maxWithdraw(owner_), IERC20(asset()).balanceOf(address(this)));
+        return Math.min(super.maxWithdraw(owner_), ShariahAccountingLogic.exitLiquidity(asset()));
     }
 
     function maxRedeem(address owner_) public view virtual override returns (uint256) {
@@ -858,10 +858,23 @@ library ShariahAccountingLogic {
     }
 
     /// @dev Exact ERC-4626 floor conversions, including virtual assets and shares.
+    /// @dev P2-F1: idle balance less the pending distribution cut. Exit settlement pays the leaver's
+    ///      purification and charity out of idle USDC before the liquidity check; that outflow is at most
+    ///      the whole-vault cut, so an exit within this limit can always settle instead of skipping it.
+    function exitLiquidity(address token) external view returns (uint256) {
+        return _exitLiquidity(token);
+    }
+
+    function _exitLiquidity(address token) private view returns (uint256) {
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        uint256 cut = ShariahVault(address(this)).pendingDistributionCut();
+        return balance > cut ? balance - cut : 0;
+    }
+
     function liquidRedeemLimit(
         address token, uint256 shares, uint256 assets, uint256 virtualSupply
     ) external view returns (uint256) {
-        uint256 liquidity = IERC20(token).balanceOf(address(this));
+        uint256 liquidity = _exitLiquidity(token);
         if (Math.mulDiv(shares, assets + 1, virtualSupply) <= liquidity) return shares;
         return Math.min(shares, Math.mulDiv(liquidity, virtualSupply, assets + 1));
     }

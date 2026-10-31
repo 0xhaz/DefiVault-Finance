@@ -252,6 +252,12 @@ contract LibHarness {
 
 abstract contract LibTestBase is Test {
     LibHarness internal h;
+    /// @dev Library liquidity limits run in the caller's context and read the caller's pending cut (P2-F1).
+    uint256 internal libPendingCut;
+
+    function pendingDistributionCut() external view returns (uint256) {
+        return libPendingCut;
+    }
 
     function setUp() public virtual {
         vm.warp(1_700_000_000);
