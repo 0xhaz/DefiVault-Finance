@@ -186,6 +186,17 @@ export const EXECUTOR_ABI = [
     type: 'function', name: 'executeWinner', stateMutability: 'nonpayable',
     inputs: [], outputs: [],
   },
+  // Custom errors from the executors and score aggregators, so a dry run decodes to a readable reason.
+  { type: 'error', name: 'ScoreTooLow', inputs: [{ name: 'score', type: 'uint8' }, { name: 'min', type: 'uint8' }] },
+  { type: 'error', name: 'CooldownNotElapsed', inputs: [{ name: 'remaining', type: 'uint256' }] },
+  { type: 'error', name: 'StrategyDisabled', inputs: [] },
+  { type: 'error', name: 'StrategyNotAllowedForTier', inputs: [{ name: 'strategyIdx', type: 'uint8' }, { name: 'mask', type: 'uint8' }] },
+  { type: 'error', name: 'GasPriceTooHigh', inputs: [] },
+  { type: 'error', name: 'NothingToExecute', inputs: [] },
+  { type: 'error', name: 'AdapterNotSet', inputs: [] },
+  { type: 'error', name: 'NonAtomicGoldExchange', inputs: [] },
+  { type: 'error', name: 'NoValidScores', inputs: [] },
+  { type: 'error', name: 'StrategyDeprecated', inputs: [{ name: 'strategyIndex', type: 'uint8' }] },
   {
     type: 'event', name: 'ExecutionTriggered',
     inputs: [

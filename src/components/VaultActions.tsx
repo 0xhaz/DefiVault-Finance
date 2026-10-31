@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi';
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, useSwitchChain, useSimulateContract } from 'wagmi';
 import { ConnectKitButton } from 'connectkit';
-import { erc20Abi, formatUnits, parseUnits } from 'viem';
-import { ARC_CHAIN_ID, ARC_NETWORK_NAME, txUrl } from '../chain';
+import { BaseError, ContractFunctionRevertedError, erc20Abi, formatUnits, parseUnits } from 'viem';
+import { ARC_CHAIN_ID, ARC_NETWORK_NAME, IS_MAINNET, txUrl } from '../chain';
 import { toast } from 'sonner';
 import { VAULT_ADDRESS, VAULT_ABI, EXECUTOR_ADDRESS, EXECUTOR_ABI } from '../contracts';
 
@@ -14,6 +14,40 @@ function buildTxExplorerUrl(txHash: string): string {
 }
 
 type Tab = 'deposit' | 'withdraw' | 'execute';
+
+/** Plain-language reason for an executeWinner() dry-run revert. */
+function executeBlockReason(err: unknown): string {
+  const reverted = err instanceof BaseError
+    ? err.walk(e => e instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | null
+    : null;
+  const name = reverted?.data?.errorName;
+  const args = (reverted?.data?.args ?? []) as readonly unknown[];
+  switch (name) {
+    case 'NoValidScores':
+      return IS_MAINNET
+        ? 'No strategy has an on-chain score yet. On mainnet every strategy stays disabled until the Shariah board screens its adapter (30-day timelock), so deposits stay idle in the vault until then.'
+        : 'No enabled strategy has an on-chain score yet. The oracle must write scores before execution can run.';
+    case 'ScoreTooLow':
+      return `The top score (${String(args[0])}) is below this tier's minimum of ${String(args[1])}.`;
+    case 'CooldownNotElapsed': {
+      const mins = Math.ceil(Number(args[0] ?? 0n) / 60);
+      return `The executor is cooling down. Try again in about ${mins} min.`;
+    }
+    case 'StrategyDisabled':
+    case 'AdapterNotSet':
+    case 'StrategyNotAllowedForTier':
+    case 'StrategyDeprecated':
+      return 'The top-scoring strategy has no screened adapter for this tier yet.';
+    case 'GasPriceTooHigh':
+      return "The network gas price is above the executor's limit.";
+    case 'NothingToExecute':
+      return 'Nothing to deploy: the vault has no idle USDC within its allocation cap.';
+    case 'NonAtomicGoldExchange':
+      return 'The gold strategy needs an atomic exchange adapter before it can run.';
+    default:
+      return name ? `The executor would revert (${name}).` : 'The executor would revert right now.';
+  }
+}
 
 export function VaultActions() {
   const { address, isConnected, chainId } = useAccount();
@@ -60,6 +94,18 @@ export function VaultActions() {
     chainId: ARC_CHAIN_ID,
     query: { enabled: !!address && isDeployed, refetchInterval: 5_000 },
   });
+
+  // Dry-run executeWinner() so the Execute tab can say why it would fail before the user pays gas.
+  const execSim = useSimulateContract({
+    address: EXECUTOR_ADDRESS,
+    abi: EXECUTOR_ABI,
+    functionName: 'executeWinner',
+    account: address,
+    chainId: ARC_CHAIN_ID,
+    query: { enabled: tab === 'execute' && executorDeployed && !!address, refetchInterval: 20_000, retry: false },
+  });
+  const execBlocked = tab === 'execute' && execSim.isError;
+  const execReason = execSim.isError ? executeBlockReason(execSim.error) : null;
 
   const { writeContract, data: txHash, isPending, reset } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
@@ -230,6 +276,20 @@ export function VaultActions() {
           </div>
         )}
 
+        {tab === 'execute' && executorDeployed && (
+          <div
+            className="rounded-lg p-3 text-xs leading-relaxed"
+            style={execBlocked
+              ? { background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)', color: 'var(--ink-2)' }
+              : { background: 'rgba(141, 216, 159, 0.08)', border: '1px solid rgba(141, 216, 159, 0.25)', color: 'var(--ink-2)' }}
+          >
+            {execSim.isLoading ? 'Checking whether execution can run…'
+              : execBlocked ? <><span style={{ color: '#f0b429' }}>Not ready.</span> {execReason}</>
+              : execSim.isSuccess ? <><span style={{ color: '#8dd89f' }}>Ready.</span> A dry run of the call succeeds.</>
+              : 'Connect a wallet to check whether execution can run.'}
+          </div>
+        )}
+
         {isWrongChain && (
           <div className="space-y-2">
             <p className="text-xs text-center" style={{ color: 'var(--danger)' }}>Your wallet is on another network.</p>
@@ -249,7 +309,8 @@ export function VaultActions() {
           disabled={
             isPending || isConfirming || !isDeployed ||
             (tab === 'deposit' && (parsed === 0n || amount === '')) ||
-            (tab === 'withdraw' && !vaultShares)
+            (tab === 'withdraw' && !vaultShares) ||
+            (tab === 'execute' && (execBlocked || execSim.isLoading))
           }
           className="w-full py-3 rounded-lg font-semibold text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
