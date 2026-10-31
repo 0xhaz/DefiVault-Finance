@@ -79,11 +79,12 @@ Assumed honest: Circle (USDC and CCTP), the XAU/USD oracle, DEX liquidity for th
 
 ## 6. Known findings and limitations
 
-Fixed findings are listed with explanations in `docs/security-review.md` (N-01 to N-31, N-33, N-35, N-37 to N-39). Open or accepted at handoff:
+Fixed findings are listed with explanations in `docs/security-review.md` (N-01 to N-31, N-33, N-35, N-37 to N-39, N-41). Open or accepted at handoff:
 
 - **N-32 (medium, accepted):** a deposit made while a large unprocessed profit exists and an HWM deficit is open can shrink the deficit; worst case measured about 0.28 percent of holder value for one round trip at maximum rates.
 - **N-34 (medium, accepted for V2):** with a funded LP adapter, the deposit gate (marked non-gold loss above the dust threshold, default 1 USDC) closes as soon as entry costs are booked. Mitigation: the board raises the dust threshold before LP funding (runbook). We would like the auditors' view on a better gate for LP strategies.
 - **N-36 (low, accepted for V2):** the aggregator returns one global winner; a tier whose mask excludes it reverts instead of falling back. Mainnet uses one aggregator for one Conservative executor and enables only strategies in its mask.
+- **N-40 (low, accepted for V2):** the N-35 guard can be met with a 1-wei deployment, so an owner plus a board screening of a depositor's wallet (public 30-day timelock on V2) could pull that wallet's allowance.
 - **N-18, N-28:** `ConventionalVault`, out of scope.
 - **Manager-dependent exits:** deployed capital returns only when the manager (or owner) recalls it; no permissionless withdrawal queue. `maxWithdraw`/`maxRedeem` reflect idle liquidity.
 - **Concealed LP loss:** if a `HalalLPAdapter` price is unreadable, deposits are blocked but exits are priced at unmarked NAV.
@@ -101,7 +102,7 @@ Run from the repository root with Foundry (`forge 1.x`, the project pins `solc 0
 
 ```bash
 forge build --sizes                      # ShariahVaultV2 runtime 24,414 B (limit 24,576)
-forge test                               # 2074 passed, 0 failed, 4 skipped on 2026-10-31 (fork suites skip without ARC_TESTNET_RPC / ARC_MAINNET_RPC)
+forge test                               # 2097 passed, 0 failed, 4 skipped on 2026-10-31 (fork suites skip without ARC_TESTNET_RPC / ARC_MAINNET_RPC)
 forge test --match-path 'contracts/test/invariant/*'
 contracts/script/local/run-local.sh      # deploy-script rehearsal on a local anvil: 207 checks passed
 ```

@@ -1235,7 +1235,7 @@ contract SRF05CharityEscrowOnceTest is Test {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  F-06  Rehearsal.s.sol TestnetRegistryShortTimelock — mainnet chain guard
+//  F-06 / N-41  Rehearsal.s.sol TestnetRegistryShortTimelock — chain allowlist (Arc Testnet or local)
 // ═════════════════════════════════════════════════════════════════════════════
 contract SRF06RehearsalGuardTest is Test {
     address internal owner  = makeAddr("owner");
@@ -1244,7 +1244,7 @@ contract SRF06RehearsalGuardTest is Test {
 
     function test_F06_deployRevertsOnArcMainnet5042() public {
         vm.chainId(5042);
-        vm.expectRevert(bytes("mainnet forbidden"));
+        vm.expectRevert(bytes("Arc Testnet or local only"));
         new TestnetRegistryShortTimelock(owner, board);
     }
 
@@ -1256,9 +1256,17 @@ contract SRF06RehearsalGuardTest is Test {
         assertEq(r.TESTNET_TIMELOCK_PERIOD(), 2 minutes);
     }
 
-    function testFuzz_F06_deployWorksOnAnyChainExcept5042(uint64 chainId) public {
-        vm.assume(chainId != 5042 && chainId != 0);
+    /// N-41 (P-2 F5): allowlist, not denylist. Any chain other than Arc Testnet or local anvil reverts,
+    /// so the 2-minute board timelock can never exist on Ethereum, Base or another mainnet.
+    function testFuzz_N41_deployRevertsOnAnyOtherChain(uint64 chainId) public {
+        vm.assume(chainId != 5042002 && chainId != 31337 && chainId != 0);
         vm.chainId(chainId);
+        vm.expectRevert(bytes("Arc Testnet or local only"));
+        new TestnetRegistryShortTimelock(owner, board);
+    }
+
+    function test_N41_deployWorksOnLocalAnvil() public {
+        vm.chainId(31337);
         TestnetRegistryShortTimelock r = new TestnetRegistryShortTimelock(owner, board);
         assertEq(r.owner(), owner);
     }
@@ -1268,9 +1276,9 @@ contract SRF06RehearsalGuardTest is Test {
         TestnetRegistryShortTimelock r = new TestnetRegistryShortTimelock(owner, board);
         vm.chainId(5042);
         vm.startPrank(board);
-        vm.expectRevert(bytes("mainnet forbidden"));
+        vm.expectRevert(bytes("Arc Testnet or local only"));
         r.proposeScreeningTestnet(adapter, keccak256("ruling"), block.timestamp + 365 days);
-        vm.expectRevert(bytes("mainnet forbidden"));
+        vm.expectRevert(bytes("Arc Testnet or local only"));
         r.executeScreeningTestnet(adapter);
         vm.stopPrank();
     }
