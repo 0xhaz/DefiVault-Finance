@@ -1,6 +1,7 @@
 import { useReadContract } from 'wagmi';
 import { formatUnits } from 'viem';
 import { TRACKER_ADDRESS, TRACKER_ABI, STRATEGY_NAMES, STRATEGY_COLORS } from '../contracts';
+import { ARC_CHAIN_ID } from '../chain';
 
 interface Position {
   id: bigint;
@@ -16,7 +17,6 @@ interface Position {
 }
 
 const STATUS_LABEL = ['Open', 'Closing', 'Closed'];
-const ARC_CHAIN_ID = 5042002;
 
 function elapsed(ts: bigint): string {
   const secs = Math.floor(Date.now() / 1000) - Number(ts);

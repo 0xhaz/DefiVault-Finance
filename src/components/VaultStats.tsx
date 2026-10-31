@@ -2,6 +2,7 @@ import { useReadContract } from 'wagmi';
 import { formatUnits } from 'viem';
 import { TrendingUp, Lock, Layers, BarChart2 } from 'lucide-react';
 import { VAULT_ADDRESS, VAULT_ABI, TRACKER_ADDRESS, TRACKER_ABI } from '../contracts';
+import { ARC_CHAIN_ID } from '../chain';
 
 interface StatCardProps {
   label: string;
@@ -45,7 +46,6 @@ function StatCard({ label, icon, value, sub, highlight, positive, negative }: St
   );
 }
 
-const ARC_CHAIN_ID = 5042002;
 
 export function VaultStats() {
   const isDeployed = VAULT_ADDRESS.length > 2;

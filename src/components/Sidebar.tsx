@@ -1,6 +1,7 @@
 import { LayoutDashboard, Vault, BarChart2, Briefcase, Bell, Settings, ChevronRight, Zap, X, Menu, Shield, Moon, Globe } from 'lucide-react';
 import { useState } from 'react';
 import type { VaultMode } from '../App';
+import { ARC_NETWORK_NAME } from '../chain';
 
 export type Page = 'landing' | 'dashboard' | 'vault' | 'strategies' | 'portfolio' | 'alerts' | 'settings';
 
@@ -184,7 +185,7 @@ export function Sidebar({ current, onNavigate, agentRunning, vaultMode, onVaultM
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-xs font-medium truncate" style={{ color: 'var(--ink-2)' }}>defivault.finance</p>
-            <p className="text-xs truncate" style={{ color: 'var(--subtle)' }}>Arc Testnet</p>
+            <p className="text-xs truncate" style={{ color: 'var(--subtle)' }}>{ARC_NETWORK_NAME}</p>
           </div>
         </div>
       </div>

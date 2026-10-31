@@ -3,6 +3,7 @@ import { useWatchContractEvent } from 'wagmi';
 import { formatUnits } from 'viem';
 import { Zap, TrendingUp, AlertCircle, CheckCircle, ArrowUpRight } from 'lucide-react';
 import { AGGREGATOR_ADDRESS, AGGREGATOR_ABI, EXECUTOR_ADDRESS, EXECUTOR_ABI, STRATEGY_NAMES, STRATEGY_COLORS } from '../contracts';
+import { ARC_CHAIN_ID, ARC_EXPLORER } from '../chain';
 
 type EventKind = 'score' | 'execution' | 'info' | 'warning';
 
@@ -35,8 +36,6 @@ function shortHash(h: string): string {
   return `${h.slice(0, 8)}…${h.slice(-6)}`;
 }
 
-const ARC_EXPLORER = 'https://explorer.testnet.arc.io';
-const ARC_CHAIN_ID = 5042002;
 
 const SEED_EVENTS: ActivityEvent[] = [
   { id: 'seed-1', kind: 'info', title: 'Agent initialised', detail: 'Scanning 5 data sources in parallel', timestamp: Date.now() - 90_000 },
