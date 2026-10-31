@@ -46,6 +46,8 @@ contract ShariahVault is AutonomousVault {
     /// @dev N-33: settlement re-reads each funded adapter 8 times; 8 x ADAPTER_READ_GAS (150k) plus margin.
     uint256 internal constant EXIT_SETTLE_GAS_PER_ADAPTER = 1_300_000;
     error UseAtomicDeploy(address adapter);
+    /// @notice N-35: returnCapital only pulls from an adapter that holds booked principal.
+    error AdapterNotFunded(address adapter);
     error RemoteRecipientNotApproved(uint32 domain, bytes32 recipient);
     error NoPendingRemoteRecipient();
     error RemoteRecipientProposalExists();
@@ -926,6 +928,8 @@ library ShariahAccountingLogic {
         address[] storage funded, mapping(address => uint256) storage index,
         mapping(address => uint256) storage principalOf, address token, address adapter, uint256 amount
     ) external returns (uint256 retired) {
+        // N-35: never pull through an arbitrary allowance (e.g. a depositor's approval to the vault).
+        if (principalOf[adapter] == 0) revert ShariahVault.AdapterNotFunded(adapter);
         IERC20(token).safeTransferFrom(adapter, address(this), amount);
         retired = _retire(funded, index, principalOf, adapter, amount);
         emit AutonomousVault.CapitalReturned(adapter, amount);
