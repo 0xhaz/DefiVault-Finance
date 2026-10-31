@@ -317,3 +317,39 @@ Stack: see `docs/agents/deployed-addresses.md` (run 3). Executed on Arc Testnet 
 | Wiring | `setMessageTransmitter` set to Arc Testnet MessageTransmitterV2 `0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275`; vault `localDomain` = 26 |
 
 Not run live: step 5 (cross-chain round trip needs a 30-day remote-recipient approval and a real attestation) and step 6 (stale oracle needs more than a day of waiting).
+
+---
+
+## Run 6 (2026-10-31): current code, real Uniswap V3 LP on Arc Testnet
+
+Stack: run 6 in `docs/agents/deployed-addresses.md` (vault `0x682EA638a167cf812a5694ebCDb15Ae2516e75c6`), deployed from the head of the PR stack (N-33, N-35 to N-41). The vault runtime on chain matches the source (24,414 B). Single testnet key `0x3D23…98f9` acts as deployer, owner, board, oracle and depositor.
+
+### LP-3 / LP-4: Uniswap V3 on Arc Testnet
+
+| Step | Tx | Result |
+|---|---|---|
+| Deploy factory, NPM, SwapRouter02, MVOL, two pools (`DeployUniswapV3Testnet.s.sol`) | 10 tx from block 70015544 (broadcast file) | All status 1. Runtime sizes equal the official Arc mainnet code. USDC/EURC 0.05% at tick -1089, MVOL/USDC 0.3% at 1:1, cardinality next 300 |
+| Seed (`seed-testnet.sh`) | `cast send` x6 | USDC/EURC: 9.60 USDC + 9 EURC (ticks -1600 to -600); MVOL/USDC: 10 + 10 full range. NPM pulled Arc's native-coin USDC without issue |
+| Swap 0.1 USDC to EURC via SwapRouter02 | `0x3ccace1b5e0452e22706de0453a86fada44f56d1cf0c146ea7a55a50cf8964d7` | 0.089616 EURC out (price 0.897 less the 0.05% fee) |
+
+### LP-5: wire the LP adapter
+
+| Step | Tx | Result |
+|---|---|---|
+| Deploy `HalalLPAdapter` (USDC/EURC 0.05%, `DeployHalalLP.s.sol`) | broadcast file | `0xB0452Ac499bDF8F94F83cDc5cA64b4F06e1cd911` |
+| Propose screening (2-minute testnet registry) | `step3_screenS3H` | Proposed 13:26:46 UTC |
+| Execute screening + `setScreened` | `step3b_executeScreening` | Registry and vault both report screened. A first attempt 3 s before the 2-minute mark reverted `timelock not elapsed`, as designed |
+| Executor config HALAL_LP (min 0.1, max 1 USDC) | `0xc731662d4f892587d470cb11f95e3d65986dccd4aa3aa993525ac056eaf62531` | status 1 |
+| Aggregator enable index 2 (testnet only, no board pronouncement) | `0x6532eb23bff49d1796825d354344d659fe65e85fe1b6e6d73f5577ab50ace92d` | status 1 |
+| Deposit 5 USDC | `0x328de713880b02b2d853af98f5041ac86806185c00d9137fcc0541007d61af2d` | 5e12 shares, `totalAssets` 5 USDC |
+
+### T-5: 30-day clocks started (execute after 2026-11-30 13:30 UTC)
+
+| Proposal | Tx | Status |
+|---|---|---|
+| GoldExchangeAdapter emergency exit enable | `0x709186e20da58cb9df8e71696c318bb01ad20818abd2a0a08ac2e4880db618dc` | Pending. Also locks its oracle while pending (N-39) |
+| GoldAllocationAdapter emergency exit enable | `0x0d5dee385df7e012483dd84489d07e8f8d873645362d665115651ef69d9176ad` | Pending |
+| HalalLPAdapter max slippage 100 to 150 bps | `0xcc86442b373c6d8b451b84c7e16d4f6b7de625b94ab13320b1656f84514bcde5` | Pending |
+| Vault dust threshold 1.0 to 0.9 USDC | `0x4e2778e0a0295ae31e929b0e8d8112dea423e4e78b9e2531825ecf4d27141703` | Pending |
+| Remote recipient, CCTP domain 0 (ETH-Sepolia), deployer address | `0x583f7837a637ac5c8f1436e3fb4d7f41a061307bcc4c389644f33967b856c347` | Pending; needed for the live CCTP round trip (T-1) |
+| Charity rate 250 to 300 bps | `0xd89e00352646cf7a943b6b3bb048c714987315dd50b76526c2424c2cdefe43a1` | **Cancelled** (`0xdf5105f995ed169697f95b01ee168355cdb33f1e7eb16fe5f1105f07b5a6f845`): the cancel path works |

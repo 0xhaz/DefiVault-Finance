@@ -14,7 +14,53 @@ Tx: `0x6284050ab2f006a6fd23e4aae529bdfd8c749dbeaa32e310463b6bc9105a7338` Block: 
 
 ---
 
-## Deploy batch — 2026-10-31 run 5 (ACTIVE)
+## Deploy batch — 2026-10-31 run 6 (ACTIVE)
+
+Script: `contracts/script/Rehearsal.s.sol:Rehearsal` → `step1_deploy()` (broadcast: `broadcast/Rehearsal.s.sol/5042002/step1_deploy-latest.json`, 39 transactions, all status 1, blocks 70015865 to 70016012, first tx `0x65ed46097783b689af328e95ff57bcdf803832fef7d2e8bdc063608edfd8261e`)  
+Deployer, owner and testnet board: `0x3D23214d59CA3582628FffFE44D0Df1CC73D98f9` (single testnet key).  
+Source: the head of the PR stack (#1 to #24), including N-33 and N-35 to N-41. Verified: the `ShariahVaultV2` runtime on chain is 24,414 bytes and matches `forge inspect ShariahVaultV2 deployedBytecode` except for library links and immutables (882 bytes, all explained).  
+Run 5 is superseded: it predates N-33 and N-35 to N-41.
+
+| Contract | Address | Notes |
+|---|---|---|
+| TestnetRegistryShortTimelock | `0xC38385015e2Bf2d73F832f01d7C73e37f523A188` | 2-minute timelock, Arc Testnet or local only (N-41) |
+| ZakatModule | `0x44C7A194f40055488a85C79845eCf5AE012388f8` | v1 compat shim |
+| TreasuryModule | `0x0B19d294A250eD18d99EB2B78213fB1F91B6AeD6` | feeSource = vault |
+| ShariahVaultV2 (Conservative) | `0x682EA638a167cf812a5694ebCDb15Ae2516e75c6` | Primary vault |
+| CharityModule | `0x166844F88CC45214f52642329d00d97314659cF9` | escrow wired |
+| PurificationEscrow | `0xc242613D7739E2E83b9A2290c1fCf06B5B1b7C73` | |
+| GoldExchangeAdapter (S2-H) | `0xeb4Ec01d020c01ffE8C1651Ed39f950036950dc4` | |
+| GoldAllocationAdapter (S6-H) | `0xE6f20E0c173c8eCdd520A3D0Abe543cD929bd9d5` | |
+| ShariahScoreAggregator | `0xDAb78c83EF0DF6778E79BA26dC4Bd21Ba39d1641` | |
+| RiskTieredExecutor | `0xBd106C388b0ca97129F7F13e55d52e7c9Fc8AbAF` | vault manager |
+| HalalLPAdapter (S3-H, USDC/EURC 0.05%) | `0xB0452Ac499bDF8F94F83cDc5cA64b4F06e1cd911` | `DeployHalalLP.s.sol`; pool from the testnet Uniswap V3 below |
+| MockAllocatedGold (PAXG) | `0xE260b4307eA80C3B03BFEBCc26cD81Ec48A502A2` | Testnet mock only |
+| MockXAUT | `0xa7AF135b82794246c03694f701A6253B4522162F` | Testnet mock only |
+| MockXauUsdAggregator | `0xC7C78C39347cf9a4B980C8461349eae9f5000368` | Testnet mock only |
+| MockUniswapV3PoolXAUT | `0x2F98AA588536e7aF3186520d9B941B3BE4B5d546` | Testnet mock only |
+| CctpSettlementLogic (library) | `0x891453f2C318B79b92a1d4CAe1d308ca29a6F3c6` | |
+| ShariahAccountingLogic (library) | `0x19151a9058843708E47F48E80b919333b3029AE1` | |
+| ShariahGovernanceLogic (library) | `0x8e06d14D2a0551cFA2D1E23Ed037D28775128060` | |
+| ShariahRegistryLogic (library) | `0xCe3aDB44203FaC0Ee90254e5dF8f9A9CA6Fd94C9` | |
+
+## Uniswap V3 on Arc Testnet (deployed by us, 2026-10-31, LP-3)
+
+Official Uniswap V3 code (byte-identical to the Arc mainnet deployment apart from immutables; see `contracts/script/uniswap-v3/PROVENANCE.md`), deployed with `contracts/script/DeployUniswapV3Testnet.s.sol` (broadcast: `broadcast/DeployUniswapV3Testnet.s.sol/5042002/run-latest.json`, 10 transactions, all status 1, from block 70015544) and seeded with `contracts/script/uniswap-v3/seed-testnet.sh`. Testnet only; WETH9 and the NFT descriptor are inert placeholders.
+
+| Contract | Address | Notes |
+|---|---|---|
+| UniswapV3Factory | `0x212349EB7aC46556aBca4872C906DA937Bac95E6` | |
+| NonfungiblePositionManager | `0xb628B1a433A8C9188c27886fCc7105D80C27eC05` | |
+| SwapRouter02 | `0x3D9fCC1a29ce7ec531031342c6A030DFde228553` | |
+| MockVolatile (MVOL) | `0x1f500146310A4F6f21dDd671B6F23232Dce2B361` | Testnet mock, permissionless mint, sorts below USDC |
+| Pool USDC/EURC 0.05% | `0xf9FC660B168E8a2194725D008d85a8933Da8E590` | USDC token0, initialized at the mainnet price (tick -1089), cardinality 300, seeded about 9.6 USDC + 9 EURC in ticks -1600 to -600 |
+| Pool MVOL/USDC 0.3% | `0x36B8E43d1270701e5E1539Ee1c9e23FaB4dCba63` | USDC token1, 1:1, cardinality 300, seeded 10 USDC + 10 MVOL full range |
+
+Live check: a 0.1 USDC swap through SwapRouter02 returned 0.089616 EURC (tx `0x3ccace1b5e0452e22706de0453a86fada44f56d1cf0c146ea7a55a50cf8964d7`). This confirms the pool and NPM work with Arc's native-coin USDC.
+
+---
+
+## Deploy batch — 2026-10-31 run 5 (SUPERSEDED by run 6)
 
 Script: `contracts/script/Rehearsal.s.sol` → `step1_deploy()` (broadcast: `broadcast/Rehearsal.s.sol/5042002/step1_deploy-latest.json`)  
 Deployer: `0x3D23214d59CA3582628FffFE44D0Df1CC73D98f9`  
