@@ -22,7 +22,7 @@
     {
       "symbol": "PAXG",
       "name": "PAX Gold",
-      "basis": "Physical gold-backed ERC-20, 1:1 Brinks custody, universally halal commodity",
+      "basis": "Physical gold-backed ERC-20, 1:1 Brinks custody, physical commodity (board ruling pending)",
       "status": "PERMITTED",
       "boardResolution": "SR-005",
       "note": "GoldExchangeAdapter (S2-H) confirmed atomic swap. SR-006 (PAXG custody terms) pending."
@@ -33,7 +33,7 @@
       "basis": "Physical gold-backed ERC-20 — awaiting Amanah Advisors certification acceptance",
       "status": "PENDING_BOARD",
       "boardResolution": "SR-008",
-      "note": "GoldAllocationAdapter (S6-H) written. shariahCertified[5] = false until SR-008 resolved."
+      "note": "GoldAllocationAdapter (S6-H) written. strategyEnabled[5] = false until SR-008 resolved."
     }
   ],
   "prohibitedAssets": [

@@ -1077,7 +1077,7 @@ app.post('/api/apy/estimate', (req, res) => {
   const STRATEGY_YIELD_RANGES: Record<number, { p10: number; p50: number; p90: number; name: string }> = {
     0: { p10: 0.5,  p50: 1.5,  p90: 4.0,  name: 'S1-H ETH Spread' },
     1: { p10: 0.3,  p50: 1.2,  p90: 3.5,  name: 'S2-H Gold Spread' },
-    2: { p10: 2.0,  p50: 4.5,  p90: 9.0,  name: 'S3-H Halal LP' },
+    2: { p10: 2.0,  p50: 4.5,  p90: 9.0,  name: 'S3-H LP swap fees' },
     3: { p10: 1.0,  p50: 2.5,  p90: 5.0,  name: 'S4-H Murabaha' },
     4: { p10: 0.0,  p50: 0.0,  p90: 0.0,  name: 'S5-H RESERVED (disabled)' },
     5: { p10: 0.5,  p50: 1.8,  p90: 4.2,  name: 'S6-H Gold Allocation' },

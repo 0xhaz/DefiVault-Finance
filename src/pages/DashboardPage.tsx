@@ -17,8 +17,8 @@ interface DashboardPageProps {
 const TIER_META: Record<TierSelection, { label: string; color: string; desc: string }> = {
   passive:              { label: 'PASSIVE',               color: '#acc6e9', desc: 'Strategies: S1 + S4 · Protocols: Compound V3, Curve 3pool' },
   aggressive:           { label: 'AGGRESSIVE',            color: '#f0b429', desc: 'All 4 strategies · Protocols: Aave 2x Loop, GMX GLP, Compound, Curve' },
-  'shariah-conservative': { label: 'SHARIAH CONSERVATIVE', color: '#8dd89f', desc: '3 low-vol halal strategies · Halal LP, RWA/Sukuk, Gold Spread · Wakala 0.5%' },
-  'shariah-dynamic':    { label: 'SHARIAH DYNAMIC',       color: '#a8d4e8', desc: '5 halal strategies · Full Shariah universe · Wakala 0.5% + Musharakah 10%' },
+  'shariah-conservative': { label: 'SHARIAH CONSERVATIVE', color: '#8dd89f', desc: '3 low-vol screened strategies · Gold Spread, LP, Gold Allocation · Wakala 0.5%' },
+  'shariah-dynamic':    { label: 'SHARIAH DYNAMIC',       color: '#a8d4e8', desc: '5 screened strategies · Full Shariah universe · Wakala 0.5% + Musharakah 10%' },
 };
 
 export function DashboardPage({ selectedTier, onSelectTier, onAgentRunningChange, vaultMode }: DashboardPageProps) {
@@ -107,7 +107,7 @@ function ShariahStrategyScores() {
               style={{ background: 'rgba(240,180,41,0.1)', color: '#f0b429', fontSize: '0.55rem' }}>SIM</span>
           )}
           <span className="text-xs px-2 py-0.5 rounded-full"
-            style={{ background: 'rgba(141,216,159,0.1)', color: '#8dd89f', fontSize: '0.6rem' }}>HALAL</span>
+            style={{ background: 'rgba(141,216,159,0.1)', color: '#8dd89f', fontSize: '0.6rem' }}>SCREENED</span>
         </div>
       </div>
       {strategies.map(s => (

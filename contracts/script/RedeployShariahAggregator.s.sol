@@ -43,11 +43,11 @@ contract RedeployShariahAggregator is Script {
         //    indices 0,1,2,3 = true  (ETH_SPREAD, GOLD_SPREAD, HALAL_LP, MURABAHA)
         //    index 4 = false         (RESERVED_4 / RWA_SUKUK — blocked per SR-001)
         //    index 5 = false         (GOLD_ALLOCATION — pending board acceptance SR-008)
-        newAggregator.setCertified(ShariahScoreAggregator.ShariahStrategy.ETH_SPREAD, true);
-        newAggregator.setCertified(ShariahScoreAggregator.ShariahStrategy.GOLD_SPREAD, true);
-        newAggregator.setCertified(ShariahScoreAggregator.ShariahStrategy.HALAL_LP, true);
-        newAggregator.setCertified(ShariahScoreAggregator.ShariahStrategy.MURABAHA, true);
-        // RESERVED_4 (index 4): stays false — no setCertified needed
+        newAggregator.setEnabled(ShariahScoreAggregator.ShariahStrategy.ETH_SPREAD, true);
+        newAggregator.setEnabled(ShariahScoreAggregator.ShariahStrategy.GOLD_SPREAD, true);
+        newAggregator.setEnabled(ShariahScoreAggregator.ShariahStrategy.HALAL_LP, true);
+        newAggregator.setEnabled(ShariahScoreAggregator.ShariahStrategy.MURABAHA, true);
+        // RESERVED_4 (index 4): stays false — no setEnabled needed
         // GOLD_ALLOCATION (index 5): stays false — pending SR-008 board acceptance
         console.log("  Certified flags applied: [0..3]=true, [4,5]=false");
 

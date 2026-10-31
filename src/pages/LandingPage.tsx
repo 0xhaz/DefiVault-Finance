@@ -8,9 +8,9 @@ interface LandingPageProps {
 
 const STATS = [
   { label: 'Target APY',      value: '18–34%',  sub: 'Aggressive vault' },
-  { label: 'Halal APY',       value: '8–16%',   sub: 'Shariah Conservative' },
+  { label: 'Shariah APY',       value: '8–16%',   sub: 'Shariah Conservative' },
   { label: 'Scan Interval',   value: '30s',      sub: 'Fastest strategy' },
-  { label: 'Total Strategies',value: '9',        sub: '4 conventional · 5 halal' },
+  { label: 'Total Strategies',value: '9',        sub: '4 conventional · 5 screened' },
 ];
 
 const FEATURES = [
@@ -29,13 +29,13 @@ const FEATURES = [
   {
     icon: <Shield size={18} strokeWidth={1.8} />,
     title: 'Four Risk Tiers',
-    desc: 'Passive and Aggressive for conventional DeFi. Conservative Shariah (Gold Spread + Halal LP only) and Dynamic Shariah (all 4 active halal strategies) for the Muslim community — fully isolated capital.',
+    desc: 'Passive and Aggressive for conventional DeFi. Conservative Shariah (Gold Spread + LP + Gold Allocation) and Dynamic Shariah (all 5 active screened strategies) for the Muslim community — fully isolated capital.',
     color: '#8dd89f',
   },
   {
     icon: <Moon size={18} strokeWidth={1.8} />,
-    title: 'Shariah Compliant',
-    desc: 'Two dedicated Shariah vaults with Wakala (0.5% AUM) + Musharakah (10% profit-share above 4% hurdle) fee structure and automatic 2.5% charity routing. 5 active halal strategies. RWA/Sukuk removed per board screening (SR-001).',
+    title: 'Shariah-Screened',
+    desc: 'Two dedicated Shariah vaults with Wakala (0.5% AUM) + Musharakah (10% profit-share above 4% hurdle) fee structure and automatic 2.5% charity routing. 5 active screened strategies. RWA removed per board screening (SR-001).',
     color: '#c9b8f5',
   },
   {
@@ -62,7 +62,7 @@ const CONVENTIONAL_STRATEGIES = [
 const SHARIAH_STRATEGIES = [
   { num: 'S1-H', name: 'USDC/ETH Cross-Chain Spread',    trigger: 'Every 30s',    rule: 'Spread >0.35% between Arc/Arbitrum/Base — commodity arbitrage (SR-007 pending)',                tiers: ['dynamic'] },
   { num: 'S2-H', name: 'Atomic Gold Spread',             trigger: 'Every 30s',    rule: 'PAXG/USDC swap >0.4% premium — single-tx atomic swap (yad bi yad, SR-005)',                      tiers: ['conservative', 'dynamic'] },
-  { num: 'S3-H', name: 'Halal Liquidity Pool',           trigger: 'Event-driven', rule: 'Uniswap V3 USDC/ETH swap-fee APY >8% — swap-fee income only',                                    tiers: ['conservative', 'dynamic'] },
+  { num: 'S3-H', name: 'Swap-fee Liquidity Pool',           trigger: 'Event-driven', rule: 'Uniswap V3 USDC/ETH swap-fee APY >8% — swap-fee income only',                                    tiers: ['conservative', 'dynamic'] },
   { num: 'S4-H', name: 'Commodity Murabaha',             trigger: 'Event-driven', rule: 'Murabaha trade request with markup >1.2% — cost-plus, counterparty required',                     tiers: ['dynamic'] },
   // S5-H (RWA/Sukuk) removed — OUSG/BUIDL are US Treasury-backed; yield is riba. SR-001.
   { num: 'S6-H', name: 'Gold Allocation (XAUT, spot)',   trigger: 'Every 5 min',  rule: 'XAUT weight drifts >5% from 20% target — no yield, value follows gold price (SR-008 pending)',   tiers: ['conservative', 'dynamic'] },
@@ -111,7 +111,7 @@ const VAULT_TIERS = [
     community: 'Shariah',
     apy: '12–22%',
     risk: 'Moderate',
-    strategies: 'All 5 halal',
+    strategies: 'All 5 screened',
     protocols: 'Uniswap V3, PAXG, XAUT, Murabaha',
     minScore: 70,
     cooldown: '1h',
@@ -186,7 +186,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
           {/* Community callout */}
           <p className="text-sm max-w-xl mx-auto mb-10 text-pretty" style={{ color: 'var(--subtle)', lineHeight: 1.6 }}>
             Two communities, four vaults. Conventional investors get Passive and Aggressive tiers.
-            The Muslim community gets two fully isolated Shariah vaults with Wakala fees and charity routing — 5 screened halal strategies including gold allocation (XAUT, spot). RWA/Sukuk removed per SR-001.
+            The Muslim community gets two fully isolated Shariah vaults with Wakala fees and charity routing — 5 screened strategies including gold allocation (XAUT, spot). RWA removed per SR-001.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -419,10 +419,10 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
               <div className="flex items-center gap-2 mb-3">
                 <p className="text-xs uppercase font-semibold" style={{ color: '#8dd89f', letterSpacing: '0.1em' }}>Shariah</p>
               </div>
-              <h3 className="display text-xl font-bold mb-2" style={{ color: 'var(--ink)', letterSpacing: '-0.02em' }}>Two halal tiers, no riba</h3>
+              <h3 className="display text-xl font-bold mb-2" style={{ color: 'var(--ink)', letterSpacing: '-0.02em' }}>Two Shariah tiers, no riba</h3>
               <p className="text-sm mb-5 text-pretty" style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
-                Conservative Shariah runs Gold Spread + Halal LP + Gold Allocation (mask 0b100110). Dynamic Shariah runs all 5 active strategies (mask 0b101111).
-                Wakala 0.5% + Musharakah 10% fees. Charity 2.5% routing. RWA/Sukuk removed per SR-001.
+                Conservative Shariah runs Gold Spread + LP + Gold Allocation (mask 0b100110). Dynamic Shariah runs all 5 active strategies (mask 0b101111).
+                Wakala 0.5% + Musharakah 10% fees. Charity 2.5% routing. RWA removed per SR-001.
               </p>
               <div className="flex gap-3">
                 <div className="rounded-lg px-3 py-2 text-center" style={{ background: 'rgba(141,216,159,0.08)', border: '1px solid rgba(141,216,159,0.15)' }}>

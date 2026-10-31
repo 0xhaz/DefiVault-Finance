@@ -174,7 +174,7 @@ export function StrategiesPage({ selectedTier, onSelectTier, onAgentRunningChang
           <h1 className="display text-2xl font-bold" style={{ color: 'var(--ink)', letterSpacing: '-0.03em' }}>Strategies</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--subtle)' }}>
             {isShariahTab
-              ? `Live scores for ${effectiveTier === 'shariah-conservative' ? '3' : '5'} active halal strategies${effectiveTier === 'shariah-conservative' ? ' (Conservative: Gold Spread + Halal LP + Gold Allocation)' : ''}`
+              ? `Live scores for ${effectiveTier === 'shariah-conservative' ? '3' : '5'} active screened strategies${effectiveTier === 'shariah-conservative' ? ' (Conservative: Gold Spread + Halal LP + Gold Allocation)' : ''}`
               : 'Live scores for all 4 AI-scored signal strategies'}
           </p>
         </div>
@@ -216,8 +216,8 @@ export function StrategiesPage({ selectedTier, onSelectTier, onAgentRunningChang
         {isShariahTab && (
           <div className="flex items-center gap-2">
             <span className="text-xs px-2 py-0.5 rounded"
-              style={{ background: 'rgba(141,216,159,0.1)', color: '#8dd89f', fontSize: '0.6rem' }}>HALAL</span>
-            <span className="text-xs" style={{ color: 'var(--muted)' }}>Shariah-board certified</span>
+              style={{ background: 'rgba(141,216,159,0.1)', color: '#8dd89f', fontSize: '0.6rem' }}>SCREENED</span>
+            <span className="text-xs" style={{ color: 'var(--muted)' }}>Screened; board ruling pending</span>
           </div>
         )}
         {!isShariahTab && (

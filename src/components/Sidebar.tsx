@@ -15,7 +15,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode; badge?: strin
 
 const MODE_OPTIONS: { id: VaultMode; label: string; sub: string; icon: typeof Shield; color: string }[] = [
   { id: 'conventional', label: 'Conventional', sub: 'Passive & Aggressive',   icon: Shield, color: '#acc6e9' },
-  { id: 'shariah',      label: 'Shariah',       sub: 'Halal strategies only',  icon: Moon,   color: '#8dd89f' },
+  { id: 'shariah',      label: 'Shariah',       sub: 'Screened strategies only',  icon: Moon,   color: '#8dd89f' },
   { id: 'both',         label: 'Both',          sub: 'All three tiers',        icon: Globe,  color: '#c9b8f5' },
 ];
 

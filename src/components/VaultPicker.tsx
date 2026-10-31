@@ -70,14 +70,14 @@ const PROTOCOL_LABELS_AGGRESSIVE = [
 // Conservative: Gold Spread + Halal LP + Gold Allocation (mask 0b100110)
 const CONSERVATIVE_PROTOCOLS = [
   { label: 'PAXG Gold Spread',      value: '2–6% APY' },
-  { label: 'Halal LP (Uni V3)',     value: '4–9% APY' },
+  { label: 'LP swap fees (Uni V3)',     value: '4–9% APY' },
   { label: 'XAUT Allocation (spot)', value: 'Gold price return' },
 ];
 // Dynamic: all 5 active halal strategies (mask 0b101111)
 const DYNAMIC_PROTOCOLS = [
   { label: 'ETH Cross-Chain Arb',   value: '3–8% APY' },
   { label: 'PAXG Gold Spread',      value: '2–6% APY' },
-  { label: 'Halal LP (Uni V3)',     value: '4–9% APY' },
+  { label: 'LP swap fees (Uni V3)',     value: '4–9% APY' },
   { label: 'Murabaha Trades',       value: 'Event-driven' },
   { label: 'XAUT Allocation (spot)', value: 'Gold price return' },
 ];
@@ -235,9 +235,9 @@ export function VaultPicker({ selectedTier, onSelect, vaultMode }: VaultPickerPr
           <ShariahTierCard
             tierKey="shariah-conservative"
             label="Conservative"
-            tagline="Low-vol halal strategies"
+            tagline="Low-vol screened strategies"
             icon={Moon}
-            params={{ maxAlloc: '40%', cooldown: '2h', minScore: '80', strategies: '3 halal' }}
+            params={{ maxAlloc: '40%', cooldown: '2h', minScore: '80', strategies: '3 screened' }}
             protocols={CONSERVATIVE_PROTOCOLS}
             rows={conservativeRows}
             isSelected={selectedTier === 'shariah-conservative'}
@@ -251,9 +251,9 @@ export function VaultPicker({ selectedTier, onSelect, vaultMode }: VaultPickerPr
           <ShariahTierCard
             tierKey="shariah-dynamic"
             label="Dynamic"
-            tagline="Full halal universe"
+            tagline="Full screened universe"
             icon={Star}
-            params={{ maxAlloc: '70%', cooldown: '1h', minScore: '70', strategies: '5 halal' }}
+            params={{ maxAlloc: '70%', cooldown: '1h', minScore: '70', strategies: '5 screened' }}
             protocols={DYNAMIC_PROTOCOLS}
             rows={dynamicRows}
             isSelected={selectedTier === 'shariah-dynamic'}
@@ -437,7 +437,7 @@ function ShariahTierCard({
           )}
           <span className="text-xs px-1.5 py-0.5 rounded font-medium"
             style={{ background: 'rgba(141,216,159,0.1)', color: iconColor, fontSize: '0.6rem' }}>
-            HALAL
+            SCREENED
           </span>
         </div>
       </div>

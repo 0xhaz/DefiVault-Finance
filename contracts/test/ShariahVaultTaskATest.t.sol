@@ -173,7 +173,7 @@ contract ShariahVaultTaskATest is Test {
         // Mark strategies 0-3 as certified and write scores — all as owner
         vm.startPrank(owner);
         for (uint8 i = 0; i < 4; i++) {
-            aggregator.setCertified(ShariahScoreAggregator.ShariahStrategy(i), true);
+            aggregator.setEnabled(ShariahScoreAggregator.ShariahStrategy(i), true);
         }
         aggregator.writeScore(ShariahScoreAggregator.ShariahStrategy.ETH_SPREAD,  80, bytes32(0), 0);
         aggregator.writeScore(ShariahScoreAggregator.ShariahStrategy.GOLD_SPREAD, 70, bytes32(0), 0);
