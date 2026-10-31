@@ -1,0 +1,138 @@
+# DeFiVault Shariah vault: independent audit handoff package
+
+Prepared 2026-10-31 for an external security audit ahead of any Arc mainnet deployment. Everything below describes the repository state at handoff; record the exact commit hash you freeze before the audit starts: `COMMIT: <REPLACE>`.
+
+No part of this stack has been deployed to Arc mainnet. The latest testnet deployment is "run 5" on Arc Testnet (chain ID 5042002); addresses are in `docs/agents/deployed-addresses.md`.
+
+## 1. What the system does
+
+A USDC ERC-4626 vault (`ShariahVaultV2`) for Shariah-governed strategies. Depositors receive shares. A manager contract (`RiskTieredExecutor`) deploys capital into screened strategy adapters (gold spot allocation, gold exchange, optionally an LP adapter), guided by scores written by an oracle operator. Profit is shared under a Musharakah arrangement: a hurdle rate, a high-water mark, a manager share of profit above the hurdle, a Wakala administration fee, a charity contribution and income purification. The vault is immutable and non-upgradeable.
+
+Plain-language rules the code is meant to enforce:
+- Only adapters screened by the board (30-day timelock, expiring, pronouncement hash) can receive funds.
+- Share price is net of the distribution cut a full claim would take, so a holder cannot exit before a claim and leave others to bear it.
+- Every exit settles the leaver's pro-rata share of realized profit through the real claim path.
+- Non-gold adapter losses mark the share price down; gold is oracle-priced in both directions; gains from non-gold adapters are never counted until realized.
+- Gold exposure is capped at 30 percent of NAV and goes through an atomic swap (no deferred settlement).
+- Exits are never blocked by external dependencies, except by the caller's own gas limit (below).
+
+## 2. Scope
+
+In scope (lines of Solidity at handoff):
+
+| File | Lines | Role |
+|---|---|---|
+| `contracts/ShariahVault.sol` | 1264 | Core vault logic and four linked libraries (accounting, governance, registry timelock, CCTP) |
+| `contracts/ShariahVaultV2.sol` | 217 | Registry-gated screening on top of the V1 vault |
+| `contracts/AutonomousVault.sol` | 578 | Base vault (ERC-4626, CCTP settlement, caps, pausing) |
+| `contracts/TreasuryModule.sol` | 204 | Fee and Musharakah split accounting |
+| `contracts/PurificationEscrow.sol` | 316 | Profit waterfall, purification, charity routing |
+| `contracts/CharityModule.sol` | 237 | Charity distribution and wallet/rate timelocks |
+| `contracts/ShariahAdapterRegistry.sol` | 298 | Board, screening, expiry, 30-day timelock |
+| `contracts/RiskTieredExecutor.sol` | 319 | Manager that deploys capital, gold-room clamp |
+| `contracts/ShariahScoreAggregator.sol` | 207 | Strategy scores written by the oracle operator |
+| `contracts/ZakatModule.sol` | 106 | Deprecated v1-compat module, still a constructor input |
+| `contracts/adapters/GoldExchangeAdapter.sol` | 517 | PAXG atomic swap adapter, emergency exit |
+| `contracts/adapters/GoldAllocationAdapter.sol` | 633 | XAUT spot allocation adapter, emergency exit |
+| `contracts/adapters/HalalLPAdapter.sol` | 568 | Two-sided Uniswap V3 LP adapter (tested against mocks only) |
+| `contracts/script/DeployMainnet.s.sol` | 382 | Production deployment script |
+| `contracts/script/DeployHalalLP.s.sol` | | LP adapter deployment script |
+
+Out of scope: `ConventionalVault.sol` and its conventional strategy adapters (not part of the Shariah launch; known findings N-18 and N-28 are recorded), everything under `contracts/test`, `contracts/test-helpers` and `contracts/script/Rehearsal.s.sol` (testnet only), the front end under `src/` and the agent server under `server/`.
+
+Compiler: `solc 0.8.28`, optimizer on, 200 runs, `evm_version = "paris"`. Dependencies: OpenZeppelin Contracts (`@openzeppelin/contracts`) and forge-std only.
+
+## 3. Architecture notes for reviewers
+
+- `ShariahVaultV2` inherits `ShariahVault`, which inherits `AutonomousVault`. All of it compiles into one contract. Runtime size is 24,317 bytes against the 24,576-byte limit, so logic was moved into four external linked libraries called by delegatecall with storage pointers. Review the storage-pointer parameters and the library entry points as part of the vault.
+- Dependencies are separate contracts the vault trusts: treasury, charity module, purification escrow, registry, adapters and the executor. Exit settlement calls the escrow, charity module and treasury inside a `try/catch`.
+- Arc specifics: USDC is the native gas token; the ERC-20 view has 6 decimals and the native view 18; sends to a blocklisted address revert; the mempool floors `maxFeePerGas` at 20 gwei.
+
+## 4. Areas that deserve the most attention
+
+1. **Exit settlement** (`_withdraw`, `exitSettle`, `ShariahAccountingLogic.executeWaterfall`): self-call in `try/catch` with a distribution lock; a gas guard (`InsufficientExitGas`, 2 x (700k + 250k per funded adapter)) added because `eth_estimateGas` otherwise picks a limit that starves the settlement; degraded mode when the escrow, charity or treasury is broken.
+2. **Net-of-cut pricing** (`totalAssets`, `pendingDistributionCut`, `PurificationEscrow.previewWaterfallHWM`): preview must equal the real waterfall; bounded 100k-gas read; failure yields a zero cut.
+3. **Hurdle and high-water-mark accounting**: carry-forward of unused hurdle across partial claims and exits, allocation of hurdle and deficit by the departing share fraction (alpha), deposit-time basis (`depositHurdle`), scaling on withdrawal, owner setter that can only increase with live supply. Known limitation N-32.
+4. **Mark-to-market of non-gold adapters** (`unrealizedAdapterLoss`, `valuationHealthy`): bounded assembly `staticcall` (100k gas, exactly 32 bytes returned), failure counts as zero loss for exits but blocks deposits, cap of 10 funded adapters, deposit gate above the dust threshold.
+5. **Gold adapters**: oracle and pool deviation guards, stale-price handling, cached price, per-sale emergency exit (proposal, 1 hour delay, 24 hour window, 20 percent floor, flag enabled by 30-day timelock), `retireGoldPrincipal` hook, oracle replacement lock while the emergency flag is on.
+6. **CCTP settlement** (`CctpSettlementLogic`): message header parsing against the real CCTP V2 layout, destination caller, replay protection, balance-delta check, fee handling. Verified on a fork of Arc Testnet against the real contracts; live attestations, the unfinalized path and hook data were not exercised.
+7. **Registry and governance**: board role, expiring screening, 30-day timelocks, plain `Ownable` registry (immediate ownership transfer).
+8. **Deployment script**: validation, phase ordering, ownership handoff, `verify()` assertions.
+9. **Executor**: gold-room clamp, gas ceiling, cooldown, anyone-can-call `executeWinner`.
+
+## 5. Trust model
+
+The table states the intended capabilities. Verifying the "cannot" column is part of the audit.
+
+| Actor | Can | Cannot |
+|---|---|---|
+| Owner multisig | Pause; set manager, gold links, permitted assets, caps; configure executor and aggregator; owner functions on adapters; raise (not lower) the hurdle principal | Withdraw user funds directly; bypass 30-day timelocks; change board members without the timelock |
+| Board multisig | Screen adapters, set charity wallet/rate, dust threshold, remote recipients (all timelocked) | Move funds; bypass expiry |
+| Manager (executor) | Deploy to screened adapters within caps; recall | Exceed gold cap; use unscreened adapters; withdraw to arbitrary addresses |
+| Oracle operator | Write scores for enabled strategies | Move funds |
+| Screened adapter | Report its own value (downward marks only for non-gold); hold deployed funds | Raise NAV above principal; block exits (reads are gas-bounded and failures treated as no markdown) |
+| Anyone | Deposit and redeem; call `executeWinner` (subject to cooldown, score threshold and gas ceiling) | Skip the exit settlement |
+
+Assumed honest: Circle (USDC and CCTP), the XAU/USD oracle, DEX liquidity for the gold adapters, the Shariah board's rulings, multisig signers.
+
+## 6. Known findings and limitations
+
+Fixed findings are listed with explanations in `docs/security-review.md` (N-01 to N-31). Open or accepted at handoff:
+
+- **N-32 (medium, accepted):** a deposit made while a large unprocessed profit exists and an HWM deficit is open can shrink the deficit; worst case measured about 0.28 percent of holder value for one round trip at maximum rates.
+- **N-18, N-28:** `ConventionalVault`, out of scope.
+- **Manager-dependent exits:** deployed capital returns only when the manager (or owner) recalls it; no permissionless withdrawal queue. `maxWithdraw`/`maxRedeem` reflect idle liquidity.
+- **Concealed LP loss:** if a `HalalLPAdapter` price is unreadable, deposits are blocked but exits are priced at unmarked NAV.
+- **Emergency exit lead time:** enabling needs 30 days; a crash beyond 80 percent still blocks it.
+- **Exit gas floor:** exits with realized profit revert below the gas floor; integrators with hardcoded low gas will fail. With very expensive adapter reads (about 90k each across ten adapters) no practical gas limit completes an exit.
+- **Degraded exit mode:** a broken escrow, charity or treasury leaves the leaver's cut in the vault as ordinary profit.
+- **Adapter self-reporting:** a screened adapter that overstates value is not detected.
+- **Size margin:** 259 bytes; the vault cannot take another feature without another split.
+- **Immutable:** no upgrade path; fixes require a new vault and migration.
+- **Pending Shariah rulings:** 24 board items (`docs/agents/SHARIAH_REVIEW.md`) are not yet ruled.
+
+## 7. Test evidence
+
+Run from the repository root with Foundry (`forge 1.x`, the project pins `solc 0.8.28`):
+
+```bash
+forge build --sizes                      # ShariahVaultV2 runtime 24,317 B (limit 24,576)
+forge test                               # 2066 tests passed, 0 failed at handoff (some fork tests skip without ARC_TESTNET_RPC)
+forge test --match-path 'contracts/test/invariant/*'
+contracts/script/local/run-local.sh      # deploy-script rehearsal on a local anvil: 207 checks passed
+```
+
+What exists:
+- Unit and scenario tests per module; fuzz tests (256 runs and above) for waterfall, hurdle, exits, retirement and valuation helpers.
+- Eight invariants (256 runs, depth 50): see `contracts/test/invariant/VaultInvariant.*.t.sol`.
+- Hostile-counterparty tests: reverting, gas-burning, malformed-returndata and re-entering adapters, escrows, charity wallets and treasuries.
+- Fork tests of CCTP V2 against the real Arc Testnet contracts (`ForkCctpRealArc*.t.sol`).
+- Library-level tests (`LibraryTests.*.t.sol`).
+- Gas measurement tests for the exit floor (`TaskReviewR5Test*.t.sol`).
+- Live Arc Testnet runs on run 5: deposit, executor deployment into gold, profit claim (share price unchanged across the claim), recall, and redemption with the settlement routed to charity and treasury.
+- Deploy-script rehearsal on a local anvil: governance validation, phase ordering, two-step ownership handoff, strict verification.
+
+What was not covered: any real Arc mainnet state; a real Uniswap pool or router; real PAXG/XAUT; real Chainlink-style feeds on Arc; real Safe execution; the real `HalalLPAdapter` against a pool; live CCTP attestations; the 30-day flows end to end on a real chain.
+
+## 8. Review history
+
+Internal AI-assisted reviews ran repeatedly during development (rule-based and functional passes). They produced the N-series findings, all but the items above are fixed with regression tests. Several review runs returned no usable report and were repeated or covered by hand; this history is not an independent assurance. Findings and decisions: `docs/security-review.md`, `docs/agents/SHARIAH_REVIEW.md`, `AGENTS.md`.
+
+## 9. Deployment parameters under review
+
+See `docs/mainnet-config.md`: fee parameters (Wakala, Musharakah share, hurdle), charity rate and wallet, caps, timelocks, executor gas ceiling, role split. Ask the auditors to comment on each default and bound.
+
+## 10. Questions for the auditors
+
+1. Is the net-of-cut share pricing combined with exit-time settlement free of manipulable windows (donation, sandwiching a claim, first-depositor effects with the 1e6 virtual-share offset)?
+2. Are the library entry points safe when called directly on the library address, and are the storage-pointer conventions sound?
+3. Can any actor force degraded exit mode, make exits unaffordable, or push cost onto other holders?
+4. Is the hurdle and deficit allocation by departing fraction exact enough, and are there deposit/withdraw sequences that let the manager earn more than a single claim would pay?
+5. Are the gold emergency-exit controls sufficient given the oracle lock, the 20 percent floor and the 30-day enable flag?
+6. Does the CCTP settlement handle every message variation the real MessageTransmitterV2 can deliver to the vault?
+7. Is the deployment script's ownership handoff sound, and does `verify()` prove the final state?
+8. Given Arc's USDC semantics (native gas token, blocklist, 6/18 decimal views), are there transfer or accounting edge cases?
+
+## 11. Contacts and logistics
+
+Maintainer contact: `<REPLACE>`. Board contact for rulings: `<REPLACE>`. Preferred channel and report format: `<REPLACE>`. Frozen commit and tag: `<REPLACE>`.
