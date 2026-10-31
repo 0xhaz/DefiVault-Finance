@@ -176,7 +176,8 @@ contract HalalLPAdapter is IStrategyAdapter, Ownable2Step, ReentrancyGuard {
         address vault_,
         address owner_
     ) Ownable(owner_) {
-        if (swapRouter_ == address(0)) revert ZeroAddress();
+        if (swapRouter_ == address(0) || positionManager_ == address(0) || vault_ == address(0)) revert ZeroAddress();
+        if (token0_ == address(0) || token1_ == address(0)) revert ZeroAddress();
         if (token0_ == token1_ || (usdc_ != token0_ && usdc_ != token1_)) revert InvalidPair();
         swapRouter = swapRouter_;
         positionManager = positionManager_;
