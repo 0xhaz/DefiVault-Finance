@@ -70,8 +70,7 @@ abstract contract TaskN26Edge is TaskN26Core {
     }
 
     function test_e_zeroPrincipal_noRevert_startIsNow() public {
-        vm.prank(owner);
-        vault.setHurdlePrincipal(0);
+        _forceHurdlePrincipal(0);
         _accrue(YEAR, 100e6);
         assertEq(_claimFee(40e6), _net(40e6) * SHARE / 10_000, "zero principal = zero hurdle");
         assertEq(vault.hurdleStartTime(), block.timestamp);
@@ -108,8 +107,7 @@ abstract contract TaskN26Edge is TaskN26Core {
     function test_e_hurdleBarelyAboveNet_remainingOneWei_stillSane() public {
         _accrue(YEAR, 10e6);
         uint256 n = _net(10e6);
-        vm.prank(owner);
-        vault.setHurdlePrincipal(n * 10_000 / RATE + 100); // hurdle = n + 4 (floor)
+        _forceHurdlePrincipal(n * 10_000 / RATE + 100); // hurdle = n + 4 (floor)
         uint256 h = _hurdleNow();
         assertGt(h, n);
         assertEq(_claimFee(10e6), 0);

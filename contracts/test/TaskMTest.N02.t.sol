@@ -289,13 +289,12 @@ abstract contract TaskMN02Base is Test {
         vm.prank(stranger);
         vm.expectRevert(AutonomousVault.NotManager.selector);
         vault.recallCapital(address(adapter), 100e6);
+        // Pause stops new deployment but must NOT trap capital: recall works while paused.
         vm.prank(owner);
         vault.setPaused(true);
         vm.prank(manager);
         vm.expectRevert(AutonomousVault.Paused.selector);
-        vault.recallCapital(address(adapter), 100e6);
-        vm.prank(owner);
-        vault.setPaused(false);
+        vault.deployCapital(address(strat), 1e6, "");
         usdc.burn(address(adapter), 1_000e6);
         adapter.setRecall(0, 7, 500e6);
         vm.expectEmit(true, false, false, true, address(vault));
@@ -303,6 +302,8 @@ abstract contract TaskMN02Base is Test {
         vm.prank(manager);
         vault.recallCapital(address(adapter), 100e6);
         assertEq(vault.principalOf(address(adapter)), 900e6);
+        vm.prank(owner);
+        vault.setPaused(false);
         adapter.setRecall(0, 0, 0);
         vm.prank(owner);
         vault.recallCapital(address(adapter), 1);
@@ -348,17 +349,18 @@ abstract contract TaskMN02Base is Test {
         vm.prank(stranger);
         vm.expectRevert(AutonomousVault.NotManager.selector);
         vault.returnCapital(address(strat), 40e6);
+        // Pause stops new deployment but must NOT block returning capital.
         vm.prank(owner);
         vault.setPaused(true);
         vm.prank(manager);
         vm.expectRevert(AutonomousVault.Paused.selector);
-        vault.returnCapital(address(strat), 40e6);
-        vm.prank(owner);
-        vault.setPaused(false);
+        vault.deployCapital(address(strat), 1e6, "");
         vm.expectEmit(true, false, false, true, address(vault));
         emit ShariahVault.PrincipalRetired(address(strat), 40e6, 40e6);
         vm.prank(owner);
         vault.returnCapital(address(strat), 40e6);
+        vm.prank(owner);
+        vault.setPaused(false);
         assertEq(vault.principalOf(address(strat)), 60e6);
         assertEq(vault.totalDeployed(), 60e6);
         assertEq(vault.totalAssets(), DEPOSIT);

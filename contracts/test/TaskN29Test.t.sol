@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Vm} from "forge-std/Test.sol";
+import {Vm, console2} from "forge-std/Test.sol";
 
 import {ShariahVault} from "../ShariahVault.sol";
 import {TaskN29Base, TaskN29V1Mixin, TaskN29V2Mixin} from "./TaskN29Test.Base.t.sol";
@@ -66,15 +66,14 @@ abstract contract TaskN29Core is TaskN29Base {
     // ───────────── stayers are unaffected ─────────────
 
     function _noHurdle() internal {
-        vm.prank(owner);
-        vault.setHurdlePrincipal(0);
+        _forceHurdlePrincipal(0);
     }
 
-    /// @dev Upper bound of the hurdle-clock drift: the leaver consumes the whole hurdle allowance, so the
-    ///      (1 - alpha) share of it that was priced for stayers is re-cut at charity + manager rates once.
-    function _hurdleDriftBound(uint256 elapsed) internal pure returns (uint256) {
-        uint256 hurdle = (2 * DEP * 400 * elapsed) / (10_000 * 365 days);
-        return (hurdle * 1225) / 100_000 + TOL;
+    /// @dev Exit allocates hurdle and deficit allowance pro rata to the leaver, so the stayers' value must be
+    ///      unchanged in BOTH directions (tolerance: 10 wei + 1e-9 relative). Logs the measured drift.
+    function _assertStayerUnchanged(uint256 before_, uint256 after_, string memory tag) internal view {
+        console2.log(tag, "stayer drift (wei):", _absDiff(before_, after_));
+        assertApproxEqAbs(after_, before_, _driftTol(before_), tag);
     }
 
     function test_exit_doesNotMoveRemainingHoldersPrice() public {
@@ -87,14 +86,37 @@ abstract contract TaskN29Core is TaskN29Base {
         assertApproxEqAbs(_value(alice), aliceBefore, TOL, "alice price after bob's full exit");
     }
 
-    /// @dev Non-zero hurdle: stayers may only lose within the documented hurdle-restart drift, never gain.
+    /// @dev Non-zero hurdle: a partial exit leaves the stayers' previewRedeem unchanged (a few wei).
     function test_exit_withHurdle_stayerDriftBounded() public {
         _yield(200e6);
+        assertGt(vault.hurdlePrincipal(), 0);
         uint256 aliceBefore = _value(alice);
         _redeemFrac(bob, 1, 2);
-        uint256 aliceAfter = _value(alice);
-        assertLe(aliceAfter, aliceBefore + TOL, "stayer never enriched");
-        assertGe(aliceAfter + _hurdleDriftBound(30 days), aliceBefore, "stayer drift within hurdle bound");
+        _assertStayerUnchanged(aliceBefore, _value(alice), "hurdle only, half exit");
+    }
+
+    /// @dev Non-zero hurdle AND non-zero HWM deficit: still unchanged, for several exit fractions.
+    function test_exit_withHurdleAndDeficit_stayerUnchanged() public {
+        _yield(200e6);
+        _writeHwm(1_020_000_000_000);
+        assertGt(vault.hwmDeficit(), 0);
+        assertGt(vault.hurdlePrincipal(), 0);
+        uint256 aliceBefore = _value(alice);
+        _redeemFrac(bob, 1, 2);
+        _assertStayerUnchanged(aliceBefore, _value(alice), "hurdle+deficit, 1/2 exit");
+        aliceBefore = _value(alice);
+        _redeemFrac(bob, 1, 3);
+        _assertStayerUnchanged(aliceBefore, _value(alice), "hurdle+deficit, 1/3 of remainder");
+    }
+
+    /// @dev Deficit exceeding profit: the leaver's share is all recovery; stayers unchanged.
+    function test_exit_withHurdleAndLargeDeficit_stayerUnchanged() public {
+        _yield(200e6);
+        _writeHwm(1_200_000_000_000);
+        assertGt(vault.hwmDeficit(), 195e6);
+        uint256 aliceBefore = _value(alice);
+        _redeemFrac(bob, 3, 4);
+        _assertStayerUnchanged(aliceBefore, _value(alice), "large deficit, 3/4 exit");
     }
 
     function test_exit_stayersCutStillReservedAfterExit() public {
@@ -107,17 +129,22 @@ abstract contract TaskN29Core is TaskN29Base {
         assertApproxEqAbs(vault.realizedProfit(), 100e6, 3);
     }
 
-    function testFuzz_exit_doesNotMoveRemainingHoldersPrice(uint256 y, uint256 num, uint256 hurdleOn) public {
+    function testFuzz_exit_doesNotMoveRemainingHoldersPrice(
+        uint256 y, uint256 num, uint256 hurdleOn, uint256 hwm
+    ) public {
         y = bound(y, 1e6, 5_000e6);
-        num = bound(num, 1, 100);
+        num = bound(num, 1, 99);
         bool withHurdle = hurdleOn % 2 == 1;
         if (!withHurdle) _noHurdle();
         _yield(y);
+        // Half of the runs also carry a non-zero HWM deficit (up to +15% over the launch price).
+        if (hwm % 2 == 1) {
+            _writeHwm(bound(hwm, 1_001_000_000_000, 1_150_000_000_000));
+            assertGt(vault.hwmDeficit(), 0);
+        }
         uint256 aliceBefore = _value(alice);
         _redeemFrac(bob, num, 100);
-        uint256 aliceAfter = _value(alice);
-        assertLe(aliceAfter, aliceBefore + 50, "stayer never enriched");
-        assertGe(aliceAfter + (withHurdle ? _hurdleDriftBound(30 days) : 50), aliceBefore);
+        assertApproxEqAbs(_value(alice), aliceBefore, _driftTol(aliceBefore), "stayer unchanged (hurdle and/or deficit)");
     }
 
     // ───────────── two-step exit ≤ one full exit ─────────────
@@ -249,8 +276,7 @@ abstract contract TaskN29Core is TaskN29Base {
         vault.deposit(DEP, carol);
         _redeemFrac(carol, 1, 1);
         assertApproxEqAbs(usdc.balanceOf(carol), bal, TOL, "round trip returns the deposit");
-        assertLe(_value(alice), aliceBefore + TOL);
-        assertGe(_value(alice) + _hurdleDriftBound(30 days), aliceBefore);
+        _assertStayerUnchanged(aliceBefore, _value(alice), "late depositor round trip, hurdle on");
     }
 
     function testFuzz_lateDepositor_noValueTransfer(uint256 y, uint256 dep) public {

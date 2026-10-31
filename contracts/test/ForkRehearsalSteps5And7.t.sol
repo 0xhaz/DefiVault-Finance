@@ -254,6 +254,9 @@ library CctpV2MsgBuilder {
 contract ForkRehearsalSteps5And7 is Test {
 
     // ── Deployed contract addresses ───────────────────────────────────────
+    // These tests pin the run 2 rehearsal vault, which holds the state they assert on (approved
+    // remote recipient, funded positions, an older ABI). Newer deployments (see
+    // docs/agents/deployed-addresses.md) start without that state, so do not point these at them.
     address constant VAULT         = 0xba094D5B01F4fd245EA345Be6B8ac833488c81B0;
     address constant ESCROW        = 0xcC58b11c3Cd251a44989fEf1f05BdcB0e16375ff;
     address constant CHARITY_MOD   = 0x1D05a0010C78B984b0De2735A6E868E9c9f5d99F;

@@ -7,8 +7,14 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IStrategyAdapter} from "../IStrategyAdapter.sol";
 import {AggregatorV3Interface} from "../interfaces/AggregatorV3Interface.sol";
+
+/// @dev Mandatory atomic cost-basis retirement after an adapter-side gold sale.
+interface IGoldAllocationVaultAccounting {
+    function retireGoldPrincipal(uint256 soldTokens, uint256 heldBefore) external;
+}
 
 /// @notice Uniswap V3 interface (minimal — only exactInputSingle needed)
 interface ISwapRouter {
@@ -44,8 +50,37 @@ interface IUniswapV3PoolSlot0 {
         );
 }
 
-contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
+contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
+
+    error AmountExceedsHeld(uint256 requested, uint256 held);
+    error EmergencyExitDisabled();
+    error EmergencyExitRequiresProposal();
+    error EmergencyExitProposalExists();
+    error NoEmergencyExitProposal();
+    error EmergencyExitNotReady(uint256 executeAfter);
+    error EmergencyExitExpired(uint256 expiresAt);
+
+    uint256 public constant EMERGENCY_EXIT_DELAY = 1 hours;
+    uint256 public constant EMERGENCY_EXIT_WINDOW = 24 hours;
+    uint256 public constant EMERGENCY_FLOOR_BPS = 2000;
+
+    struct PendingEmergencyExit {
+        uint256 tokenAmount;
+        uint256 minUsdcOut;
+        uint256 executeAfter;
+        uint256 expiresAt;
+    }
+    PendingEmergencyExit public pendingEmergencyExit;
+
+    event EmergencyExitProposed(uint256 tokenAmount, uint256 minUsdcOut, uint256 executeAfter, uint256 expiresAt);
+    event EmergencyExitCancelled();
+
+    event EmergencyExit(address indexed caller, uint256 tokenSold, uint256 usdcReturned, uint256 minUsdcOut);
+
+    /// @notice Explicit-minimum exits are disabled until a timelocked proposal executes.
+    bool public emergencyExitEnabled;
+    bytes32 public constant PARAM_EMERGENCY_EXIT_ENABLED = keccak256("emergencyExitEnabled");
 
     error ZeroAmount();
     error StaleGoldPrice();
@@ -269,7 +304,7 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
     /// @dev    Deposits are blocked when price is stale/deviated; recalls remain open (G1).
     error OracleNotSane();
 
-    function deploy(uint256 usdcAmount) external onlyVault returns (uint256 xautReceived) {
+    function deploy(uint256 usdcAmount) external onlyVault nonReentrant returns (uint256 xautReceived) {
         if (usdcAmount == 0) revert ZeroAmount();
         // Block new gold buys when oracle is not sane (G1: deposits paused on insane price).
         if (!isPriceSane()) revert OracleNotSane();
@@ -315,7 +350,7 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
     /// @notice Sell all held XAUT back to USDC and return proceeds to vault.
     /// @dev Fresh oracle floors never depend on spot pool state. During outages,
     ///      cached price, stale haircut and emergency slippage bound the exit.
-    function recall(uint256 usdcAmount) external onlyVault returns (uint256 usdcReturned) {
+    function recall(uint256 usdcAmount) external onlyVault nonReentrant returns (uint256 usdcReturned) {
         if (usdcAmount == 0) revert ZeroAmount();
         if (xautHeld == 0) return 0;
 
@@ -360,6 +395,82 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         totalDeployed = 0;
 
         emit GoldSold(xautToSell, usdcReturned, oraclePrice);
+    }
+
+    /// @dev Retained ABI, but the one-call emergency sale is permanently disabled.
+    function emergencyExit(uint256, uint256) external onlyOwner returns (uint256) {
+        revert EmergencyExitRequiresProposal();
+    }
+
+    /// @notice Authorize one exact sale after one hour, valid for the following 24 hours.
+    function proposeEmergencyExit(uint256 tokenAmount, uint256 minUsdcOut) external onlyOwner {
+        if (!emergencyExitEnabled) revert EmergencyExitDisabled();
+        if (pendingEmergencyExit.tokenAmount != 0) revert EmergencyExitProposalExists();
+        if (tokenAmount == 0 || minUsdcOut == 0) revert ZeroAmount();
+        if (tokenAmount > xautHeld) revert AmountExceedsHeld(tokenAmount, xautHeld);
+        if (lastGoodPrice == 0) revert StaleGoldPrice();
+        uint256 cachedValue = Math.mulDiv(tokenAmount, lastGoodPrice, _pow10(xautDecimals));
+        uint256 floor = Math.mulDiv(cachedValue, EMERGENCY_FLOOR_BPS, 10_000, Math.Rounding.Ceil);
+        if (minUsdcOut < floor) revert SlippageExceeded(minUsdcOut, floor);
+        uint256 executeAfter = block.timestamp + EMERGENCY_EXIT_DELAY;
+        uint256 expiresAt = executeAfter + EMERGENCY_EXIT_WINDOW;
+        pendingEmergencyExit = PendingEmergencyExit(tokenAmount, minUsdcOut, executeAfter, expiresAt);
+        emit EmergencyExitProposed(tokenAmount, minUsdcOut, executeAfter, expiresAt);
+    }
+
+    function cancelEmergencyExit() external onlyOwner {
+        if (pendingEmergencyExit.tokenAmount == 0) revert NoEmergencyExitProposal();
+        delete pendingEmergencyExit;
+        emit EmergencyExitCancelled();
+    }
+
+    function executeEmergencyExit() external onlyOwner nonReentrant returns (uint256 usdcReturned) {
+        if (!emergencyExitEnabled) revert EmergencyExitDisabled();
+        PendingEmergencyExit memory p = pendingEmergencyExit;
+        if (p.tokenAmount == 0) revert NoEmergencyExitProposal();
+        if (block.timestamp < p.executeAfter) revert EmergencyExitNotReady(p.executeAfter);
+        if (block.timestamp > p.expiresAt) revert EmergencyExitExpired(p.expiresAt);
+        uint256 tokenAmount = p.tokenAmount;
+        uint256 minUsdcOut = p.minUsdcOut;
+        uint256 heldBefore = xautHeld;
+        if (tokenAmount > heldBefore) revert AmountExceedsHeld(tokenAmount, heldBefore);
+        delete pendingEmergencyExit;
+
+        // Snapshot oracle health before execution; outage exits must not refresh the cache.
+        (uint256 oraclePrice, bool oracleOk,) = _getOraclePriceSafe();
+        xautHeld = heldBefore - tokenAmount;
+        totalDeployed = tokenAmount == heldBefore
+            ? 0
+            : totalDeployed - Math.mulDiv(totalDeployed, tokenAmount, heldBefore);
+
+        xaut.forceApprove(address(swapRouter), 0);
+        xaut.forceApprove(address(swapRouter), tokenAmount);
+        usdcReturned = swapRouter.exactInputSingle(ISwapRouter.ExactInputSingleParams({
+            tokenIn: address(xaut),
+            tokenOut: address(usdc),
+            fee: poolFee,
+            recipient: vault,
+            deadline: block.timestamp,
+            amountIn: tokenAmount,
+            amountOutMinimum: minUsdcOut,
+            sqrtPriceLimitX96: 0
+        }));
+        if (usdcReturned < minUsdcOut) revert SlippageExceeded(usdcReturned, minUsdcOut);
+        xaut.forceApprove(address(swapRouter), 0);
+
+        // Validate the realized observation against the fresh oracle, not distressed pool spot.
+        // An exit outside the ordinary deviation bound succeeds without refreshing the cache.
+        if (oracleOk) {
+            uint256 exitPrice = Math.mulDiv(usdcReturned, _pow10(xautDecimals), tokenAmount);
+            uint256 diff = exitPrice > oraclePrice ? exitPrice - oraclePrice : oraclePrice - exitPrice;
+            if (exitPrice > 0 && diff <= Math.mulDiv(oraclePrice, maxDeviationBps, 10_000)) {
+                _updateLastGoodPrice(exitPrice, block.timestamp);
+            }
+        }
+
+        // Mandatory: failure rolls back the swap, approvals, accounting and proposal deletion.
+        IGoldAllocationVaultAccounting(vault).retireGoldPrincipal(tokenAmount, heldBefore);
+        emit EmergencyExit(msg.sender, tokenAmount, usdcReturned, minUsdcOut);
     }
 
     /// @notice Oracle-only position value; stale/invalid observations use the cached price with haircut.
@@ -415,6 +526,10 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
             revert ParamAboveHardCap("emergencySlippageBps", newValue, MAX_EMERGENCY_SLIPPAGE_BPS);
         }
 
+        if (paramId == PARAM_EMERGENCY_EXIT_ENABLED && newValue > 1) {
+            revert ParamAboveHardCap("emergencyExitEnabled", newValue, 1);
+        }
+
         uint256 executeAfter = block.timestamp + TIMELOCK_DELAY;
         pendingChanges[paramId] = PendingChange({newValue: newValue, executeAfter: executeAfter, pending: true});
 
@@ -433,6 +548,7 @@ contract GoldAllocationAdapter is IStrategyAdapter, Ownable2Step {
         else if (paramId == PARAM_MAX_DEVIATION) maxDeviationBps = pc.newValue;
         else if (paramId == PARAM_POOL_FEE) poolFee = uint24(pc.newValue);
         else if (paramId == PARAM_STALE_HAIRCUT) staleHaircutBps = pc.newValue;
+        else if (paramId == PARAM_EMERGENCY_EXIT_ENABLED) emergencyExitEnabled = pc.newValue == 1;
         else if (paramId == PARAM_EMERGENCY_SLIPPAGE) {
             uint256 previous = emergencySlippageBps;
             emergencySlippageBps = pc.newValue;

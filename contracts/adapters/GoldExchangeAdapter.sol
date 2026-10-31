@@ -6,7 +6,13 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IStrategyAdapter} from "../IStrategyAdapter.sol";
+
+/// @dev Mandatory atomic cost-basis retirement after an adapter-side gold sale.
+interface IGoldExchangeVaultAccounting {
+    function retireGoldPrincipal(uint256 soldTokens, uint256 heldBefore) external;
+}
 
 /// @notice Minimal Chainlink-style oracle interface (same shape as AggregatorV3Interface).
 interface IAggregatorV3 {
@@ -45,8 +51,38 @@ interface ISwapRouter {
 ///         On testnet, deploy a MockAllocatedGold in place of PAXG.
 ///
 /// @custom:security-contact board-review-required
-contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
+contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
+
+    error AmountExceedsHeld(uint256 requested, uint256 held);
+    error EmergencyExitDisabled();
+    error OracleLockedWhileEmergencyEnabled();
+    error EmergencyExitRequiresProposal();
+    error EmergencyExitProposalExists();
+    error NoEmergencyExitProposal();
+    error EmergencyExitNotReady(uint256 executeAfter);
+    error EmergencyExitExpired(uint256 expiresAt);
+
+    uint256 public constant EMERGENCY_EXIT_DELAY = 1 hours;
+    uint256 public constant EMERGENCY_EXIT_WINDOW = 24 hours;
+    uint256 public constant EMERGENCY_FLOOR_BPS = 2000;
+
+    struct PendingEmergencyExit {
+        uint256 tokenAmount;
+        uint256 minUsdcOut;
+        uint256 executeAfter;
+        uint256 expiresAt;
+    }
+    PendingEmergencyExit public pendingEmergencyExit;
+
+    event EmergencyExitProposed(uint256 tokenAmount, uint256 minUsdcOut, uint256 executeAfter, uint256 expiresAt);
+    event EmergencyExitCancelled();
+
+    event EmergencyExit(address indexed caller, uint256 tokenSold, uint256 usdcReturned, uint256 minUsdcOut);
+
+    /// @notice Explicit-minimum exits are disabled until a timelocked proposal executes.
+    bool public emergencyExitEnabled;
+    bytes32 public constant PARAM_EMERGENCY_EXIT_ENABLED = keccak256("emergencyExitEnabled");
 
     error SlippageExceeded(uint256 amountOut, uint256 minOut);
     error ZeroAmount();
@@ -150,7 +186,7 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
 
     /// @notice Atomic USDC-to-PAXG swap. Called by the vault once per execution cycle.
     ///         The entire amount is swapped in one transaction — no state persists between call and return.
-    function deploy(uint256 amount) external onlyVault returns (uint256 paxgOut) {
+    function deploy(uint256 amount) external onlyVault nonReentrant returns (uint256 paxgOut) {
         if (amount == 0) revert ZeroAmount();
 
         // Vault has already transferred USDC to this adapter via deployCapital().
@@ -194,7 +230,7 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
 
     /// @notice Return PAXG to the swap router, receive USDC back for the vault.
     ///         Also atomic — full exit in one transaction.
-    function recall(uint256 amount) external onlyVault returns (uint256 usdcReturned) {
+    function recall(uint256 amount) external onlyVault nonReentrant returns (uint256 usdcReturned) {
         if (amount == 0) revert ZeroAmount();
 
         uint256 paxgToSell = paxgHeld;
@@ -248,6 +284,84 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         totalDeployed  = 0;
 
         emit GoldReturned(paxgToSell, usdcReturned);
+    }
+
+    /// @dev Retained ABI, but the one-call emergency sale is permanently disabled.
+    function emergencyExit(uint256, uint256) external onlyOwner returns (uint256) {
+        revert EmergencyExitRequiresProposal();
+    }
+
+    /// @notice Authorize one exact sale after one hour, valid for the following 24 hours.
+    function proposeEmergencyExit(uint256 tokenAmount, uint256 minUsdcOut) external onlyOwner {
+        if (!emergencyExitEnabled) revert EmergencyExitDisabled();
+        if (pendingEmergencyExit.tokenAmount != 0) revert EmergencyExitProposalExists();
+        if (tokenAmount == 0 || minUsdcOut == 0) revert ZeroAmount();
+        if (tokenAmount > paxgHeld) revert AmountExceedsHeld(tokenAmount, paxgHeld);
+        if (lastGoodPrice == 0) revert StaleGoldPrice();
+        uint256 cachedValue = Math.mulDiv(tokenAmount, lastGoodPrice, 1e18);
+        uint256 floor = Math.mulDiv(cachedValue, EMERGENCY_FLOOR_BPS, 10_000, Math.Rounding.Ceil);
+        if (minUsdcOut < floor) revert SlippageExceeded(minUsdcOut, floor);
+        uint256 executeAfter = block.timestamp + EMERGENCY_EXIT_DELAY;
+        uint256 expiresAt = executeAfter + EMERGENCY_EXIT_WINDOW;
+        pendingEmergencyExit = PendingEmergencyExit(tokenAmount, minUsdcOut, executeAfter, expiresAt);
+        emit EmergencyExitProposed(tokenAmount, minUsdcOut, executeAfter, expiresAt);
+    }
+
+    function cancelEmergencyExit() external onlyOwner {
+        if (pendingEmergencyExit.tokenAmount == 0) revert NoEmergencyExitProposal();
+        delete pendingEmergencyExit;
+        emit EmergencyExitCancelled();
+    }
+
+    function executeEmergencyExit() external onlyOwner nonReentrant returns (uint256 usdcReturned) {
+        if (!emergencyExitEnabled) revert EmergencyExitDisabled();
+        PendingEmergencyExit memory p = pendingEmergencyExit;
+        if (p.tokenAmount == 0) revert NoEmergencyExitProposal();
+        if (block.timestamp < p.executeAfter) revert EmergencyExitNotReady(p.executeAfter);
+        if (block.timestamp > p.expiresAt) revert EmergencyExitExpired(p.expiresAt);
+        uint256 tokenAmount = p.tokenAmount;
+        uint256 minUsdcOut = p.minUsdcOut;
+        uint256 heldBefore = paxgHeld;
+        if (tokenAmount > heldBefore) revert AmountExceedsHeld(tokenAmount, heldBefore);
+        delete pendingEmergencyExit;
+
+        // Snapshot oracle health before execution; outage exits must not refresh the cache.
+        (uint256 oraclePrice,) = _freshOraclePrice();
+        paxgHeld = heldBefore - tokenAmount;
+        totalDeployed = tokenAmount == heldBefore
+            ? 0
+            : totalDeployed - Math.mulDiv(totalDeployed, tokenAmount, heldBefore);
+
+        paxg.forceApprove(address(swapRouter), 0);
+        paxg.forceApprove(address(swapRouter), tokenAmount);
+        usdcReturned = swapRouter.exactInputSingle(ISwapRouter.ExactInputSingleParams({
+            tokenIn: address(paxg),
+            tokenOut: address(usdc),
+            fee: poolFee,
+            recipient: vault,
+            deadline: block.timestamp,
+            amountIn: tokenAmount,
+            amountOutMinimum: minUsdcOut,
+            sqrtPriceLimitX96: 0
+        }));
+        if (usdcReturned < minUsdcOut) revert SlippageExceeded(usdcReturned, minUsdcOut);
+        paxg.forceApprove(address(swapRouter), 0);
+
+        // Cache only a realized price within the ordinary fresh-oracle tolerance,
+        // in either direction. A distressed sale may execute without becoming a good price.
+        if (oraclePrice > 0) {
+            uint256 exitPrice = Math.mulDiv(usdcReturned, 1e18, tokenAmount);
+            uint256 diff = exitPrice > oraclePrice ? exitPrice - oraclePrice : oraclePrice - exitPrice;
+            if (exitPrice > 0 && diff <= Math.mulDiv(oraclePrice, 10_000 - minOutBps, 10_000)) {
+                lastGoodPrice = exitPrice;
+                lastGoodPriceAt = block.timestamp;
+                emit LastGoodPriceUpdated(exitPrice, block.timestamp);
+            }
+        }
+
+        // Mandatory: failure rolls back the swap, approvals, accounting and proposal deletion.
+        IGoldExchangeVaultAccounting(vault).retireGoldPrincipal(tokenAmount, heldBefore);
+        emit EmergencyExit(msg.sender, tokenAmount, usdcReturned, minUsdcOut);
     }
 
     /// @notice Live fresh oracle valuation; otherwise cached price, haircutted after its observation expires.
@@ -320,6 +434,9 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
     /// @notice Owner updates the XAU/USD oracle (K2 — must be non-zero; reverts OracleRequired).
     ///         Use this to rotate the oracle feed without redeploying the adapter.
     function setGoldOracle(address oracle) external onlyOwner {
+        // The emergency-sale floor derives from the cached oracle price; while emergency exits are
+        // armed the feed cannot be swapped instantly (disable them first via the 30-day timelock).
+        if (emergencyExitEnabled) revert OracleLockedWhileEmergencyEnabled();
         if (oracle == address(0)) revert OracleRequired();
         address previous = address(goldOracle);
         goldOracle = IAggregatorV3(oracle);
@@ -359,8 +476,13 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
 
     /// @notice Emergency exit tolerance changes take effect only after 30 days.
     function proposeParamChange(bytes32 paramId, uint256 newValue) external onlyOwner {
-        require(paramId == PARAM_EMERGENCY_SLIPPAGE, "GoldExchangeAdapter: unknown param");
-        if (newValue > MAX_EMERGENCY_SLIPPAGE_BPS) {
+        require(
+            paramId == PARAM_EMERGENCY_SLIPPAGE || paramId == PARAM_EMERGENCY_EXIT_ENABLED,
+            "GoldExchangeAdapter: unknown param"
+        );
+        if (paramId == PARAM_EMERGENCY_EXIT_ENABLED) {
+            require(newValue <= 1, "GoldExchangeAdapter: boolean out of range");
+        } else if (newValue > MAX_EMERGENCY_SLIPPAGE_BPS) {
             revert HaircutAboveCap(newValue, MAX_EMERGENCY_SLIPPAGE_BPS);
         }
         uint256 executeAfter = block.timestamp + TIMELOCK_DELAY;
@@ -373,9 +495,13 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step {
         require(pc.pending, "GoldExchangeAdapter: no proposal pending");
         require(block.timestamp >= pc.executeAfter, "GoldExchangeAdapter: timelock not elapsed");
         delete pendingChanges[paramId];
-        uint256 previous = emergencySlippageBps;
-        emergencySlippageBps = pc.newValue;
-        emit EmergencySlippageBpsUpdated(previous, pc.newValue);
+        if (paramId == PARAM_EMERGENCY_EXIT_ENABLED) {
+            emergencyExitEnabled = pc.newValue == 1;
+        } else {
+            uint256 previous = emergencySlippageBps;
+            emergencySlippageBps = pc.newValue;
+            emit EmergencySlippageBpsUpdated(previous, pc.newValue);
+        }
         emit ParamChangeExecuted(paramId, pc.newValue);
     }
 

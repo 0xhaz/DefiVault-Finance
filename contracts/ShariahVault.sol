@@ -38,6 +38,12 @@ contract ShariahVault is AutonomousVault {
     error AdapterNotScreened();
     error ProfitExceedsRealized(uint256 requested, uint256 available);
     error AdapterExecutionReentered();
+    /// @notice An exit with realized profit needs at least 2 * (EXIT_SETTLE_GAS + funded adapters *
+    ///         EXIT_SETTLE_GAS_PER_ADAPTER) of gas so the leaver's distribution cut is settled
+    ///         rather than silently skipped.
+    error InsufficientExitGas();
+    uint256 internal constant EXIT_SETTLE_GAS = 700_000;
+    uint256 internal constant EXIT_SETTLE_GAS_PER_ADAPTER = 250_000;
     error UseAtomicDeploy(address adapter);
     error RemoteRecipientNotApproved(uint32 domain, bytes32 recipient);
     error NoPendingRemoteRecipient();
@@ -54,6 +60,8 @@ contract ShariahVault is AutonomousVault {
     error RetiredGoldAdapter(address adapter);
     error UntrackedGoldAdapter(address adapter);
     error TooManyFundedAdapters();
+    error HurdlePrincipalCannotDecrease();
+    error InvalidGoldSaleFraction();
 
     error PurificationEscrowNotSet();
     error InsufficientFeeBalance(uint256 available, uint256 required);
@@ -156,6 +164,10 @@ contract ShariahVault is AutonomousVault {
     bool private _profitDistributionLocked;
     /// @dev Exact ERC-4626 quote protected by the revertible exit settlement.
     uint256 private _exitAssets;
+    /// @dev Departing shares, captured before burn; zero for ordinary manager claims.
+    uint256 private _exitShares;
+    /// @dev Written inside the revertible self-call; a failed settlement rolls it back.
+    bool private _exitSettlementRan;
 
     function fundedAdapterCount() external view returns (uint256) {
         return fundedAdapters.length;
@@ -319,6 +331,13 @@ contract ShariahVault is AutonomousVault {
     {
         if (_profitDistributionLocked) revert AdapterExecutionReentered();
         _tryAccrueWakalaFee();
+        // Hurdle basis follows cash flows: new capital accrues hurdle from now, accrued allowance is kept.
+        (hurdleStartTime, hurdlePrincipal) = ShariahAccountingLogic.depositHurdle(
+            hurdleStartTime, hurdlePrincipal, totalSupply(), _assetsExcludingGoldGain(), assets
+        );
+        // Known limitation (N-32): with a large unprocessed profit AND an open HWM deficit, a
+        // deposit books its buy-in to that profit as processed capital and can shrink the deficit.
+        // Crediting less was tried and charges the newcomer twice (late depositors lost ~3 bps).
         profitBase += assets;
         super._deposit(caller, receiver, assets, shares);
     }
@@ -337,14 +356,32 @@ contract ShariahVault is AutonomousVault {
                 uint256 grossProfit = Math.mulDiv(realizedProfit(), shares, supplyBefore);
                 if (grossProfit != 0) {
                     _exitAssets = assets;
+                    _exitShares = shares;
                     // Revert the whole distribution (including approvals and fee booking) on
                     // failure, but never make a failing waterfall a new exit gate.
                     // Retain gas for checkpoint retirement, share burn and payout even if
                     // a distribution callee consumes every unit forwarded to settlement.
+                    // eth_estimateGas bisects for the lowest limit at which the transaction does not
+                    // revert; because a failed settlement is swallowed, wallets would otherwise pick
+                    // a limit that starves the settlement and silently skip the leaver's cut.
+                    // Requiring twice the settlement budget up front makes that limit unreachable.
+                    // The budget grows with the number of funded adapters because settlement re-reads
+                    // each adapter's value several times.
+                    if (gasleft() < 2 * (EXIT_SETTLE_GAS + fundedAdapters.length * EXIT_SETTLE_GAS_PER_ADAPTER)) {
+                        revert InsufficientExitGas();
+                    }
                     try this.exitSettle{gas: gasleft() / 2}(grossProfit) {} catch {}
                     delete _exitAssets;
+                    delete _exitShares;
                 }
             }
+            // Failed/absent settlement must still retire the departed capital's hurdle.
+            // Preserve its clock so the accrued allowance scales with remaining shares.
+            if (shares >= supplyBefore) hurdlePrincipal = 0;
+            else if (!_exitSettlementRan) {
+                hurdlePrincipal = Math.mulDiv(hurdlePrincipal, supplyBefore - shares, supplyBefore);
+            }
+            delete _exitSettlementRan;
             // Exit settlement first checkpoints, then retires its depositor share in full:
             // that processed profit belongs to the exiting shares, not the remaining holders.
             // The pre-existing checkpoint still retires pro rata by shares, including locks.
@@ -362,6 +399,7 @@ contract ShariahVault is AutonomousVault {
         if (msg.sender != address(this) || !_profitDistributionLocked) revert NotManager();
         uint256 previousHigh = highWaterMarkPerShare;
         uint256 depositorShare = _claimMusharakahProfit(grossProfit);
+        _exitSettlementRan = true;
         // Retiring only a pro-rata fraction of this share would process profit belonging to
         // the stayers and release part of their pending cut. All of it exits in the quoted payout.
         profitBase -= depositorShare;
@@ -416,11 +454,19 @@ contract ShariahVault is AutonomousVault {
 
     /// @notice Return transferred capital while retiring the corresponding strategy principal.
     function returnCapital(address strategy, uint256 amount) external virtual override onlyManagerOrOwner {
-        if (paused) revert Paused();
+        // Recovery is never gated by pause: pausing stops deployment and deposits, not exits.
         uint256 retired = ShariahAccountingLogic.returnCapital(
             fundedAdapters, _fundedAdapterIndex, principalOf, asset(), strategy, amount
         );
         totalDeployed -= Math.min(retired, totalDeployed);
+    }
+
+    /// @notice Retire gold cost basis after an adapter-side sale, never by sale proceeds.
+    function retireGoldPrincipal(uint256 soldTokens, uint256 heldBefore) external {
+        if (msg.sender != goldSpreadAdapter && msg.sender != goldAllocationAdapter) revert NotManager();
+        totalDeployed = ShariahAccountingLogic.retireGoldPrincipal(
+            principalOf, msg.sender, soldTokens, heldBefore, totalDeployed
+        );
     }
 
     /// @notice Recognize a total adapter loss before replacing or unlinking its address.
@@ -435,7 +481,7 @@ contract ShariahVault is AutonomousVault {
     /// @notice Retire requested principal (all remaining principal on full exit) when valuation is readable.
     /// @dev If post-recall valuation fails, only measured token recovery retires principal; no loss is inferred.
     function recallCapital(address adapter, uint256 amount) external virtual override onlyManagerOrOwner {
-        if (paused) revert Paused();
+        // Recovery is never gated by pause: pausing stops deployment and deposits, not exits.
         (uint256 actualReturn, uint256 retired) = ShariahAccountingLogic.recall(
             fundedAdapters, _fundedAdapterIndex, principalOf, asset(), adapter, amount
         );
@@ -455,22 +501,11 @@ contract ShariahVault is AutonomousVault {
     function _deployCapital(address strategy, uint256 amount, bytes calldata data) internal {
         if (retiredGoldAdapter[strategy]) revert RetiredGoldAdapter(strategy);
         _checkDeploymentScreening(strategy);
-        ShariahAccountingLogic.checkGoldMarker(strategy, goldSpreadAdapter, goldAllocationAdapter);
         data;
-
-        uint256 currentAssets = totalAssets();
-        uint256 maxDeployable = (currentAssets * maxAllocationBps) / 10_000;
-        if (totalDeployed + amount > maxDeployable) revert AllocationExceedsLimit();
-
-        // Combined gold cap: S2-H (PAXG) + S6-H (XAUT) must not exceed MAX_GOLD_BPS of totalAssets.
-        // Check only when deploying to either gold adapter.
-        ShariahAccountingLogic.checkGoldCap(
-            strategy, goldSpreadAdapter, goldAllocationAdapter, amount, currentAssets
+        ShariahAccountingLogic.deployCapital(
+            asset(), strategy, amount, totalDeployed, maxAllocationBps, goldSpreadAdapter, goldAllocationAdapter
         );
-
-        IERC20(asset()).safeTransfer(strategy, amount);
         totalDeployed += amount;
-
         emit CapitalDeployed(strategy, amount);
     }
 
@@ -517,14 +552,11 @@ contract ShariahVault is AutonomousVault {
 
     function _accrueWakalaFee() internal {
         uint256 fee = pendingWakalaFee();
-        if (fee > 0) {
-            shariahTreasury.accrue(fee);
-        } else if (_feeCanAccrue()) {
-            // A fee that rounds to zero keeps its elapsed time so frequent zero-value calls cannot erase accrual.
-            return;
-        }
-        lastFeeAccrualTime = block.timestamp;
-        emit WakalaFeeAccrued(fee);
+        // A fee that rounds to zero keeps its elapsed time.
+        if (fee == 0 && _feeCanAccrue()) return;
+        lastFeeAccrualTime = ShariahAccountingLogic.bookWakalaFee(
+            shariahTreasury, fee, lastFeeAccrualTime, false
+        );
     }
 
     /// @dev True when a fee is configured and there is AUM, i.e. elapsed time is worth preserving.
@@ -535,18 +567,10 @@ contract ShariahVault is AutonomousVault {
     /// @dev Booking replaces an equal view deduction; failed booking cannot gate user exits.
     function _tryAccrueWakalaFee() internal {
         uint256 fee = pendingWakalaFee();
-        if (fee == 0) {
-            if (_feeCanAccrue()) return; // keep elapsed time so rounding to zero never discards accrual
-            lastFeeAccrualTime = block.timestamp;
-            emit WakalaFeeAccrued(0);
-            return;
-        }
-        try shariahTreasury.accrue(fee) {
-            lastFeeAccrualTime = block.timestamp;
-            emit WakalaFeeAccrued(fee);
-        } catch {
-            emit WakalaAccrualSkipped(fee);
-        }
+        if (fee == 0 && _feeCanAccrue()) return; // never discard elapsed time through rounding
+        lastFeeAccrualTime = ShariahAccountingLogic.bookWakalaFee(
+            shariahTreasury, fee, lastFeeAccrualTime, true
+        );
     }
 
     /**
@@ -571,9 +595,17 @@ contract ShariahVault is AutonomousVault {
 
     /// @dev Shared real distribution; both callers hold the distribution lock before interactions.
     function _claimMusharakahProfit(uint256 grossProfit) internal returns (uint256) {
+        // Exit settlement allocates hurdle and deficit allowance to the departing shares only
+        // (alpha = shares / supply); an ordinary claim uses the whole vault (alpha = 1).
+        uint256 exitShares = _exitShares;
+        uint256 exitAssets = _exitAssets;
         (uint256 purified, uint256 charity, uint256 vaultShare, uint256 depositorShare, uint256 nextHurdleStartTime) =
             ShariahAccountingLogic.executeWaterfall(
-                asset(), purificationEscrow, grossProfit, hurdleStartTime, hurdlePrincipal
+                asset(), purificationEscrow, grossProfit,
+                ShariahAccountingLogic.WaterfallIn(
+                    hurdleStartTime, hurdlePrincipal,
+                    exitShares == 0 ? 1 : exitShares, exitShares == 0 ? 1 : totalSupply(), exitAssets
+                )
             );
 
         // N-11 / N-24 / N-19: the depositor share is NOT locked. The gross profit was already in
@@ -583,7 +615,9 @@ contract ShariahVault is AutonomousVault {
         // Manager-called lockProfit remains available for streaming genuinely new yield.
 
         // Realized checkpoints must not absorb appreciation before a later recall realizes it.
-        hurdlePrincipal = _assetsExcludingGoldGain();
+        // During an exit the payout leaves right after settlement, so stayers' principal excludes it.
+        uint256 principalNow = _assetsExcludingGoldGain();
+        hurdlePrincipal = principalNow > exitAssets ? principalNow - exitAssets : 0;
         // Advance only by profit already distributed to depositors, not unprocessed yield, so the
         // depositor share cannot be claimed as profit a second time.
         profitBase += depositorShare;
@@ -631,6 +665,17 @@ contract ShariahVault is AutonomousVault {
     function maxMint(address receiver) public view virtual override returns (uint256) {
         if (!valuationHealthy() || _goldPriceInsane()) return 0;
         return super.maxMint(receiver);
+    }
+
+    /// @notice Limits reflect what the vault can pay today: deployed capital is not instantly liquid.
+    function maxWithdraw(address owner_) public view virtual override returns (uint256) {
+        return Math.min(super.maxWithdraw(owner_), IERC20(asset()).balanceOf(address(this)));
+    }
+
+    function maxRedeem(address owner_) public view virtual override returns (uint256) {
+        return ShariahAccountingLogic.liquidRedeemLimit(
+            asset(), super.maxRedeem(owner_), totalAssets(), totalSupply() + 10 ** _decimalsOffset()
+        );
     }
 
     /// @notice Board-set threshold clamped to the current asset-based cap at enforcement time.
@@ -687,6 +732,7 @@ contract ShariahVault is AutonomousVault {
     }
 
     function setHurdlePrincipal(uint256 principal) external onlyOwner {
+        if (totalSupply() != 0 && principal < hurdlePrincipal) revert HurdlePrincipalCannotDecrease();
         hurdlePrincipal = principal;
     }
 
@@ -788,6 +834,45 @@ library ShariahAccountingLogic {
 
     uint256 internal constant ADAPTER_READ_GAS = 100_000;
     uint256 internal constant MAX_FUNDED_ADAPTERS = 10;
+
+    function retireGoldPrincipal(
+        mapping(address => uint256) storage principalOf, address adapter,
+        uint256 soldTokens, uint256 heldBefore, uint256 deployed
+    ) external returns (uint256) {
+        if (soldTokens == 0 || soldTokens > heldBefore) revert ShariahVault.InvalidGoldSaleFraction();
+        uint256 principal = principalOf[adapter];
+        uint256 retired = soldTokens == heldBefore ? principal : Math.mulDiv(principal, soldTokens, heldBefore);
+        principalOf[adapter] = principal - retired;
+        emit ShariahVault.PrincipalRetired(adapter, retired, 0);
+        return deployed > retired ? deployed - retired : 0;
+    }
+
+    /// @dev Exact ERC-4626 floor conversions, including virtual assets and shares.
+    function liquidRedeemLimit(
+        address token, uint256 shares, uint256 assets, uint256 virtualSupply
+    ) external view returns (uint256) {
+        uint256 liquidity = IERC20(token).balanceOf(address(this));
+        if (Math.mulDiv(shares, assets + 1, virtualSupply) <= liquidity) return shares;
+        return Math.min(shares, Math.mulDiv(liquidity, virtualSupply, assets + 1));
+    }
+
+    /// @dev Booking remains in vault context; only the forgiving exit/deposit path catches failure.
+    function bookWakalaFee(TreasuryModule treasury, uint256 fee, uint256 lastAccrual, bool forgiving)
+        external returns (uint256)
+    {
+        if (fee != 0) {
+            if (forgiving) {
+                try treasury.accrue(fee) {} catch {
+                    emit ShariahVault.WakalaAccrualSkipped(fee);
+                    return lastAccrual;
+                }
+            } else {
+                treasury.accrue(fee);
+            }
+        }
+        emit ShariahVault.WakalaFeeAccrued(fee);
+        return block.timestamp;
+    }
 
     function bookPrincipal(
         address[] storage funded, mapping(address => uint256) storage index,
@@ -943,44 +1028,70 @@ library ShariahAccountingLogic {
         return grossProfit - remaining;
     }
 
-    /// @dev Preserve approval → processed HWM read → waterfall → allowance reset ordering.
+    /// @dev Hurdle basis on a deposit. First deposit (or an unseeded basis) starts the clock now.
+    ///      Otherwise the accrued allowance P*t is preserved: the new capital accrues from now,
+    ///      i.e. t' = t*P/(P+A) on principal P+A.
+    function depositHurdle(
+        uint256 start, uint256 principal, uint256 supply, uint256 assetsNow, uint256 assets
+    ) external view returns (uint256 newStart, uint256 newPrincipal) {
+        if (supply == 0) return (block.timestamp, assets);
+        if (principal == 0) return (block.timestamp, assetsNow + assets);
+        uint256 elapsed = start < block.timestamp ? block.timestamp - start : 0;
+        return (block.timestamp - Math.mulDiv(elapsed, principal, principal + assets), principal + assets);
+    }
+
+    /// @dev Waterfall inputs. Preserve approval → processed HWM read → waterfall → allowance reset ordering.
+    struct WaterfallIn {
+        uint256 start;       // hurdleStartTime
+        uint256 principal;   // hurdlePrincipal (whole vault)
+        uint256 alphaNum;    // fraction of the vault this distribution covers: num / den
+        uint256 alphaDen;
+        uint256 exitAssets;  // payout leaving right after an exit settlement (0 otherwise)
+    }
+
     function executeWaterfall(
-        address token, PurificationEscrow escrow, uint256 grossProfit,
-        uint256 hurdleStartTime, uint256 hurdlePrincipal
+        address token, PurificationEscrow escrow, uint256 grossProfit, WaterfallIn memory w
     ) external returns (
         uint256 purified, uint256 charity, uint256 vaultShare, uint256 depositorShare,
         uint256 nextHurdleStartTime
     ) {
         IERC20(token).forceApprove(address(escrow), grossProfit);
-        // Gross tokens are already in NAV: use the checkpoint-capped processed deficit.
-        uint256 deficit = ShariahVault(address(this)).hwmDeficit();
+        // Gross tokens are already in NAV: use the checkpoint-capped processed deficit, and give
+        // this distribution only its own fraction of the hurdle and the deficit (alpha = 1 for a
+        // whole-vault claim, so ordinary claims are unchanged).
+        uint256 deficit = Math.mulDiv(ShariahVault(address(this)).hwmDeficit(), w.alphaNum, w.alphaDen);
+        uint256 slice = Math.mulDiv(w.principal, w.alphaNum, w.alphaDen);
         (purified, charity, vaultShare, depositorShare) = escrow.executeWaterfallHWM(
-            grossProfit, block.timestamp - hurdleStartTime, hurdlePrincipal, deficit
+            grossProfit, block.timestamp - w.start, slice, deficit
         );
         IERC20(token).forceApprove(address(escrow), 0);
         // Match the treasury: actual purification/charity deductions, then HWM recovery.
         uint256 net = grossProfit - purified - charity;
-        nextHurdleStartTime = _carryHurdle(
-            escrow, hurdleStartTime, hurdlePrincipal, net > deficit ? net - deficit : 0
-        );
+        nextHurdleStartTime = _carryHurdle(escrow, w, slice, net > deficit ? net - deficit : 0);
     }
 
     /// @dev Keep carry arithmetic in the linked waterfall, not the inherited vault runtime.
+    ///      The remaining allowance is the whole-vault hurdle minus what this distribution consumed,
+    ///      so stayers keep their own share of it after a partial exit.
     function _carryHurdle(
-        PurificationEscrow escrow, uint256 start, uint256 principal, uint256 netAfterRecovery
+        PurificationEscrow escrow, WaterfallIn memory w, uint256 slice, uint256 netAfterRecovery
     ) private view returns (uint256) {
         uint256 rate = escrow.shariahTreasury().hurdleRateBps();
+        uint256 elapsed = block.timestamp - w.start;
         // Same multiplication and flooring as TreasuryModule.calculateMusharakahSplitHWM.
-        uint256 hurdle = (principal * rate * (block.timestamp - start)) / (10_000 * 365 days);
-        if (hurdle <= netAfterRecovery) return block.timestamp;
+        uint256 hurdle = (w.principal * rate * elapsed) / (10_000 * 365 days);
+        uint256 hurdleSlice = (slice * rate * elapsed) / (10_000 * 365 days);
+        uint256 consumed = hurdleSlice < netAfterRecovery ? hurdleSlice : netAfterRecovery;
+        if (hurdle <= consumed) return block.timestamp;
 
         ShariahVault vault = ShariahVault(address(this));
         uint256 assets = vault.totalAssetsBeforeDistributionCut();
         uint256 gain = vault.goldUnrealizedGain();
         uint256 newPrincipal = assets > gain ? assets - gain : 0;
+        newPrincipal = newPrincipal > w.exitAssets ? newPrincipal - w.exitAssets : 0;
         if (newPrincipal == 0 || rate == 0) return block.timestamp;
 
-        uint256 remaining = hurdle - netAfterRecovery;
+        uint256 remaining = hurdle - consumed;
         uint256 annualizedPrincipal = newPrincipal * rate;
         // Clamp before mulDiv so even an unrepresentable lookback cannot overflow.
         if (remaining >= Math.mulDiv(annualizedPrincipal, block.timestamp, 10_000 * 365 days)) return 0;
@@ -1046,7 +1157,24 @@ library ShariahAccountingLogic {
         _remove(funded, index, replacement);
     }
 
+    /// @dev Preserve marker → NAV/allocation → combined gold cap → transfer ordering.
+    function deployCapital(
+        address token, address strategy, uint256 amount, uint256 deployed,
+        uint256 maxAllocationBps, address spread, address allocation
+    ) external {
+        _checkGoldMarker(strategy, spread, allocation);
+        uint256 currentAssets = ShariahVault(address(this)).totalAssets();
+        uint256 maxDeployable = (currentAssets * maxAllocationBps) / 10_000;
+        if (deployed + amount > maxDeployable) revert AutonomousVault.AllocationExceedsLimit();
+        _checkGoldCap(strategy, spread, allocation, amount, currentAssets);
+        IERC20(token).safeTransfer(strategy, amount);
+    }
+
     function checkGoldMarker(address strategy, address spread, address allocation) external view {
+        _checkGoldMarker(strategy, spread, allocation);
+    }
+
+    function _checkGoldMarker(address strategy, address spread, address allocation) private view {
         if (strategy.code.length != 0) {
             try IGoldMarker(strategy).isGoldStrategy() returns (bool g) {
                 if (g && strategy != spread && strategy != allocation) {
@@ -1076,6 +1204,12 @@ library ShariahAccountingLogic {
     function checkGoldCap(
         address strategy, address spread, address allocation, uint256 amount, uint256 currentAssets
     ) external view {
+        _checkGoldCap(strategy, spread, allocation, amount, currentAssets);
+    }
+
+    function _checkGoldCap(
+        address strategy, address spread, address allocation, uint256 amount, uint256 currentAssets
+    ) private view {
         if (strategy == spread || strategy == allocation) {
             uint256 paxgValue = spread != address(0) ? IGoldAdapter(spread).currentValue() : 0;
             uint256 xautValue = allocation != address(0) && allocation != spread

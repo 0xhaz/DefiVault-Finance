@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {Test, StdStorage, stdStorage} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {ShariahVault} from "../ShariahVault.sol";
@@ -16,6 +16,8 @@ import {MockRegistrySRF} from "./SecurityReviewFixesTest.t.sol";
 /// @dev N-26 fixture: NON-ZERO hurdle (4%/yr, 10% manager share), hurdlePrincipal seeded to the deposit.
 ///      Shared setup + helpers only; no test functions (category files inherit this).
 abstract contract TaskN26Base is Test {
+    using stdStorage for StdStorage;
+
     address internal owner = makeAddr("owner");
     address internal manager = makeAddr("manager");
     address internal alice = makeAddr("alice");
@@ -70,6 +72,11 @@ abstract contract TaskN26Base is Test {
         // Initial hurdlePrincipal is 0 on a fresh vault; seed it so the hurdle is live from deploy time.
         vm.prank(owner);
         vault.setHurdlePrincipal(DEP);
+    }
+
+    /// @dev Test-only: set the hurdle basis by storage write (the setter refuses decreases on a live vault).
+    function _forceHurdlePrincipal(uint256 v) internal {
+        stdstore.target(address(vault)).sig("hurdlePrincipal()").checked_write(v);
     }
 
     function _deposit(uint256 amount) internal {
