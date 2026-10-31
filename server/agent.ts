@@ -1154,7 +1154,8 @@ app.get('/api/screening/:protocol', (req, res) => {
   res.json({ advisory: true, report });
 });
 
-const PORT = parseInt(process.env.AGENT_PORT ?? '3001', 10);
+// Hosts such as Railway inject PORT; AGENT_PORT still wins when set.
+const PORT = parseInt(process.env.AGENT_PORT ?? process.env.PORT ?? '3001', 10);
 app.listen(PORT, () => {
   console.log(`[Agent] HTTP server on :${PORT}`);
   console.log(`[Agent] Vault:       ${VAULT_ADDRESS      || '(not configured)'}`);

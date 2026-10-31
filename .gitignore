@@ -10,3 +10,4 @@ contracts/cache/
 slither.json
 lcov.info
 !.env.mainnet
+dist/
