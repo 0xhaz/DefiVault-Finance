@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowRight, Zap, Shield, TrendingUp, ChevronRight, ArrowLeftRight, Moon, Star } from 'lucide-react';
 import type { Page } from '../components/Sidebar';
+import { ARC_NETWORK_NAME } from '../chain';
 
 interface LandingPageProps {
   onNavigate: (p: Page) => void;
@@ -151,7 +152,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
           {/* Brand badge */}
           <div className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 mb-6" style={{ background: 'rgba(172,198,233,0.08)', border: '1px solid rgba(172,198,233,0.2)' }}>
             <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--success)', boxShadow: '0 0 6px #8dd89f' }} />
-            <span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>defivault.finance · Arc Testnet · Shariah Screened</span>
+            <span className="text-xs font-medium" style={{ color: 'var(--accent)' }}>defivault.finance · {ARC_NETWORK_NAME} · Shariah Screened</span>
           </div>
 
           {/* Wordmark */}
@@ -486,7 +487,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
       {/* Footer */}
       <footer className="border-t pb-8 pt-6 text-center" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
         <p className="text-xs" style={{ color: 'var(--subtle)' }}>
-          DeFiVault · defivault.finance · AI-powered ERC-4626 capital allocator · Arc Testnet
+          DeFiVault · defivault.finance · AI-powered ERC-4626 capital allocator · {ARC_NETWORK_NAME}
         </p>
       </footer>
     </div>

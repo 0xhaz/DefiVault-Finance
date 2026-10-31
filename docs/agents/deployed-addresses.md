@@ -14,6 +14,12 @@ Tx: `0x6284050ab2f006a6fd23e4aae529bdfd8c749dbeaa32e310463b6bc9105a7338` Block: 
 
 ---
 
+## Arc MAINNET hackathon demo — 2026-10-31 (chain 5042; unaudited, small amounts)
+
+Owner-approved exception to the testnet-only rule. Full record, roles and example transactions: `docs/mainnet-hackathon-demo.md`. ShariahVaultV2 `0xDc40ed79F74141BBba84d54f84Eafd43CD8Bc470`, registry `0xb7b1cFEbB0390aA16945aCe518118d491016A793`, executor `0x23836611FDF05fAc07a12416e9c8C250F9cdF671`, aggregator `0x2b8dA7636aeb97C153F81C7168302dF45eD3643a`, treasury `0xf17585cB249EF6Ab8bB450595107DB34d46FfE91`, charity `0x99D53De353d32e34F18a21c8c760424FC92D01a9`, escrow `0x3dA4697D8154A794DaC1d63276072142ed7C1890`, zakat shim `0xf0f5A1f045136AD43ee03B1E3C703aEb3f1Ff941`.
+
+---
+
 ## Deploy batch — 2026-10-31 run 6 (ACTIVE)
 
 Script: `contracts/script/Rehearsal.s.sol:Rehearsal` → `step1_deploy()` (broadcast: `broadcast/Rehearsal.s.sol/5042002/step1_deploy-latest.json`, 39 transactions, all status 1, blocks 70015865 to 70016012, first tx `0x65ed46097783b689af328e95ff57bcdf803832fef7d2e8bdc063608edfd8261e`)  

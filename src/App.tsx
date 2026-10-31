@@ -7,6 +7,7 @@ import { StrategiesPage } from './pages/StrategiesPage';
 import { PortfolioPage } from './pages/PortfolioPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { IS_MAINNET } from './chain';
 
 /** Top-level community filter — gates which vault tiers and strategy sets are shown. */
 export type VaultMode = 'conventional' | 'shariah' | 'both';
@@ -46,6 +47,16 @@ export default function App() {
       )}
 
       <div className={`flex-1 min-w-0 ${!isLanding ? 'overflow-y-auto' : ''}`}>
+        {IS_MAINNET && (
+          <div
+            role="alert"
+            className="px-4 py-2 text-xs text-center"
+            style={{ background: 'rgba(245, 158, 11, 0.12)', color: 'var(--ink-2)', borderBottom: '1px solid var(--border)' }}
+          >
+            Arc mainnet hackathon demo. The contracts are unaudited and strategies are pending Shariah board
+            screening. Use only small amounts of USDC.
+          </div>
+        )}
         {isLanding ? (
           <LandingPage onNavigate={setPage} />
         ) : (

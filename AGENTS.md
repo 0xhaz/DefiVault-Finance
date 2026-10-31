@@ -108,6 +108,7 @@ Run with: `forge test --match-path 'contracts/test/invariant/*'`
 
 **Hard rules (never violate)**:
 - Testnet only; no mainnet deploys
+  - Exception (owner decision, 2026-10-31): an unaudited Arc mainnet hackathon demo of the core stack, small amounts only (`docs/mainnet-hackathon-demo.md`). No other mainnet deploys or transactions without explicit owner instruction.
 - Never reorder `ShariahStrategy` enum — deprecate or append only
 - No forced migration — v1 redemptions always available at NAV
 - Every Shariah parameter is board-settable via timelock; safety caps stay hard-coded

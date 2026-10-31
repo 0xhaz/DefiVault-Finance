@@ -3,7 +3,7 @@
  * Replace the placeholder addresses below after deploying the contracts.
  */
 
-/** CCTP domain → human-readable chain name (testnet) */
+/** CCTP domain → human-readable chain name */
 export const CCTP_DOMAIN_NAMES: Record<number, string> = {
   0:  'Local',
   1:  'Avalanche Fuji',
@@ -12,7 +12,7 @@ export const CCTP_DOMAIN_NAMES: Record<number, string> = {
   6:  'Base Sepolia',
   7:  'Polygon Amoy',
   10: 'Unichain Sepolia',
-  26: 'Arc Testnet',
+  26: 'Arc',
 };
 
 /** Short two-letter badge labels */

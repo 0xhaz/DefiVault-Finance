@@ -7,6 +7,7 @@ import {
   STRATEGY_TRIGGER_MODES, STRATEGY_DETAILS,
   CCTP_DOMAIN_NAMES, CCTP_DOMAIN_BADGES,
 } from '../contracts';
+import { ARC_CHAIN_ID } from '../chain';
 
 // ─── strategy eligibility per risk tier ─────────────────────────
 // Passive mask = 0b1001 (strategies 0 and 3)
@@ -269,7 +270,6 @@ function StrategyCard({
   );
 }
 
-const ARC_CHAIN_ID = 5042002;
 
 interface StrategyScoresProps {
   tier: 'passive' | 'aggressive';

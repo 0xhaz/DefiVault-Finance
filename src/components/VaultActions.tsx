@@ -1,16 +1,15 @@
 import { useState } from 'react';
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { erc20Abi, formatUnits, parseUnits } from 'viem';
-import { arcTestnet } from 'viem/chains';
+import { ARC_CHAIN_ID, ARC_NETWORK_NAME, txUrl } from '../chain';
 import { toast } from 'sonner';
 import { VAULT_ADDRESS, VAULT_ABI, EXECUTOR_ADDRESS, EXECUTOR_ABI } from '../contracts';
 
-const ARC_CHAIN_ID = arcTestnet.id;
-// Arc Testnet USDC (ERC-20 view, 6 decimals)
+// Arc USDC (ERC-20 view, 6 decimals); same address on testnet and mainnet
 const USDC_ADDRESS = '0x3600000000000000000000000000000000000000' as `0x${string}`;
 
 function buildTxExplorerUrl(txHash: string): string {
-  return `${arcTestnet.blockExplorers.default.url}/tx/${txHash}`;
+  return txUrl(txHash);
 }
 
 type Tab = 'deposit' | 'withdraw' | 'execute';
@@ -63,9 +62,9 @@ export function VaultActions() {
   const { writeContract, data: txHash, isPending, reset } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
 
-  function fmtBalance(raw: bigint | undefined): string {
+  function fmtBalance(raw: bigint | undefined, decimals = 6): string {
     if (!raw) return '0.00';
-    return parseFloat(formatUnits(raw, 6)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return parseFloat(formatUnits(raw, decimals)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
   function parsedAmount(): bigint {
@@ -81,7 +80,7 @@ export function VaultActions() {
 
   function handleAction() {
     if (!address) { toast.error('Connect your wallet first'); return; }
-    if (isWrongChain) { toast.error('Switch to Arc Testnet'); return; }
+    if (isWrongChain) { toast.error(`Switch to ${ARC_NETWORK_NAME}`); return; }
     if (!isDeployed) { toast.error('Contracts not yet deployed'); return; }
 
     reset();
@@ -180,7 +179,7 @@ export function VaultActions() {
             <>
               <span>Vault shares</span>
               <span className="tabular-nums" style={{ color: 'var(--muted)' }}>
-                {fmtBalance(vaultShares)} avUSDC ≈ {fmtBalance(sharesAsAssets)} USDC
+                {fmtBalance(vaultShares, 12)} svUSDC ≈ {fmtBalance(sharesAsAssets)} USDC
               </span>
             </>
           ) : (
@@ -227,7 +226,7 @@ export function VaultActions() {
         )}
 
         {isWrongChain && (
-          <p className="text-xs text-center" style={{ color: 'var(--danger)' }}>Switch to Arc Testnet to continue</p>
+          <p className="text-xs text-center" style={{ color: 'var(--danger)' }}>Switch to {ARC_NETWORK_NAME} to continue</p>
         )}
 
         <button
