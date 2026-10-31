@@ -1,8 +1,10 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
-  "build": { "builder": "NIXPACKS" },
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile.agent"
+  },
   "deploy": {
-    "startCommand": "bun run ./server/agent.ts",
     "healthcheckPath": "/health",
     "restartPolicyType": "ON_FAILURE"
   }

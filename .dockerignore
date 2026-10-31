@@ -1,0 +1,5 @@
+# Keep Docker build contexts small: only the agent's sources are needed (Dockerfile.agent).
+*
+!server/
+!Dockerfile.agent
+server/**/tests/

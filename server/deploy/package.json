@@ -1,0 +1,10 @@
+{
+  "name": "defivault-agent",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "cors": "2.8.6",
+    "express": "5.3.0",
+    "viem": "2.57.5"
+  }
+}

@@ -1,0 +1,10 @@
+# AI scoring agent (server/agent.ts) for Railway. Builds only what the agent needs:
+# the repo tracks node_modules from Arc Studio, which must not reach this image.
+FROM oven/bun:1.3.14-slim
+WORKDIR /app
+COPY server/deploy/package.json ./package.json
+RUN bun install --production
+COPY server ./server
+ENV NODE_ENV=production
+EXPOSE 3001
+CMD ["bun", "run", "./server/agent.ts"]
