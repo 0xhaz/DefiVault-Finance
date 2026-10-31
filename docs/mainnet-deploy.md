@@ -123,7 +123,7 @@ forge script contracts/script/DeployMainnet.s.sol:DeployMainnet --sig "verify()"
 ## 9. Unpause and first use
 
 1. From `OWNER_MULTISIG`: `vault.setPaused(false)` only after `verify()` passes and the audit conditions are met.
-2. First deposit and exit with a small amount from an ordinary wallet. Exits while profit exists require a minimum gas limit (the exit-settlement guard: 2 x (700k + 250k per funded adapter), 1.4M with no funded adapters). Let the node estimate gas; do not hardcode a lower limit in wallets or integrations.
+2. First deposit and exit with a small amount from an ordinary wallet. Exits while profit exists require a minimum gas limit (the exit-settlement guard: 2 x (700k + 1.3M per funded adapter): 1.4M with no funded adapters, 4M with one; a funded LP adapter exit measured about 6.1M). Let the node estimate gas; do not hardcode a lower limit in wallets or integrations.
 3. Keep the first weeks small. The vault has no deposit cap; limit exposure by pausing or by staged communication.
 
 ## 10. Record of the deployment (fill in, keep in sync with `docs/agents/deployed-addresses.md`)

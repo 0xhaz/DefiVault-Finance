@@ -267,17 +267,18 @@ contract LibraryAccountingTest is LibTestBase {
         uint256 l = h.loss();
         uint256 used = g - gasleft();
         assertEq(l, 0);
-        assertLt(used, ShariahAccountingLogic.ADAPTER_READ_GAS + 60_000, "burn capped near 100k");
+        assertLt(used, ShariahAccountingLogic.ADAPTER_READ_GAS + 60_000, "burn capped near the read cap");
         assertFalse(h.healthy(address(0), address(0)));
     }
 
     function test_Loss_ManyGasBurnersStillBounded() public {
-        for (uint256 i; i < 10; ++i) {
+        uint256 n = ShariahAccountingLogic.MAX_FUNDED_ADAPTERS;
+        for (uint256 i; i < n; ++i) {
             _fund(_adapter(4, 0), 1);
         }
         uint256 g = gasleft();
         h.loss();
-        assertLt(g - gasleft(), 10 * 100_000 + 300_000);
+        assertLt(g - gasleft(), n * ShariahAccountingLogic.ADAPTER_READ_GAS + 300_000);
     }
 
     function test_Loss_SumsAcrossAdaptersAndSkipsFailures() public {

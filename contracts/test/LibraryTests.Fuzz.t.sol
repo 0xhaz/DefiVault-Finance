@@ -304,7 +304,7 @@ contract LibraryFuzzLossSumTest is LibTestBase {
     /// PROPERTY: loss == sum(max(principal-value,0)) over readable adapters; <= sum of principals;
     ///           gains and failed reads contribute nothing.
     function testFuzz_LossSummation(uint256 seed, uint8 count) public {
-        uint256 n = bound(count, 1, 10);
+        uint256 n = bound(count, 1, ShariahAccountingLogic.MAX_FUNDED_ADAPTERS);
         uint256 sumPrincipal;
         uint256 expected;
         uint256 lossOnlyFromReadable;
@@ -338,7 +338,7 @@ contract LibraryFuzzLossSumTest is LibTestBase {
     }
 
     function testFuzz_AllGainsMeansZeroLoss(uint256 seed, uint8 count) public {
-        uint256 n = bound(count, 1, 10);
+        uint256 n = bound(count, 1, ShariahAccountingLogic.MAX_FUNDED_ADAPTERS);
         for (uint256 i; i < n; ++i) {
             uint256 p = bound(uint256(keccak256(abi.encode(seed, i, "p"))), 1, 2 ** 100);
             uint256 extra = bound(uint256(keccak256(abi.encode(seed, i, "e"))), 0, 2 ** 100);

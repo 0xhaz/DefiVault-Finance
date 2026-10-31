@@ -50,10 +50,10 @@ Compiler: `solc 0.8.28`, optimizer on, 200 runs, `evm_version = "paris"`. Depend
 
 ## 4. Areas that deserve the most attention
 
-1. **Exit settlement** (`_withdraw`, `exitSettle`, `ShariahAccountingLogic.executeWaterfall`): self-call in `try/catch` with a distribution lock; a gas guard (`InsufficientExitGas`, 2 x (700k + 250k per funded adapter)) added because `eth_estimateGas` otherwise picks a limit that starves the settlement; degraded mode when the escrow, charity or treasury is broken.
-2. **Net-of-cut pricing** (`totalAssets`, `pendingDistributionCut`, `PurificationEscrow.previewWaterfallHWM`): preview must equal the real waterfall; bounded 100k-gas read; failure yields a zero cut.
+1. **Exit settlement** (`_withdraw`, `exitSettle`, `ShariahAccountingLogic.executeWaterfall`): self-call in `try/catch` with a distribution lock; a gas guard (`InsufficientExitGas`, 2 x (700k + 1.3M per funded adapter) since N-33) added because `eth_estimateGas` otherwise picks a limit that starves the settlement; degraded mode when the escrow, charity or treasury is broken.
+2. **Net-of-cut pricing** (`totalAssets`, `pendingDistributionCut`, `PurificationEscrow.previewWaterfallHWM`): preview must equal the real waterfall; bounded 100k-gas read (`ESCROW_PREVIEW_GAS`); failure yields a zero cut.
 3. **Hurdle and high-water-mark accounting**: carry-forward of unused hurdle across partial claims and exits, allocation of hurdle and deficit by the departing share fraction (alpha), deposit-time basis (`depositHurdle`), scaling on withdrawal, owner setter that can only increase with live supply. Known limitation N-32.
-4. **Mark-to-market of non-gold adapters** (`unrealizedAdapterLoss`, `valuationHealthy`): bounded assembly `staticcall` (100k gas, exactly 32 bytes returned), failure counts as zero loss for exits but blocks deposits, cap of 10 funded adapters, deposit gate above the dust threshold.
+4. **Mark-to-market of non-gold adapters** (`unrealizedAdapterLoss`, `valuationHealthy`): bounded assembly `staticcall` (150k gas since N-33, exactly 32 bytes returned), failure counts as zero loss for exits but blocks deposits, cap of 10 funded adapters, deposit gate above the dust threshold.
 5. **Gold adapters**: oracle and pool deviation guards, stale-price handling, cached price, per-sale emergency exit (proposal, 1 hour delay, 24 hour window, 20 percent floor, flag enabled by 30-day timelock), `retireGoldPrincipal` hook, oracle replacement lock while the emergency flag is on.
 6. **CCTP settlement** (`CctpSettlementLogic`): message header parsing against the real CCTP V2 layout, destination caller, replay protection, balance-delta check, fee handling. Verified on a fork of Arc Testnet against the real contracts; live attestations, the unfinalized path and hook data were not exercised.
 7. **Registry and governance**: board role, expiring screening, 30-day timelocks, plain `Ownable` registry (immediate ownership transfer).
@@ -84,7 +84,7 @@ Fixed findings are listed with explanations in `docs/security-review.md` (N-01 t
 - **Manager-dependent exits:** deployed capital returns only when the manager (or owner) recalls it; no permissionless withdrawal queue. `maxWithdraw`/`maxRedeem` reflect idle liquidity.
 - **Concealed LP loss:** if a `HalalLPAdapter` price is unreadable, deposits are blocked but exits are priced at unmarked NAV.
 - **Emergency exit lead time:** enabling needs 30 days; a crash beyond 80 percent still blocks it.
-- **Exit gas floor:** exits with realized profit revert below the gas floor; integrators with hardcoded low gas will fail. With very expensive adapter reads (about 90k each across ten adapters) no practical gas limit completes an exit.
+- **Exit gas floor:** exits with realized profit revert below the gas floor; integrators with hardcoded low gas will fail. Since N-33 an exit reads every funded adapter about 23 times; with at most 5 funded adapters the measured worst case (140k per read) is 25.3M gas, inside Arc's 30M block limit. A real Uniswap V3 LP adapter exit measured about 6.1M gas.
 - **Degraded exit mode:** a broken escrow, charity or treasury leaves the leaver's cut in the vault as ordinary profit.
 - **Adapter self-reporting:** a screened adapter that overstates value is not detected.
 - **Size margin:** 259 bytes; the vault cannot take another feature without another split.

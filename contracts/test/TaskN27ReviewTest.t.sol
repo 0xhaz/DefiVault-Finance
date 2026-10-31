@@ -145,7 +145,8 @@ abstract contract TaskN27ReviewTests is TaskN27Base {
             a.setMode(AdapterN27.Mode(m));
             uint256 g = gasleft();
             uint256 navNow = vault.totalAssets();
-            assertLt(g - gasleft(), 2 * vault.ADAPTER_READ_GAS() * 2 + 400_000, "bounded NAV gas");
+            // Measured (N-33): one totalAssets() reads a linked gold slot 7 times, each capped at ADAPTER_READ_GAS.
+            assertLt(g - gasleft(), 7 * vault.ADAPTER_READ_GAS() + 400_000, "bounded NAV gas");
             assertEq(navNow, D, "no writedown/gain from an unreadable gold read");
             assertEq(vault.goldWritedown(), 0);
             assertEq(vault.goldUnrealizedGain(), 0);

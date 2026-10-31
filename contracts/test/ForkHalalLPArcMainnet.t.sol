@@ -6,6 +6,7 @@ import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {HalalLPAdapter, IHalalSwapRouter} from "../adapters/HalalLPAdapter.sol";
 import {ArcNativeCoinShim, ArcBlocklistShim} from "../test-helpers/ArcNativeCoinShim.sol";
+import {ShariahAccountingLogic} from "../ShariahVault.sol";
 
 interface IV3PoolReal {
     function token0() external view returns (address);
@@ -40,7 +41,7 @@ contract ForkHalalLPArcMainnetTest is Test {
     address internal constant NATIVE_AUTHORITY = 0x1800000000000000000000000000000000000000;
     address internal constant NATIVE_BLOCKLIST = 0x1800000000000000000000000000000000000001;
     uint256 internal constant NATIVE_SCALE = 1e12;
-    uint256 internal constant ADAPTER_READ_GAS = 100_000; // ShariahAccountingLogic.ADAPTER_READ_GAS
+    uint256 internal constant ADAPTER_READ_GAS = ShariahAccountingLogic.ADAPTER_READ_GAS; // 150k since N-33
 
     bytes32 internal constant DECREASE_SIG = keccak256("DecreaseLiquidity(uint256,uint128,uint256,uint256)");
     bytes32 internal constant COLLECT_SIG = keccak256("Collect(uint256,address,uint256,uint256)");
@@ -163,12 +164,11 @@ contract ForkHalalLPArcMainnetTest is Test {
         assertEq(bounded, direct, "bounded read equals direct read");
     }
 
-    /// KNOWN FINDING (LP-2, open): in a real deposit/exit transaction the adapter, position manager and pool
-    /// storage are cold. The cold read costs ~111k gas (observe() ~59k on a 1000-slot buffer, positions() ~17k,
-    /// two balanceOf ~12k), above the vault's 100k ADAPTER_READ_GAS. The vault would treat every read as failed:
-    /// valuationHealthy() == false, deposits blocked while the LP is funded, exits unmarked.
-    /// Flip this assertion to assertTrue once the read budget or the adapter's read path is fixed.
-    function test_knownFinding_LP2_coldReadExceedsVaultReadGasCap() public {
+    /// N-33 regression (LP-2): in a real deposit/exit transaction the adapter, position manager and pool storage
+    /// are cold. The cold read costs ~111k gas (observe() ~59k on a 1000-slot buffer, positions() ~17k, two
+    /// balanceOf ~12k). It failed the old 100k ADAPTER_READ_GAS (deposits blocked, exits unmarked while the LP
+    /// was funded); the cap is now 150k.
+    function test_N33_coldReadFitsVaultReadGasCap() public {
         _deploy(1_000e6);
         // Fresh transaction context: the read is the first touch of these accounts/slots in the tx.
         vm.cool(address(adapter));
@@ -178,7 +178,8 @@ contract ForkHalalLPArcMainnetTest is Test {
         vm.cool(USDC);
         vm.cool(EURC);
         (bool ok,) = _boundedValueRead();
-        assertFalse(ok, "LP-2 fixed? cold read now fits ADAPTER_READ_GAS: flip to assertTrue and update the workplan");
+        assertTrue(ok, "cold LP read must fit ADAPTER_READ_GAS");
+        assertGt(ADAPTER_READ_GAS, 115_000, "cap keeps headroom over the measured cold read");
     }
 
     /// Diagnostic: smallest cold-read budget (5k steps) at which currentValue() succeeds.
