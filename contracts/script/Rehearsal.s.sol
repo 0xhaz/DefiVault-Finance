@@ -45,7 +45,7 @@ contract TestnetRegistryShortTimelock is ShariahAdapterRegistry {
     constructor(address initialOwner, address initialBoardMember)
         ShariahAdapterRegistry(initialOwner, initialBoardMember)
     {
-        require(block.chainid != 5042, "mainnet forbidden");
+        require(block.chainid == 5042002 || block.chainid == 31337, "Arc Testnet or local only");
     }
 
     /// @notice Propose screening with the 2-minute testnet timelock.
@@ -55,7 +55,7 @@ contract TestnetRegistryShortTimelock is ShariahAdapterRegistry {
         bytes32 pronouncementHash,
         uint256 expiresAt
     ) external {
-        require(block.chainid != 5042, "mainnet forbidden");
+        require(block.chainid == 5042002 || block.chainid == 31337, "Arc Testnet or local only");
         require(boardRole[msg.sender], "TestnetReg: not board");
         require(pronouncementHash != bytes32(0), "TestnetReg: zero hash");
         require(expiresAt > block.timestamp, "TestnetReg: expiresAt in past");
@@ -67,7 +67,7 @@ contract TestnetRegistryShortTimelock is ShariahAdapterRegistry {
     /// @notice Execute screening after the 2-minute testnet timelock has elapsed.
     /// Writes directly to the parent's `screenings` mapping so the vault sees it.
     function executeScreeningTestnet(address adapter) external {
-        require(block.chainid != 5042, "mainnet forbidden");
+        require(block.chainid == 5042002 || block.chainid == 31337, "Arc Testnet or local only");
         require(boardRole[msg.sender], "TestnetReg: not board");
         uint256 executeAfter = testnetExecuteAfter[adapter];
         require(executeAfter != 0, "TestnetReg: not proposed");
@@ -163,7 +163,9 @@ contract Rehearsal is Script {
     // Add REHEARSAL_* vars to .env after step1_deploy() so steps 2-8 find the contracts.
 
     function _loadAddrs() internal {
-        // Defaults are the step-1 deploy from 2026-10-31 (Arc Testnet, run 4).
+        // N-41: the defaults below are live Arc Testnet addresses; never fall back to them on another chain.
+        require(block.chainid == 5042002 || block.chainid == 31337, "Arc Testnet or local only");
+        // Defaults are the step-1 deploy from 2026-10-31 (Arc Testnet, run 5).
         _addrs.registry      = vm.envOr("REHEARSAL_REGISTRY",       address(0xf0565b9f59c4C1CEBD17444BdE2ED5fC506738E9));
         _addrs.mockPaxg      = vm.envOr("REHEARSAL_MOCK_PAXG",      address(0x59dD438935A3c3D7E8DD582bE2f71B3218825A4f));
         _addrs.mockXaut      = vm.envOr("REHEARSAL_MOCK_XAUT",      address(0xa66aEe9767bAf57e6c5552626911B31606823e51));
@@ -183,6 +185,8 @@ contract Rehearsal is Script {
     // ── Step 1: Deploy full stack ─────────────────────────────────────────────
 
     function step1_deploy() public returns (RehearsalAddresses memory) {
+        // N-41: step 1 enables gold strategies and a 200 gwei gas ceiling without a board pronouncement.
+        require(block.chainid == 5042002 || block.chainid == 31337, "Arc Testnet or local only");
         uint256 deployerPk    = vm.envUint("DEPLOYER_PK");
         address deployer      = vm.addr(deployerPk);
         address boardMultisig = vm.envOr("BOARD_MULTISIG", deployer);
