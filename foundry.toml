@@ -10,6 +10,8 @@ auto_detect_solc = false
 evm_version = "paris"
 optimizer = true
 optimizer_runs = 200
+# LP-3: DeployUniswapV3Testnet reads the vendored official Uniswap V3 bytecode (read-only, one directory).
+fs_permissions = [{ access = "read", path = "./contracts/script/uniswap-v3" }]
 
 [profile.default.invariant]
 runs   = 256
