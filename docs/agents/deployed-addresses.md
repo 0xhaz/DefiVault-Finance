@@ -14,7 +14,37 @@ Tx: `0x6284050ab2f006a6fd23e4aae529bdfd8c749dbeaa32e310463b6bc9105a7338` Block: 
 
 ---
 
-## Deploy batch — 2026-10-30 run 3 (ACTIVE)
+## Deploy batch — 2026-10-31 run 5 (ACTIVE)
+
+Script: `contracts/script/Rehearsal.s.sol` → `step1_deploy()` (broadcast: `broadcast/Rehearsal.s.sol/5042002/step1_deploy-latest.json`)  
+Deployer: `0x3D23214d59CA3582628FffFE44D0Df1CC73D98f9`  
+Run 4 (same day) is superseded: a live smoke test showed `eth_estimateGas` picked a gas limit that starved the exit settlement, so the leaver skipped the distribution cut. Run 5 adds an up-front exit gas requirement (`InsufficientExitGas`, 2 x (700k + 250k per funded adapter)). Wallets and scripts must let `eth_estimateGas` run or set at least that limit for exits while realized profit exists.  
+Executor note: the original run 5 executor was replaced the same day (`0x08f0078F8460F64331Ab72191989632D74aA1740`, now the vault manager). The first one sized gold deployments to the 80% allocation limit and always hit `GoldCapExceeded` (gold is capped at 30% of NAV). The new `RiskTieredExecutor` clamps gold strategies to the remaining gold room. Its tier gas limit was raised to 200 gwei (Arc Testnet gas runs about 20 to 50 gwei, above the 20/30 gwei tier defaults), and the aggregator strategies for GOLD_SPREAD and GOLD_ALLOCATION were enabled (testnet only). End-to-end verified live on this stack: deposit, `writeScore`, `executeWinner` (gold allocation, 1.2 USDC), 1 USDC of yield, `claimMusharakahProfit` (share price unchanged across the claim), `recallCapital`, then a full redeem that left only the pending fees in the vault.  
+Includes: N-26 hurdle carry, N-27 non-gold mark-to-market with deposit gate, N-29 net-of-cut pricing with exit settlement, N-09 gold emergency exit (per-sale proposal, 20% floor), principal hook `retireGoldPrincipal`, hurdle basis on deposits and withdrawals, liquidity-aware `maxWithdraw`/`maxRedeem`, executor wired to the Shariah aggregator with gold strategies enabled, message transmitter set to the Arc Testnet MessageTransmitterV2.  
+`ShariahVaultV2` runtime on chain: 24,317 bytes (limit 24,576). Four linked libraries are deployed first (addresses in the broadcast file). `HalalLPAdapter` is not part of this deploy.
+
+| Contract | Address | Notes |
+|---|---|---|
+| TestnetRegistryShortTimelock | `0xf0565b9f59c4C1CEBD17444BdE2ED5fC506738E9` | 2-minute timelock, TESTNET ONLY |
+| ZakatModule | `0x6a37239Cc8ddEfd7B15361E74881AC3Cb17A4BA7` | v1 compat shim |
+| TreasuryModule | `0x5950B060BAB62071c089023379fF551e63a38b2d` | feeSource = vault |
+| ShariahVaultV2 (Conservative) | `0x921745edB0c2600481aA7E2e52D3A31ecE032CaC` | Primary vault |
+| CharityModule | `0xb012199314D0C4A430a7E3CfacdBC4a70dB5B4aF` | escrow wired |
+| PurificationEscrow | `0x30D0F57737271dF7A50e6098cbe590474f1530f5` | |
+| GoldExchangeAdapter (S2-H) | `0x325b43346bB47ca4a57BA8CF66A01f42063F6891` | |
+| GoldAllocationAdapter (S6-H) | `0x45cdaa572abf6A6712303DA1E903D1F8a60909Dc` | |
+| ShariahScoreAggregator | `0x8D4a426f6285d8f779731Eeaf7431B5C2C0A8B9B` | |
+| RiskTieredExecutor | `0x08f0078F8460F64331Ab72191989632D74aA1740` | vault manager |
+| MockAllocatedGold (PAXG) | `0x59dD438935A3c3D7E8DD582bE2f71B3218825A4f` | Testnet mock only |
+| MockXAUT | `0xa66aEe9767bAf57e6c5552626911B31606823e51` | Testnet mock only |
+| MockXauUsdAggregator | `0x25bC73c81869070C2115Bf95CF40b43AA05EeF28` | Testnet mock only |
+| MockUniswapV3PoolXAUT | `0xaB832009832460522B26230a60C2673648aF6D70` | Testnet mock only |
+
+Adapters must be screened on this registry before any capital is deployed (gold adapters: see the status line below).
+
+---
+
+## Deploy batch — 2026-10-30 run 3 (SUPERSEDED by runs 4 and 5)
 
 Script: `contracts/script/Rehearsal.s.sol` → `step1_deploy()` (broadcast: `broadcast/Rehearsal.s.sol/5042002/step1_deploy-latest.json`)  
 Deployer: `0x3D23214d59CA3582628FffFE44D0Df1CC73D98f9`  

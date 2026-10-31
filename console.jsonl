@@ -805,3 +805,7 @@
 {"level":"debug","message":"[vite] connected.","timestamp":1793323195403}
 {"level":"debug","message":"[vite] connected.","timestamp":1793323207107}
 {"level":"debug","message":"[vite] connected.","timestamp":1793323269424}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1793410121261}
+{"level":"debug","message":"[vite] connected.","timestamp":1793421483256}
+{"level":"log","message":"[vite] server connection lost. Polling for restart...","timestamp":1793426731049}
+{"level":"debug","message":"[vite] connected.","timestamp":1793428979162}
