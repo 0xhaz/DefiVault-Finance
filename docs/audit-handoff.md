@@ -79,7 +79,7 @@ Assumed honest: Circle (USDC and CCTP), the XAU/USD oracle, DEX liquidity for th
 
 ## 6. Known findings and limitations
 
-Fixed findings are listed with explanations in `docs/security-review.md` (N-01 to N-31, N-33, N-35, N-37, N-38). Open or accepted at handoff:
+Fixed findings are listed with explanations in `docs/security-review.md` (N-01 to N-31, N-33, N-35, N-37 to N-39). Open or accepted at handoff:
 
 - **N-32 (medium, accepted):** a deposit made while a large unprocessed profit exists and an HWM deficit is open can shrink the deficit; worst case measured about 0.28 percent of holder value for one round trip at maximum rates.
 - **N-34 (medium, accepted for V2):** with a funded LP adapter, the deposit gate (marked non-gold loss above the dust threshold, default 1 USDC) closes as soon as entry costs are booked. Mitigation: the board raises the dust threshold before LP funding (runbook). We would like the auditors' view on a better gate for LP strategies.
