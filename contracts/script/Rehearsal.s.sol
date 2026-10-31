@@ -163,21 +163,21 @@ contract Rehearsal is Script {
     // Add REHEARSAL_* vars to .env after step1_deploy() so steps 2-8 find the contracts.
 
     function _loadAddrs() internal {
-        // Defaults are the step-1 deploy from 2026-10-30 (Arc Testnet, size-refactor redeploy).
-        _addrs.registry      = vm.envOr("REHEARSAL_REGISTRY",       address(0x2D4AEFFA868aEf498fBa9B214ffa1F60a2A5986B));
-        _addrs.mockPaxg      = vm.envOr("REHEARSAL_MOCK_PAXG",      address(0x4e22e749cada3Da6Fd9A08cdbf2f89876a45385e));
-        _addrs.mockXaut      = vm.envOr("REHEARSAL_MOCK_XAUT",      address(0xFFC25A26B0123fD7f39C87f19bBdb2a49ECe294a));
-        _addrs.xauOracle     = vm.envOr("REHEARSAL_XAU_ORACLE",     address(0x6d2ec4355c9c08aCcda6732b09f5d4776CBEEC52));
-        _addrs.xautPool      = vm.envOr("REHEARSAL_XAUT_POOL",      address(0x0179b906669e754De5996E4557C781b56bbBce19));
-        _addrs.zakatModule   = vm.envOr("REHEARSAL_ZAKAT_MODULE",   address(0x6E2B7B9c065Bb8669C75bcd95b7A31aB2559A1Ff));
-        _addrs.treasury      = vm.envOr("REHEARSAL_TREASURY",       address(0xF590B3C9e8EfD25e1e13DcFd718AA6ADF1B9a957));
-        _addrs.vault         = vm.envOr("REHEARSAL_VAULT",          address(0x2046b3e560d578f8907ca4ec3812Be1CEd5f60fB));
-        _addrs.charityModule = vm.envOr("REHEARSAL_CHARITY_MODULE", address(0x29BdD154b3e33Fc7913cbb946BAC95D017A52754));
-        _addrs.escrow        = vm.envOr("REHEARSAL_ESCROW",         address(0x1511c7f141aC1C13305af3aCBDE1ead68dEa8207));
-        _addrs.goldSpreadAdap= vm.envOr("REHEARSAL_GOLD_SPREAD",    address(0x82Dc6699957913a74Df58237c4fC8416CB8d189c));
-        _addrs.goldAllocAdap = vm.envOr("REHEARSAL_GOLD_ALLOC",     address(0xD8f359a80942F5E3897e1cbf23273Cf9bC13a3E2));
-        _addrs.shariahAgg    = vm.envOr("REHEARSAL_SHARIAH_AGG",    address(0x1eb5Fc5832f8dD5943C2bF4F3c0Cf615c5Adb19a));
-        _addrs.executor      = vm.envOr("REHEARSAL_EXECUTOR",       address(0x6FBdbf49880650f3FAb02f0C4C133bD0881266C8));
+        // Defaults are the step-1 deploy from 2026-10-31 (Arc Testnet, run 4).
+        _addrs.registry      = vm.envOr("REHEARSAL_REGISTRY",       address(0xf0565b9f59c4C1CEBD17444BdE2ED5fC506738E9));
+        _addrs.mockPaxg      = vm.envOr("REHEARSAL_MOCK_PAXG",      address(0x59dD438935A3c3D7E8DD582bE2f71B3218825A4f));
+        _addrs.mockXaut      = vm.envOr("REHEARSAL_MOCK_XAUT",      address(0xa66aEe9767bAf57e6c5552626911B31606823e51));
+        _addrs.xauOracle     = vm.envOr("REHEARSAL_XAU_ORACLE",     address(0x25bC73c81869070C2115Bf95CF40b43AA05EeF28));
+        _addrs.xautPool      = vm.envOr("REHEARSAL_XAUT_POOL",      address(0xaB832009832460522B26230a60C2673648aF6D70));
+        _addrs.zakatModule   = vm.envOr("REHEARSAL_ZAKAT_MODULE",   address(0x6a37239Cc8ddEfd7B15361E74881AC3Cb17A4BA7));
+        _addrs.treasury      = vm.envOr("REHEARSAL_TREASURY",       address(0x5950B060BAB62071c089023379fF551e63a38b2d));
+        _addrs.vault         = vm.envOr("REHEARSAL_VAULT",          address(0x921745edB0c2600481aA7E2e52D3A31ecE032CaC));
+        _addrs.charityModule = vm.envOr("REHEARSAL_CHARITY_MODULE", address(0xb012199314D0C4A430a7E3CfacdBC4a70dB5B4aF));
+        _addrs.escrow        = vm.envOr("REHEARSAL_ESCROW",         address(0x30D0F57737271dF7A50e6098cbe590474f1530f5));
+        _addrs.goldSpreadAdap= vm.envOr("REHEARSAL_GOLD_SPREAD",    address(0x325b43346bB47ca4a57BA8CF66A01f42063F6891));
+        _addrs.goldAllocAdap = vm.envOr("REHEARSAL_GOLD_ALLOC",     address(0x45cdaa572abf6A6712303DA1E903D1F8a60909Dc));
+        _addrs.shariahAgg    = vm.envOr("REHEARSAL_SHARIAH_AGG",    address(0x8D4a426f6285d8f779731Eeaf7431B5C2C0A8B9B));
+        _addrs.executor      = vm.envOr("REHEARSAL_EXECUTOR",       address(0x08f0078F8460F64331Ab72191989632D74aA1740));
     }
 
     // ── Step 1: Deploy full stack ─────────────────────────────────────────────
@@ -320,7 +320,21 @@ contract Rehearsal is Script {
         );
         _addrs.executor = address(exec);
         ShariahVaultV2(_addrs.vault).setManager(_addrs.executor);
+        // Shariah tiers read this aggregator, not the constructor's conventional one.
+        exec.setShariahAggregator(_addrs.shariahAgg);
+        // Enable the two gold strategies (GOLD_SPREAD = 1, GOLD_ALLOCATION = 5) with testnet-sized bounds.
+        // The adapters must still be screened (step3 / step3b) before the vault accepts funding.
+        // Arc Testnet gas has been observed between roughly 20 and 50 gwei; the tier defaults
+        // (20/30 gwei) would make executeWinner revert GasPriceTooHigh most of the time.
+        exec.setMaxGasPrice(200 gwei);
+        exec.setShariahStrategyConfig(1, _addrs.goldSpreadAdap, bytes32(0), true, 1e6, 1_000e6);
+        exec.setShariahStrategyConfig(5, _addrs.goldAllocAdap, bytes32(0), true, 1e6, 1_000e6);
         sagg.setOracle(agentWallet);
+        // Strategies start disabled in the aggregator (`getWinningShariahStrategy` skips them).
+        // TESTNET ONLY: enable the two funded gold strategies for the demo; on a production chain
+        // this needs a recorded board pronouncement first (see ShariahScoreAggregator.setEnabled).
+        sagg.setEnabled(ShariahScoreAggregator.ShariahStrategy.GOLD_SPREAD, true);
+        sagg.setEnabled(ShariahScoreAggregator.ShariahStrategy.GOLD_ALLOCATION, true);
 
         console.log("ShariahScoreAggregator:", _addrs.shariahAgg);
         console.log("RiskTieredExecutor    :", _addrs.executor);
@@ -388,9 +402,12 @@ contract Rehearsal is Script {
         console.log("=== STEP 3b: Execute S3-H screening after 2-minute delay ===");
         vm.startBroadcast(boardPk);
         TestnetRegistryShortTimelock(_addrs.registry).executeScreeningTestnet(halalLpAdapter);
-        ShariahVaultV2(_addrs.vault).setScreened(halalLpAdapter, true);
-        console.log("S3-H screening executed. HalalLPAdapter is now screened.");
         vm.stopBroadcast();
+        // setScreened is owner-only, and the owner (deployer) can differ from the board account.
+        vm.startBroadcast(vm.envUint("DEPLOYER_PK"));
+        ShariahVaultV2(_addrs.vault).setScreened(halalLpAdapter, true);
+        vm.stopBroadcast();
+        console.log("Adapter screening executed and marked screened on the vault.");
     }
 
     // ── Step 4: Agent wiring (off-chain instructions) ─────────────────────────

@@ -188,6 +188,16 @@ contract RiskTieredExecutor is Ownable2Step {
         uint256 amount = remainingAllocation;
         if (amount > config.maxAmount) amount = config.maxAmount;
         if (amount > idleAssets) amount = idleAssets;
+        // Gold strategies share a 30%-of-NAV cap enforced by the vault (GoldCapExceeded). Size the
+        // deployment to the remaining gold room instead of the general allocation limit.
+        if (
+            (riskTier == RiskTier.SHARIAH_CONSERVATIVE || riskTier == RiskTier.SHARIAH_DYNAMIC)
+                && (idx == uint8(ShariahScoreAggregator.ShariahStrategy.GOLD_SPREAD)
+                    || idx == uint8(ShariahScoreAggregator.ShariahStrategy.GOLD_ALLOCATION))
+        ) {
+            uint256 room = _goldRoom(totalAssets_);
+            if (amount > room) amount = room;
+        }
 
         if (amount < config.minAmount || amount == 0) revert NothingToExecute();
 
@@ -213,6 +223,19 @@ contract RiskTieredExecutor is Ownable2Step {
         }
 
         _executionLocked = false;
+    }
+
+    /// @dev Remaining room under the vault's combined gold cap (30% of NAV, see ShariahVault gold cap).
+    function _goldRoom(uint256 totalAssets_) private view returns (uint256) {
+        ShariahVault sv = ShariahVault(address(vault));
+        address spread = sv.goldSpreadAdapter();
+        address allocation = sv.goldAllocationAdapter();
+        uint256 goldValue = spread != address(0) ? IStrategyAdapter(spread).currentValue() : 0;
+        if (allocation != address(0) && allocation != spread) {
+            goldValue += IStrategyAdapter(allocation).currentValue();
+        }
+        uint256 goldCap = (totalAssets_ * 3000) / 10_000;
+        return goldCap > goldValue ? goldCap - goldValue : 0;
     }
 
     function setStrategyConfig(

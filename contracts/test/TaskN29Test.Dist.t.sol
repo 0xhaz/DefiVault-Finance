@@ -40,13 +40,29 @@ abstract contract TaskN29Dist is TaskN29Base {
         s.depositorShare = g - s.purified - s.charityAmt - s.vaultShare;
     }
 
+    /// @dev Independent expectation of an exit settlement: the leaver's gross slice, with the hurdle
+    ///      principal and HWM deficit both scaled by alpha = shares / totalSupply (pre-burn), pushed
+    ///      through TreasuryModule.calculateMusharakahSplitHWM. Never reads vault settlement outputs.
+    function _expectedExit(uint256 g, uint256 purBps, uint256 shares) internal view returns (Split memory s) {
+        uint256 supply = vault.totalSupply();
+        uint256 principalSlice = (vault.hurdlePrincipal() * shares) / supply;
+        uint256 deficitSlice = (vault.hwmDeficit() * shares) / supply;
+        s.gross = g;
+        s.purified = (g * purBps) / 10_000;
+        s.charityAmt = ((g - s.purified) * 250) / 10_000;
+        (, s.vaultShare, s.depositorShare) = treasury.calculateMusharakahSplitHWM(
+            g - s.purified - s.charityAmt, block.timestamp - vault.hurdleStartTime(), principalSlice, deficitSlice
+        );
+        s.depositorShare = g - s.purified - s.charityAmt - s.vaultShare;
+    }
+
     // ───────────── cut routed on exit ─────────────
 
     function test_exit_routesLeaversCutToCharityAndTreasury() public {
         _yield(200e6);
         uint256 shares = vault.balanceOf(bob);
         uint256 g = (vault.realizedProfit() * shares) / vault.totalSupply();
-        Split memory e = _expected(g, 0, block.timestamp - vault.hurdleStartTime(), vault.hurdlePrincipal(), 0);
+        Split memory e = _expectedExit(g, 0, shares);
         assertGt(e.vaultShare, 0, "scenario exercises the manager share");
 
         uint256 charityCtrBefore = charity.totalCharityDistributed();
@@ -66,8 +82,9 @@ abstract contract TaskN29Dist is TaskN29Base {
         _yield(200e6);
         uint256 shares = vault.balanceOf(bob);
         uint256 g = (vault.realizedProfit() * shares) / vault.totalSupply();
-        Split memory e = _expected(g, 100, block.timestamp - vault.hurdleStartTime(), vault.hurdlePrincipal(), 0);
+        Split memory e = _expectedExit(g, 100, shares);
         assertGt(e.purified, 0);
+        assertGt(e.vaultShare, 0, "scenario exercises the manager share");
 
         uint256 charityCtrBefore = charity.totalCharityDistributed();
         uint256 feesBefore = treasury.pendingFees();
@@ -94,7 +111,7 @@ abstract contract TaskN29Dist is TaskN29Base {
         _setPurification(100);
         _yield(200e6);
         uint256 g = (vault.realizedProfit() * vault.balanceOf(bob)) / vault.totalSupply();
-        Split memory e = _expected(g, 100, block.timestamp - vault.hurdleStartTime(), vault.hurdlePrincipal(), 0);
+        Split memory e = _expectedExit(g, 100, vault.balanceOf(bob));
         uint256 assets = vault.maxWithdraw(bob);
         vm.recordLogs();
         vm.prank(bob);
@@ -172,7 +189,9 @@ abstract contract TaskN29Dist is TaskN29Base {
         uint256 d = vault.hwmDeficit();
         uint256 shares = vault.balanceOf(bob);
         uint256 g = (vault.realizedProfit() * shares) / vault.totalSupply();
-        Split memory e = _expected(g, 0, block.timestamp - vault.hurdleStartTime(), vault.hurdlePrincipal(), d);
+        assertGt(d, 0, "non-zero deficit");
+        Split memory e = _expectedExit(g, 0, shares);
+        assertGt(e.vaultShare, 0, "manager share survives deficit + hurdle at alpha scale");
         uint256 feesBefore = treasury.pendingFees();
         vm.prank(bob);
         vault.redeem(shares, bob, bob);

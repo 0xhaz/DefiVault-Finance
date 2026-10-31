@@ -115,8 +115,7 @@ abstract contract TaskN26Core is TaskN26Base {
         _accrue(YEAR, 10e6);
         uint256 n = _net(10e6);
         // principal such that floor(principal*RATE*YEAR/(10_000*YEAR)) == n exactly
-        vm.prank(owner);
-        vault.setHurdlePrincipal(n * 10_000 / RATE);
+        _forceHurdlePrincipal(n * 10_000 / RATE);
         assertEq(_hurdleNow(), n);
         assertEq(_claimFee(10e6), 0);
         assertEq(vault.hurdleStartTime(), block.timestamp, "remaining allowance is zero -> reset");

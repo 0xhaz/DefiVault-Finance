@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {Test, Vm} from "forge-std/Test.sol";
+import {Test, Vm, StdStorage, stdStorage, console2} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {ShariahVault} from "../ShariahVault.sol";
@@ -36,6 +36,8 @@ contract HookTokenN29 is MockERC20 {
 /// @dev N-29 fixture: real escrow/charity/treasury wiring, non-zero charity rate (2.5%), Musharakah
 ///      share (10%) and hurdle (4%/yr on a 2_000e6 principal). alice and bob each hold 1_000e6.
 abstract contract TaskN29Base is Test {
+    using stdStorage for StdStorage;
+
     address internal owner = makeAddr("owner");
     address internal manager = makeAddr("manager");
     address internal alice = makeAddr("alice");
@@ -93,6 +95,25 @@ abstract contract TaskN29Base is Test {
         vault.deposit(DEP, bob);
         vm.prank(owner);
         vault.setHurdlePrincipal(2 * DEP); // non-zero hurdle base
+    }
+
+    /// @dev Force a non-zero HWM deficit by raising the processed per-share high (1e12 = launch price).
+    function _writeHwm(uint256 perShare) internal {
+        stdstore.target(address(vault)).sig("highWaterMarkPerShare()").checked_write(perShare);
+    }
+
+    /// @dev Test-only: set the hurdle basis by storage write (the setter refuses decreases on a live vault).
+    function _forceHurdlePrincipal(uint256 v) internal {
+        stdstore.target(address(vault)).sig("hurdlePrincipal()").checked_write(v);
+    }
+
+    /// @dev Stayer-value tolerance after a partial exit: 10 wei rounding + 1e-9 relative.
+    function _driftTol(uint256 v) internal pure returns (uint256) {
+        return TOL + v / 1e9;
+    }
+
+    function _absDiff(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a > b ? a - b : b - a;
     }
 
     function _fund(address who) internal {
