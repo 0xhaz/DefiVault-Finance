@@ -69,7 +69,7 @@ export interface StrategyCardViewProps {
   isLive: boolean;
   isStale: boolean;
   highlight: boolean;          // winner / best: tinted card
-  badgeLabel: string;          // Simulated | Active | Winner | Expired | Screened | Best
+  badgeLabel: string;          // Live | Simulated | Active | Winner | Expired | Screened | Best | Suspended
   freshness: string;
   signal?: string;
   chainBadge: string;
@@ -85,6 +85,7 @@ const BADGE_STYLES: Record<string, React.CSSProperties> = {
   Expired:   { background: 'rgba(255,255,255,0.06)', color: 'var(--subtle)', border: '1px solid var(--border)' },
   Suspended: { background: 'rgba(255,255,255,0.06)', color: 'var(--subtle)', border: '1px solid var(--border)' },
   Simulated: { background: 'rgba(240,180,41,0.10)', color: '#f0b429', border: '1px solid rgba(240,180,41,0.25)' },
+  Live:      { background: 'rgba(172,198,233,0.12)', color: 'var(--accent)', border: '1px solid rgba(172,198,233,0.2)' },
   Winner:    { background: 'rgba(141,216,159,0.15)', color: '#8dd89f', border: '1px solid rgba(141,216,159,0.3)' },
   Best:      { background: 'rgba(141,216,159,0.15)', color: '#8dd89f', border: '1px solid rgba(141,216,159,0.3)' },
   Screened:  { background: 'rgba(141,216,159,0.08)', color: '#8dd89f', border: '1px solid rgba(141,216,159,0.2)' },
@@ -254,7 +255,7 @@ function StrategyCard({
   const badgeLabel =
     !hasData    ? 'Expired' :
     isStale     ? 'Expired' :
-    !hasOnChain ? 'Simulated' :
+    !hasOnChain ? 'Live' :
     isWinner    ? 'Winner' :
                   'Active';
 
@@ -276,7 +277,7 @@ function StrategyCard({
       badgeLabel={badgeLabel}
       freshness={hasOnChain
         ? (isStale ? `Stale — ${age}s ago` : `Updated ${age}s ago`)
-        : (agentScore ? 'Agent simulation' : 'Awaiting data')}
+        : (agentScore ? 'Agent live' : 'Awaiting data')}
       signal={!hasOnChain ? agentScore?.signal : undefined}
       chainBadge={isCrosschain ? `CCTP→${CCTP_DOMAIN_BADGES[effectiveDomain] ?? effectiveDomain}` : 'LOCAL'}
       isCrosschain={isCrosschain}
@@ -370,9 +371,9 @@ export function StrategyScores({ tier }: StrategyScoresProps) {
           {!isDeployed && agentScores && (
             <span
               className="text-xs px-2 py-0.5 rounded"
-              style={{ background: 'rgba(240,180,41,0.1)', color: '#f0b429', border: '1px solid rgba(240,180,41,0.2)' }}
+              style={{ background: 'rgba(141,216,159,0.1)', color: '#8dd89f', border: '1px solid rgba(141,216,159,0.2)' }}
             >
-              Agent simulation
+              Agent live
             </span>
           )}
         </div>

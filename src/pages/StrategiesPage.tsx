@@ -201,8 +201,8 @@ export function StrategiesPage({ selectedTier, onSelectTier, onAgentRunningChang
         {!isShariahTab && (
           <div className="flex items-center gap-2">
             <span className="text-xs px-2 py-0.5 rounded"
-              style={{ background: 'rgba(240,180,41,0.1)', color: '#f0b429', fontSize: '0.6rem' }}>SIMULATED</span>
-            <span className="text-xs" style={{ color: 'var(--muted)' }}>Agent scores (pre-deploy)</span>
+              style={{ background: 'rgba(172,198,233,0.12)', color: 'var(--accent)', fontSize: '0.6rem' }}>LIVE</span>
+            <span className="text-xs" style={{ color: 'var(--muted)' }}>Scored by the AI agent from live market data</span>
           </div>
         )}
       </div>
