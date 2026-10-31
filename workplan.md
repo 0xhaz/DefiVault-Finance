@@ -158,13 +158,16 @@ Uniswap v4 is live on Arc Testnet and mainnet and seems to be where most Arc DEX
 | V3-LP4 | Testnet: use the existing v4 USDC/EURC hookless pool `0xf775…29ea` (seed liquidity from the faucet), or a pool with an oracle hook | Pool exists, depth is negligible |
 | V3-LP5 | Shariah review: hooks can carry arbitrary logic, so the board screening must cover the hook as well as the pool | New SR item |
 | V3-LP6 | Size budget: the V2 vault has 259 B of margin. A V3 vault is a new deployment and can be restructured | Plan the library split up front |
+| V3-G1 | Deposit gate for LP strategies (N-34, D-6): size the loss gate per adapter (for example, relative to its principal) instead of the gold-sized dust threshold | Auditors and board consulted |
+| V3-G2 | Tier-aware winner (N-36, D-7): pass the executor's strategy mask to the aggregator so a tier picks its best allowed strategy | One aggregator can serve all tiers |
 
 ## 3. Decisions needed
 
 | ID | Decision | Recommendation |
 |---|---|---|
 | D-1 | Is the LP adapter part of the mainnet launch? | Keep it **in audit scope** (it is already in the handoff and is the least tested code). A real venue now exists (official Uniswap V3 USDC/EURC on Arc mainnet, about $90k depth), so LP can launch if LP-1 to LP-6 pass, with a small per-deploy cap and a board ruling on EURC. Gold depends on M-3 the same way. Fallback: launch with idle USDC plus gold, or USDC only |
-| D-6 | N-34: keep the dust-based deposit gate for LP strategies (and run the board dust change before funding), or change the gate for LP adapters (for example, a threshold relative to the adapter's principal)? | For V2: use the board dust mitigation and add it to the launch runbook (no vault bytes needed). Ask the auditors and the board about a better gate for V3 |
+| D-6 | N-34: keep the dust-based deposit gate for LP strategies (and run the board dust change before funding), or change the gate for LP adapters (for example, a threshold relative to the adapter's principal)? | **Decided 2026-10-31:** for V2, use the board dust mitigation (in `docs/mainnet-config.md` and step 7 of `docs/mainnet-deploy.md`; no vault bytes needed). Ask the auditors and the board about a better gate for V3 |
+| D-7 | N-36: change the aggregator/executor so a tier falls back to its best allowed strategy, or accept the limitation for V2? | **Decided 2026-10-31:** accept for V2. Mainnet has one aggregator serving one Conservative executor; enable only strategies inside mask 38 (GOLD_SPREAD, HALAL_LP, GOLD_ALLOCATION). A tier-aware winner is a V3 item |
 | D-5 | Uniswap v4 support | Defer to ShariahVaultV3 (Phase 7). It needs a new adapter and a price source, so it should not grow the current audit |
 | D-2 | Concealed LP loss: accept it, or block exits pro rata while the LP price is unreadable? | Decide after LP-7 measures it. If the loss can be material, a contract change is needed, and it must land before the audit freeze |
 | D-3 | Run the 30-day clocks on run 5 now, or wait for run 6? | Start them on run 5 now for flow evidence, and restart them on the final run only for things the launch depends on |
