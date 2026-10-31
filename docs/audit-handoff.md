@@ -46,13 +46,13 @@ Compiler: `solc 0.8.28`, optimizer on, 200 runs, `evm_version = "paris"`. Depend
 
 ## 3. Architecture notes for reviewers
 
-- `ShariahVaultV2` inherits `ShariahVault`, which inherits `AutonomousVault`. All of it compiles into one contract. Runtime size is 24,317 bytes against the 24,576-byte limit, so logic was moved into four external linked libraries called by delegatecall with storage pointers. Review the storage-pointer parameters and the library entry points as part of the vault.
+- `ShariahVaultV2` inherits `ShariahVault`, which inherits `AutonomousVault`. All of it compiles into one contract. Runtime size is 24,414 bytes against the 24,576-byte limit (162 bytes of margin after N-37 and N-38), so logic was moved into four external linked libraries called by delegatecall with storage pointers. Review the storage-pointer parameters and the library entry points as part of the vault.
 - Dependencies are separate contracts the vault trusts: treasury, charity module, purification escrow, registry, adapters and the executor. Exit settlement calls the escrow, charity module and treasury inside a `try/catch`.
 - Arc specifics: USDC is the native gas token; the ERC-20 view has 6 decimals and the native view 18; sends to a blocklisted address revert; the mempool floors `maxFeePerGas` at 20 gwei.
 
 ## 4. Areas that deserve the most attention
 
-1. **Exit settlement** (`_withdraw`, `exitSettle`, `ShariahAccountingLogic.executeWaterfall`): self-call in `try/catch` with a distribution lock; a gas guard (`InsufficientExitGas`, 2 x (700k + 1.3M per funded adapter) since N-33) added because `eth_estimateGas` otherwise picks a limit that starves the settlement; degraded mode when the escrow, charity or treasury is broken.
+1. **Exit settlement** (`_withdraw`, `exitSettle`, `ShariahAccountingLogic.executeWaterfall`): self-call in `try/catch` with a distribution lock; a gas guard (`InsufficientExitGas`, 2 x (700k + 1.3M per funded adapter + 1M per linked gold slot) since N-33 and N-38) added because `eth_estimateGas` otherwise picks a limit that starves the settlement; degraded mode when the escrow, charity or treasury is broken.
 2. **Net-of-cut pricing** (`totalAssets`, `pendingDistributionCut`, `PurificationEscrow.previewWaterfallHWM`): preview must equal the real waterfall; bounded 100k-gas read (`ESCROW_PREVIEW_GAS`); failure yields a zero cut.
 3. **Hurdle and high-water-mark accounting**: carry-forward of unused hurdle across partial claims and exits, allocation of hurdle and deficit by the departing share fraction (alpha), deposit-time basis (`depositHurdle`), scaling on withdrawal, owner setter that can only increase with live supply. Known limitation N-32.
 4. **Mark-to-market of non-gold adapters** (`unrealizedAdapterLoss`, `valuationHealthy`): bounded assembly `staticcall` (150k gas since N-33, exactly 32 bytes returned), failure counts as zero loss for exits but blocks deposits, cap of 5 funded non-gold adapters (10 before N-33), deposit gate above the dust threshold (see N-34 for how this interacts with LP entry costs).
@@ -79,7 +79,7 @@ Assumed honest: Circle (USDC and CCTP), the XAU/USD oracle, DEX liquidity for th
 
 ## 6. Known findings and limitations
 
-Fixed findings are listed with explanations in `docs/security-review.md` (N-01 to N-31, N-33, N-35). Open or accepted at handoff:
+Fixed findings are listed with explanations in `docs/security-review.md` (N-01 to N-31, N-33, N-35, N-37, N-38). Open or accepted at handoff:
 
 - **N-32 (medium, accepted):** a deposit made while a large unprocessed profit exists and an HWM deficit is open can shrink the deficit; worst case measured about 0.28 percent of holder value for one round trip at maximum rates.
 - **N-34 (medium, accepted for V2):** with a funded LP adapter, the deposit gate (marked non-gold loss above the dust threshold, default 1 USDC) closes as soon as entry costs are booked. Mitigation: the board raises the dust threshold before LP funding (runbook). We would like the auditors' view on a better gate for LP strategies.
@@ -88,10 +88,10 @@ Fixed findings are listed with explanations in `docs/security-review.md` (N-01 t
 - **Manager-dependent exits:** deployed capital returns only when the manager (or owner) recalls it; no permissionless withdrawal queue. `maxWithdraw`/`maxRedeem` reflect idle liquidity.
 - **Concealed LP loss:** if a `HalalLPAdapter` price is unreadable, deposits are blocked but exits are priced at unmarked NAV.
 - **Emergency exit lead time:** enabling needs 30 days; a crash beyond 80 percent still blocks it.
-- **Exit gas floor:** exits with realized profit revert below the gas floor; integrators with hardcoded low gas will fail. Since N-33 an exit reads every funded adapter about 23 times; with at most 5 funded adapters the measured worst case (140k per read) is 25.3M gas, inside Arc's 30M block limit. With one funded real Uniswap V3 LP adapter, a cold exit with realized profit settles the cut from 4.97M gas (full stack on the Arc mainnet fork, `ForkVaultLPArcMainnet.t.sol`).
+- **Exit gas floor:** exits with realized profit revert below the gas floor; integrators with hardcoded low gas will fail. Since N-33 an exit reads every funded adapter about 23 times; with at most 5 funded adapters the measured worst case (140k per read) is 25.3M gas, inside Arc's 30M block limit; the floor with five adapters and both gold slots linked is 18.4M (N-38). With one funded real Uniswap V3 LP adapter, a cold exit with realized profit settles the cut from 4.97M gas (full stack on the Arc mainnet fork, `ForkVaultLPArcMainnet.t.sol`).
 - **Degraded exit mode:** a broken escrow, charity or treasury leaves the leaver's cut in the vault as ordinary profit.
 - **Adapter self-reporting:** a screened adapter that overstates value is not detected.
-- **Size margin:** 259 bytes; the vault cannot take another feature without another split.
+- **Size margin:** 162 bytes; the vault cannot take another feature without another split.
 - **Immutable:** no upgrade path; fixes require a new vault and migration.
 - **Pending Shariah rulings:** 24 board items (`docs/agents/SHARIAH_REVIEW.md`) are not yet ruled.
 
@@ -100,7 +100,7 @@ Fixed findings are listed with explanations in `docs/security-review.md` (N-01 t
 Run from the repository root with Foundry (`forge 1.x`, the project pins `solc 0.8.28`):
 
 ```bash
-forge build --sizes                      # ShariahVaultV2 runtime 24,317 B (limit 24,576)
+forge build --sizes                      # ShariahVaultV2 runtime 24,414 B (limit 24,576)
 forge test                               # 2074 passed, 0 failed, 4 skipped on 2026-10-31 (fork suites skip without ARC_TESTNET_RPC / ARC_MAINNET_RPC)
 forge test --match-path 'contracts/test/invariant/*'
 contracts/script/local/run-local.sh      # deploy-script rehearsal on a local anvil: 207 checks passed

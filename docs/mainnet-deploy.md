@@ -15,7 +15,7 @@ Security and quality
 - [ ] Independent professional audit finished for every contract in `docs/audit-handoff.md` scope; all Critical and High findings fixed and re-reviewed; the audited commit hash is the commit you deploy.
 - [ ] Deployed bytecode equals tested bytecode: same compiler (`solc 0.8.28`), same `foundry.toml` (`evm_version = "paris"`, optimizer 200 runs). If you change either, rerun the whole suite and the audit delta.
 - [ ] `forge test` passes on the audited commit (see `docs/audit-handoff.md` for the expected count) and `forge build --sizes` shows `ShariahVaultV2` runtime at or below 24,576 bytes.
-- [ ] Arc mainnet's contract size limit confirmed (testnet enforces 24,576; the vault is 24,317 with 259 bytes of margin). Confirm with Circle/Arc docs or the dry run in section 4.
+- [ ] Arc mainnet's contract size limit confirmed (testnet enforces 24,576; the vault is 24,414 with 162 bytes of margin). Confirm with Circle/Arc docs or the dry run in section 4.
 - [ ] Open findings (`docs/security-review.md`: N-32, and the "Known gaps" list) read and explicitly accepted, in writing, by the people who own the risk.
 
 Shariah governance
@@ -123,7 +123,7 @@ forge script contracts/script/DeployMainnet.s.sol:DeployMainnet --sig "verify()"
 ## 9. Unpause and first use
 
 1. From `OWNER_MULTISIG`: `vault.setPaused(false)` only after `verify()` passes and the audit conditions are met.
-2. First deposit and exit with a small amount from an ordinary wallet. Exits while profit exists require a minimum gas limit (the exit-settlement guard: 2 x (700k + 1.3M per funded adapter): 1.4M with no funded adapters, 4M with one; with one funded real Uniswap V3 LP adapter, a cold exit settled from 4.97M on the Arc mainnet fork, N33-A). Let the node estimate gas; do not hardcode a lower limit in wallets or integrations.
+2. First deposit and exit with a small amount from an ordinary wallet. Exits while profit exists require a minimum gas limit (the exit-settlement guard: 2 x (700k + 1.3M per funded adapter + 1M per linked gold slot, N-38): 1.4M with no funded adapters, 4M with one; with one funded real Uniswap V3 LP adapter, a cold exit settled from 4.97M on the Arc mainnet fork, N33-A). Let the node estimate gas; do not hardcode a lower limit in wallets or integrations.
 3. Keep the first weeks small. The vault has no deposit cap; limit exposure by pausing or by staged communication.
 
 ## 10. Record of the deployment (fill in, keep in sync with `docs/agents/deployed-addresses.md`)
