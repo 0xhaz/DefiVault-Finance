@@ -1,10 +1,11 @@
 /**
  * Minimal Markdown renderer for the in-app docs (no dependencies).
- * Supports: # to ### headings, paragraphs, - and 1. lists, tables, > quotes, ``` code blocks,
+ * Supports: # to ### headings, paragraphs, - and 1. lists, tables, > quotes, ``` code blocks (```mermaid renders a diagram),
  * --- rules, **bold**, `code` and [links](url). Output is React elements only (never raw HTML),
  * and links are limited to http(s) URLs and in-page anchors, so fetched content cannot inject markup.
  */
 import React from 'react';
+import { MermaidBlock } from '../components/MermaidBlock';
 
 export interface DocHeading { level: number; text: string; id: string }
 
@@ -84,6 +85,10 @@ export function renderMarkdown(md: string): React.ReactNode[] {
       i++;
       while (i < lines.length && !lines[i].startsWith('```')) code.push(lines[i++]);
       i++;
+      if (line.trim() === '```mermaid') {
+        blocks.push(<MermaidBlock key={key} code={code.join('\n')} />);
+        continue;
+      }
       blocks.push(
         <pre key={key} className="mono rounded-lg p-4 my-4 overflow-x-auto text-xs"
           style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: text }}>

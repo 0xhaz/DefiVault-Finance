@@ -37,6 +37,44 @@ The app asks your wallet to switch to Arc automatically when you click Switch to
 
 Let your wallet estimate the gas. When the vault has realized profit, a redeem also settles your share of the profit distribution, which needs more gas than a plain transfer; a wallet with a hard-coded low gas limit will fail.
 
+## How it fits together
+
+The app talks to the vaults and to the AI agent. The agent scores strategies; the executor turns the top score into a deployment; the vaults hold the capital and pay fees and charity through separate contracts.
+
+```mermaid
+flowchart TB
+    subgraph OFF["Off-chain"]
+        UI[Web app]
+        AG[AI agent<br/>market data and scoring]
+    end
+    subgraph ARC["On-chain, Arc"]
+        AGG[Score aggregator]
+        EX[Executor, one per tier]
+        V["Vaults<br/>Passive, Aggressive,<br/>Conservative Shariah, Dynamic Shariah"]
+        REG[Adapter registry<br/>board screening]
+        TR[Treasury<br/>fees]
+        PE[Purification escrow]
+        CM[Charity module]
+    end
+    subgraph ADP["Strategy adapters"]
+        CONV[Conventional<br/>Compound, Curve, Aave, GMX]
+        SHA[Shariah<br/>gold exchange, gold allocation,<br/>Uniswap V3 LP, Murabaha]
+    end
+    CCTP[Circle CCTP<br/>other chains]
+    UI -->|deposit and redeem| V
+    UI -->|reads scores| AG
+    AG -->|scores| AGG
+    AGG --> EX
+    EX -->|deploy capital| V
+    V --> CONV
+    V --> SHA
+    REG -.->|screened adapters only| V
+    V --> TR
+    V --> PE
+    PE --> CM
+    V -->|cross-chain capital| CCTP
+```
+
 ## How the vault works
 
 ### Shares and share price
@@ -101,6 +139,19 @@ Every strategy has a scorer in the AI agent. Each card on the Strategies page sh
 | S5-H | RWA Yield | Retired: the underlying is interest-bearing | Suspended |
 | S6-H | Gold Allocation | Holds up to 20% in allocated gold (XAUT); return follows the gold price | Screened, board ruling pending |
 
+A Murabaha trade (S4-H) moves through these states. The markup is fixed when the trade is requested, and a trade that misses its deadline expires.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: Buyer requests a trade (amount, markup, deadline)
+    Pending --> Executed: Vault buys the asset
+    Pending --> Expired: Deadline passes
+    Executed --> Settled: Buyer pays the agreed sale price
+    Executed --> Expired: Deadline passes
+    Settled --> [*]
+    Expired --> [*]
+```
+
 Gold trades always settle in one transaction (hand-to-hand exchange), and gold strategies are never routed cross-chain.
 
 ## The AI agent
@@ -116,10 +167,47 @@ The agent is a service that runs continuously next to the app. Every 30 to 60 se
 
 The Agent Engine panel shows the raw market data the agent read in its latest cycle and how it evaluated each strategy. Run cycle asks the agent to rescan immediately.
 
+```mermaid
+flowchart LR
+    subgraph DATA["Live data"]
+        D1[Uniswap pools<br/>Ethereum, Arbitrum, Base, Optimism]
+        D2[Hyperliquid funding]
+        D3[Stargate bridge flows]
+        D4[Aave positions and rates]
+        D5[Tokenized treasury yields]
+        D6[Gold oracle and pools]
+    end
+    subgraph SCORE["Scorers, every 30 s to 5 min"]
+        C[Conventional<br/>S1, S2, S3, S4]
+        H[Shariah<br/>S1-H, S2-H, S3-H, S4-H, S6-H]
+        SCR[Shariah screen<br/>PASS, REVIEW or FAIL]
+    end
+    DATA --> C
+    DATA --> H
+    H --> SCR
+    C --> OUT[Scores 0 to 100<br/>shown in the app]
+    H --> OUT
+    OUT -.->|oracle role| AGG[On-chain score aggregator]
+```
+
 ### How a score becomes an allocation
 
-```
-market data → AI agent → score (0-100) → score aggregator (on-chain) → executeWinner() → vault deploys capital
+```mermaid
+sequenceDiagram
+    participant Agent as AI agent
+    participant Agg as Score aggregator
+    participant Caller as Anyone
+    participant Exec as Executor
+    participant Vault as Vault
+    participant Adapter as Strategy adapter
+    Agent->>Agg: Write scores (oracle role)
+    Caller->>Exec: executeWinner()
+    Exec->>Agg: Which strategy scores highest?
+    Agg-->>Exec: Strategy, score, destination chain
+    Exec->>Exec: Check gas, cooldown, score and tier
+    Exec->>Vault: Deploy the sized amount
+    Vault->>Adapter: Send USDC and open the position
+    Adapter-->>Vault: Position value, read on every NAV update
 ```
 
 1. The oracle role writes the scores on-chain to the score aggregator.
@@ -131,11 +219,53 @@ market data → AI agent → score (0-100) → score aggregator (on-chain) → e
    - gas is below the executor's ceiling.
 4. The executor sizes the deployment (within the tier's limits, the vault's 80% cap and the 30% gold cap) and the vault sends capital to the strategy adapter.
 
+Each check rejects the call if it fails:
+
+```mermaid
+flowchart TD
+    A[Anyone calls executeWinner] --> G{Gas price below the ceiling?}
+    G -- No --> X1[Rejected]
+    G -- Yes --> C{Cooldown passed?}
+    C -- No --> X2[Rejected]
+    C -- Yes --> W[Read the top-scoring strategy]
+    W --> S{Score at or above the tier minimum?}
+    S -- No --> X3[Rejected]
+    S -- Yes --> T{Strategy allowed in this tier?}
+    T -- No --> X4[Rejected]
+    T -- Yes --> E{Strategy configured and enabled?}
+    E -- No --> X5[Rejected]
+    E -- Yes --> Z[Size the deployment<br/>tier limits, 80% vault cap, 30% gold cap]
+    Z --> L{Strategy on Arc?}
+    L -- Yes --> LOC[Vault funds the adapter on Arc]
+    L -- No --> XC[Vault sends USDC through CCTP]
+```
+
 The agent never holds user funds, and it cannot move them. Its only on-chain power is writing scores; the contracts enforce every limit.
 
 ### Current status
 
 The agent runs live and scores from real market data. On-chain score writing and execution have been run end to end on Arc Testnet, where `executeWinner()` funded a real Uniswap V3 position through the vault and recalled it. Letting the agent sign its own score updates automatically is the next step on the roadmap.
+
+## Cross-chain capital
+
+Some strategies run on other chains. The vault moves USDC there with Circle's Cross-Chain Transfer Protocol (CCTP), which burns USDC on one chain and mints it on the other. Only recipients the board has approved, after a 30-day timelock, can receive it, and capital in transit is capped at 20% of the vault by default. Gold strategies never leave Arc.
+
+```mermaid
+sequenceDiagram
+    participant Vault as Vault on Arc
+    participant CCTP as Circle CCTP
+    participant Dest as Destination chain
+    participant Mgr as Manager
+    Vault->>CCTP: Burn USDC for the destination chain
+    Note over Vault: Amount recorded as pending, capped at 20% of NAV
+    CCTP->>Dest: Mint USDC to the approved recipient
+    Dest->>Dest: Strategy runs on the destination chain
+    Dest->>CCTP: Burn USDC back to Arc
+    Mgr->>Vault: Settle with the CCTP message and attestation
+    Vault->>CCTP: Receive the message
+    CCTP-->>Vault: Mint USDC, less any CCTP fee
+    Vault->>Vault: Check the amount, clear the pending entry, book any shortfall as a loss
+```
 
 ## Fees
 
@@ -154,6 +284,23 @@ The agent runs live and scores from real market data. On-chain score writing and
 
 The manager earns no profit share while the share price is below its previous high (a high-water mark), so the manager is not paid for recovering losses.
 
+```mermaid
+flowchart LR
+    subgraph CF["Conventional vaults"]
+        CV[Vault] -->|0.75% a year| CT[Treasury]
+    end
+    subgraph SF["Shariah vaults"]
+        SV[Vault] -->|Wakala 0.5% a year| ST[Treasury]
+        SV -->|realized profit| W[Profit waterfall]
+        W -->|purification| CW[Charity wallet]
+        W -->|charity, 2.5%| CW
+        W -->|Musharakah, 10% above the 4% hurdle| ST
+        W -->|the rest| SV
+    end
+    CT -->|fees owed| R[Fee receiver]
+    ST -->|fees owed| R
+```
+
 ## Shariah governance
 
 ### Profit distribution waterfall
@@ -167,6 +314,22 @@ Every profit distribution in a Shariah vault runs these steps in order:
 
 When you redeem while realized profit exists, your slice of this waterfall is settled at that moment, so departing holders never shift the cost onto the ones who stay.
 
+```mermaid
+sequenceDiagram
+    participant Vault as Shariah vault
+    participant Escrow as Purification escrow
+    participant Charity as Charity module
+    participant Wallet as Charity wallet
+    participant Treasury as Treasury
+    Note over Vault: Profit is distributed on a claim or when a holder exits
+    Vault->>Escrow: Gross profit
+    Escrow->>Wallet: 1. Purification, board-set, 0% by default
+    Escrow->>Charity: 2. Charity contribution
+    Charity->>Wallet: 2.5% by default
+    Escrow->>Treasury: 3. Musharakah share, 10% above the hurdle
+    Escrow->>Vault: 4. Depositor share returns to the vault
+```
+
 ### Strategy screening
 
 A strategy adapter can receive funds only after it is screened in the on-chain adapter registry:
@@ -174,6 +337,18 @@ A strategy adapter can receive funds only after it is screened in the on-chain a
 - A board member proposes the adapter together with the hash of a published pronouncement.
 - A 30-day timelock must pass before the screening takes effect.
 - Every screening has an expiry date.
+
+```mermaid
+flowchart TD
+    P[Board proposes an adapter<br/>with a pronouncement hash] --> T[30-day timelock]
+    T --> S[Screening active until its expiry date]
+    S --> Q[Executor tries to fund the adapter]
+    Q --> R{Screened and not expired?}
+    R -- No --> X[Funding rejected]
+    R -- Yes --> G{Gold adapter?}
+    G -- Yes --> GA[Single-transaction swap only,<br/>never cross-chain, within the 30% gold cap]
+    G -- No --> NA[Funded within the vault limits]
+```
 
 "Screened, board ruling pending" in the app means the protocol passed the agent's advisory screen but the board has not issued a ruling. Until it does, no capital goes to that strategy on mainnet.
 

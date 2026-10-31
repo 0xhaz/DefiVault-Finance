@@ -9,10 +9,14 @@ const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode; badge?: strin
   { id: 'dashboard',  label: 'Dashboard',  icon: <LayoutDashboard size={16} strokeWidth={1.8} /> },
   { id: 'vault',      label: 'Vault',      icon: <Vault           size={16} strokeWidth={1.8} /> },
   { id: 'strategies', label: 'Strategies', icon: <BarChart2       size={16} strokeWidth={1.8} /> },
-  { id: 'docs',       label: 'Docs',       icon: <BookOpen        size={16} strokeWidth={1.8} /> },
   { id: 'portfolio',  label: 'Portfolio',  icon: <Briefcase       size={16} strokeWidth={1.8} /> },
   { id: 'alerts',     label: 'Alerts',     icon: <Bell            size={16} strokeWidth={1.8} />, badge: '3' },
   { id: 'settings',   label: 'Settings',   icon: <Settings        size={16} strokeWidth={1.8} /> },
+];
+
+// Shown at the bottom of the sidebar, above the network card.
+const BOTTOM_ITEMS: { id: Page; label: string; icon: React.ReactNode; badge?: string }[] = [
+  { id: 'docs', label: 'Docs', icon: <BookOpen size={16} strokeWidth={1.8} /> },
 ];
 
 const MODE_OPTIONS: { id: VaultMode; label: string; sub: string; icon: typeof Shield; color: string }[] = [
@@ -34,6 +38,34 @@ export function Sidebar({ current, onNavigate, agentRunning, vaultMode, onVaultM
   const [modeOpen,   setModeOpen]     = useState(false);
 
   const activeMeta = MODE_OPTIONS.find(m => m.id === vaultMode) ?? MODE_OPTIONS[2];
+
+  const renderNavItem = (item: (typeof NAV_ITEMS)[number]) => {
+          const active = current === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => { onNavigate(item.id); setMobileOpen(false); setModeOpen(false); }}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all"
+              style={{
+                background: active ? 'rgba(172,198,233,0.12)' : 'transparent',
+                color:      active ? 'var(--accent)' : 'var(--muted)',
+                border:     active ? '1px solid rgba(172,198,233,0.18)' : '1px solid transparent',
+              }}
+            >
+              <span style={{ color: active ? 'var(--accent)' : 'var(--subtle)', flexShrink: 0 }}>{item.icon}</span>
+              <span className="flex-1 text-left">{item.label}</span>
+              {item.badge && (
+                <span
+                  className="text-xs px-1.5 py-0.5 rounded-full tabular-nums"
+                  style={{ background: 'rgba(240,180,41,0.15)', color: '#f0b429', fontSize: '0.6rem', fontWeight: 600 }}
+                >
+                  {item.badge}
+                </span>
+              )}
+              {active && <ChevronRight size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />}
+            </button>
+          );
+  };
 
   const content = (
     <div className="flex flex-col h-full" style={{ background: '#0a1628', borderRight: '1px solid rgba(255,255,255,0.07)' }}>
@@ -146,37 +178,14 @@ export function Sidebar({ current, onNavigate, agentRunning, vaultMode, onVaultM
         <p className="text-xs px-2 mb-2" style={{ color: 'var(--subtle)', letterSpacing: '0.08em', fontSize: '0.6rem', textTransform: 'uppercase' }}>
           Main
         </p>
-        {NAV_ITEMS.map(item => {
-          const active = current === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => { onNavigate(item.id); setMobileOpen(false); setModeOpen(false); }}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all"
-              style={{
-                background: active ? 'rgba(172,198,233,0.12)' : 'transparent',
-                color:      active ? 'var(--accent)' : 'var(--muted)',
-                border:     active ? '1px solid rgba(172,198,233,0.18)' : '1px solid transparent',
-              }}
-            >
-              <span style={{ color: active ? 'var(--accent)' : 'var(--subtle)', flexShrink: 0 }}>{item.icon}</span>
-              <span className="flex-1 text-left">{item.label}</span>
-              {item.badge && (
-                <span
-                  className="text-xs px-1.5 py-0.5 rounded-full tabular-nums"
-                  style={{ background: 'rgba(240,180,41,0.15)', color: '#f0b429', fontSize: '0.6rem', fontWeight: 600 }}
-                >
-                  {item.badge}
-                </span>
-              )}
-              {active && <ChevronRight size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />}
-            </button>
-          );
-        })}
+        {NAV_ITEMS.map(renderNavItem)}
       </nav>
 
-      {/* Bottom chain info */}
-      <div className="px-4 py-5" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+      {/* Bottom: docs link, then chain info */}
+      <div className="px-3 pt-3" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+        {BOTTOM_ITEMS.map(renderNavItem)}
+      </div>
+      <div className="px-4 pb-5 pt-2">
         <div
           className="rounded-lg px-3 py-2.5 flex items-center gap-3"
           style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}
