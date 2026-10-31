@@ -88,3 +88,20 @@ The contracts, tests, agent, app and deployment scripts were built in Arc Studio
 
 This is an unaudited demo. Governance is held by single keys, and no Shariah board has ruled on the strategies yet, so the mainnet vault holds deposits idle until an adapter completes its 30-day screening. Next steps: an independent audit, board rulings, multisig governance, and letting the agent sign its own score updates.
 ```
+
+## Video walkthrough showing the build in Arc Studio and the mainnet transaction
+
+Paste the link to your recording (YouTube, Loom or similar). Suggested 3 to 4 minute script:
+
+1. Arc Studio (about 60 s): open the project, show the implementation plan in `arc-studio-plans/SHARIAH_VAULT.md`, the contracts in `contracts/`, and a Foundry test run.
+2. The app (about 60 s): open https://defi-vault-finance.vercel.app, show the Strategies page with live AI scores, then the Docs page and its diagrams.
+3. Mainnet transaction (about 60 s): connect a wallet on Arc mainnet, deposit about 0.5 USDC on the Vault page, then redeem. Open both transactions on explorer.arc.io.
+4. Close (about 20 s): the vault address on the explorer, and what comes next (audit, board rulings).
+
+## What does your project do, and how did you use Arc Studio to build it?
+
+```
+DeFiVault is a USDC vault on Arc. You deposit once and get ERC-4626 shares. An AI agent scores DeFi strategies from live market data (Uniswap, Hyperliquid, Stargate, Aave), and anyone can trigger the vault to fund the top-scoring strategy within fixed limits. A Shariah tier shares profit instead of paying interest: every distribution pays purification and charity first, the manager earns only above a 4% hurdle, and a strategy can receive funds only after the Shariah board screens it on-chain through a 30-day timelock.
+
+The project started in Arc Studio, which generated the first version of the contracts, app and agent. From there we worked in Arc Studio against an implementation plan, one task per change: the Shariah redesign (charity and purification, atomic gold swaps), the gold allocation adapter, cross-chain settlement over Circle CCTP, unit, fuzz and invariant tests, a full rehearsal on Arc Testnet, and two security review rounds. The core vault was then deployed to Arc mainnet with the project's deploy script, and real USDC has moved through it.
+```
