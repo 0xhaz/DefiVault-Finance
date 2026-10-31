@@ -15,7 +15,26 @@ export interface SimShariahRow {
   shariahBasis:    string;
   permittedAssets: string[];
   destinationDomain: number;
+  // Card text (same fields the live agent serves from /api/shariah)
+  trigger?:     string;
+  description?: string;
+  inputs?:      string;
+  signal?:      string;
+  targetRule?:  string;
 }
+
+const META: Record<number, Pick<SimShariahRow, 'trigger' | 'description' | 'inputs' | 'signal' | 'targetRule'>> = {
+  0: { trigger: 'Every 30s', description: 'Reads ETH/USDC pricing across chains and identifies price dislocations in this commodity pair.',
+       inputs: 'Uniswap V3 USDC/ETH pools on Arbitrum, Base, and Optimism', signal: 'Max cross-chain ETH/USDC deviation', targetRule: 'Spread above 0.3% becomes actionable' },
+  1: { trigger: 'Every 30s', description: 'Reads PAXG/USDC pricing across chains. PAX Gold is 1:1 physically-backed gold in Brinks vaults.',
+       inputs: 'Uniswap V3 PAXG/USDC pools on mainnet and Arbitrum', signal: 'Cross-chain gold price deviation', targetRule: 'Spread above 0.3% becomes actionable' },
+  2: { trigger: 'Every 30s', description: 'Provides liquidity to Uniswap V3 USDC/ETH pools. Earns trading fees only — no lending or yield farming.',
+       inputs: 'Uniswap V3 USDC/ETH pool liquidity depth on Arbitrum and Base', signal: 'Pool trading fee APY (real volume, no interest)', targetRule: 'Fee APY above 8% yields top score' },
+  3: { trigger: 'Event-driven', description: 'Executes cost-plus commodity trades. The vault buys an asset at spot and sells at a pre-disclosed markup.',
+       inputs: 'Trade request events from CommodityMurabahaAdapter', signal: 'Pending trade size and markup percentage', targetRule: 'Trade above $10K and markup above 1.0% becomes actionable' },
+  5: { trigger: 'Every 5 min', description: 'Holds up to 20% in allocated gold (XAUT), bought and sold in a single transaction. No yield; value follows the gold price.',
+       inputs: 'Gold allocation adapter value, vault total assets, target weight, oracle sanity', signal: 'Gold weight drift outside target band', targetRule: 'Weight outside the target band while the oracle price is sane' },
+};
 
 const STRATEGIES = [
   {
@@ -79,6 +98,7 @@ export function getSimShariahRows(now = Date.now()): SimShariahRow[] {
       shariahBasis:     s.shariahBasis,
       permittedAssets:  s.permittedAssets,
       destinationDomain: score >= s.threshold ? s.domain : 0,
+      ...META[s.id],
     };
   });
 }

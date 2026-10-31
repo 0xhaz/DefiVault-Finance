@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
-import { StrategyScores } from '../components/StrategyScores';
+import React, { useState, useEffect } from 'react';
+import { Repeat, Coins, Droplets, Handshake, Building2 } from 'lucide-react';
+import { StrategyScores, StrategyCardView } from '../components/StrategyScores';
+import { CCTP_DOMAIN_BADGES, CCTP_DOMAIN_NAMES } from '../contracts';
 import { AgentStatus } from '../components/AgentStatus';
 import { getSimShariahRows, type SimShariahRow } from '../lib/shariahSim';
 import type { VaultMode, TierSelection } from '../App';
@@ -51,101 +53,77 @@ function useShariahStrategies() {
 }
 
 const SHARIAH_COLORS = ['#8dd89f', '#a8d4e8', '#c9b8f5', '#f0c17a', '#e8a0a8', '#d4b896'];
+const SHARIAH_ICONS: Record<number, React.ReactNode> = {
+  0: <Repeat size={13} strokeWidth={2} />,
+  1: <Coins size={13} strokeWidth={2} />,
+  2: <Droplets size={13} strokeWidth={2} />,
+  3: <Handshake size={13} strokeWidth={2} />,
+  4: <Building2 size={13} strokeWidth={2} />,
+  5: <Coins size={13} strokeWidth={2} />,
+};
+// Strategy ids each Shariah tier may fund (executor masks: Conservative 0b100110, Dynamic 0b101111).
+const TIER_IDS: Record<'shariah-conservative' | 'shariah-dynamic', Set<number>> = {
+  'shariah-conservative': new Set([1, 2, 5]),
+  'shariah-dynamic':      new Set([0, 1, 2, 3, 5]),
+};
+const RETIRED_ID = 4;
 
-function ShariahStrategyGrid({ minScore }: { minScore: number }) {
+function ShariahStrategyGrid({ tier }: { tier: 'shariah-conservative' | 'shariah-dynamic' }) {
   const { rows, online } = useShariahStrategies();
+  const allowed = TIER_IDS[tier];
+  const eligibleRows = rows.filter(r => allowed.has(r.id));
+  const bestId = eligibleRows.length ? eligibleRows.reduce((a, b) => (b.score > a.score ? b : a)).id : null;
 
   return (
-    <div className="space-y-3">
-      {!online && (
-        <div
-          className="rounded-lg px-4 py-2.5 flex items-center gap-2"
-          style={{ background: 'rgba(240,180,41,0.06)', border: '1px solid rgba(240,180,41,0.15)' }}
+    <section>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xs uppercase tracking-wider" style={{ color: 'var(--subtle)', letterSpacing: '0.08em' }}>
+          Strategy Scores
+        </h2>
+        <span
+          className="text-xs px-2 py-0.5 rounded"
+          style={online
+            ? { background: 'rgba(141,216,159,0.1)', color: '#8dd89f', border: '1px solid rgba(141,216,159,0.2)' }
+            : { background: 'rgba(240,180,41,0.1)', color: '#f0b429', border: '1px solid rgba(240,180,41,0.2)' }}
         >
-          <span className="w-1.5 h-1.5 rounded-full" style={{ background: '#f0b429' }} />
-          <p className="text-xs" style={{ color: '#f0b429' }}>
-            Showing simulated scores — agent server not reachable. Scores will update live once deployed.
-          </p>
-        </div>
-      )}
-      {rows.map((s, i) => {
-        const eligible  = s.score >= minScore;
-        const color     = SHARIAH_COLORS[i % SHARIAH_COLORS.length];
-        return (
-          <div
-            key={s.id}
-            className="rounded-xl p-4"
-            style={{
-              background: 'var(--surface)',
-              border: `1px solid ${eligible ? color + '30' : 'var(--border)'}`,
-              opacity: eligible ? 1 : 0.6,
-            }}
-          >
-            <div className="flex items-start justify-between gap-3 mb-2">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-semibold" style={{ color: 'var(--ink-2)' }}>{s.name}</span>
-                  {eligible && (
-                    <span className="text-xs px-1.5 py-0.5 rounded font-medium"
-                      style={{ background: `${color}1a`, color, fontSize: '0.6rem' }}>
-                      ELIGIBLE
-                    </span>
-                  )}
-                  {s.triggered && (
-                    <span className="text-xs px-1.5 py-0.5 rounded font-medium"
-                      style={{ background: 'rgba(141,216,159,0.12)', color: '#8dd89f', fontSize: '0.6rem' }}>
-                      TRIGGERED
-                    </span>
-                  )}
-                  {!online && (
-                    <span className="text-xs px-1.5 py-0.5 rounded font-medium"
-                      style={{ background: 'rgba(240,180,41,0.08)', color: '#f0b429', fontSize: '0.55rem' }}>
-                      SIM
-                    </span>
-                  )}
-                </div>
-                {s.shariahBasis && (
-                  <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)', fontSize: '0.65rem' }}>
-                    {s.shariahBasis}
-                  </p>
-                )}
-              </div>
-              <div className="text-right flex-shrink-0">
-                <p className="tabular-nums text-xl font-bold" style={{ color: eligible ? color : 'var(--border)', letterSpacing: '-0.02em' }}>
-                  {s.score}
-                </p>
-                <p className="text-xs" style={{ color: 'var(--subtle)', fontSize: '0.6rem' }}>/ 100</p>
-              </div>
-            </div>
+          {online ? 'Agent live' : 'Agent simulation'}
+        </span>
+      </div>
 
-            {/* Score bar */}
-            <div className="h-1 rounded-full overflow-hidden mb-2" style={{ background: 'var(--surface-muted)' }}>
-              <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${s.score}%`, background: eligible ? color : 'var(--border)' }}
-              />
-            </div>
-
-            {/* Signal + permitted assets */}
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <p className="text-xs" style={{ color: 'var(--subtle)', fontSize: '0.65rem', flex: 1, minWidth: 0 }}>
-                {s.signalText || 'Awaiting signal data'}
-              </p>
-              {s.permittedAssets?.length > 0 && (
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  {s.permittedAssets.slice(0, 3).map((a: string) => (
-                    <span key={a} className="text-xs px-1.5 py-0.5 rounded"
-                      style={{ background: 'var(--surface-muted)', color: 'var(--subtle)', fontSize: '0.6rem' }}>
-                      {a}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })}
-    </div>
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+        {rows.map((r, i) => {
+          const eligible = allowed.has(r.id);
+          const isBest = eligible && r.id === bestId;
+          const domain = r.destinationDomain ?? 0;
+          const isCrosschain = domain !== 0;
+          return (
+            <StrategyCardView
+              key={r.id}
+              label={`Strategy S${r.id + 1}-H`}
+              icon={SHARIAH_ICONS[r.id] ?? <Coins size={13} strokeWidth={2} />}
+              trigger={r.trigger ?? ''}
+              name={r.name}
+              color={SHARIAH_COLORS[i % SHARIAH_COLORS.length]}
+              score={r.score}
+              hasData
+              isLive
+              isStale={false}
+              highlight={isBest}
+              badgeLabel={r.id === RETIRED_ID ? 'Suspended' : !online ? 'Simulated' : isBest ? 'Best' : 'Screened'}
+              freshness={online ? 'Agent live' : 'Agent simulation'}
+              signal={r.signalText}
+              chainBadge={isCrosschain ? `CCTP→${CCTP_DOMAIN_BADGES[domain] ?? domain}` : 'LOCAL'}
+              isCrosschain={isCrosschain}
+              chainTitle={isCrosschain ? `Bridges via CCTP → ${CCTP_DOMAIN_NAMES[domain] ?? domain}` : 'Executes locally on Arc'}
+              eligible={eligible}
+              ineligibleTag={r.id === RETIRED_ID ? 'Retired' : 'Dynamic only'}
+              description={r.description ?? r.shariahBasis}
+              details={[r.inputs, r.signal, r.targetRule].filter((d): d is string => !!d)}
+            />
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -174,7 +152,7 @@ export function StrategiesPage({ selectedTier, onSelectTier, onAgentRunningChang
           <h1 className="display text-2xl font-bold" style={{ color: 'var(--ink)', letterSpacing: '-0.03em' }}>Strategies</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--subtle)' }}>
             {isShariahTab
-              ? `Live scores for ${effectiveTier === 'shariah-conservative' ? '3' : '5'} active screened strategies${effectiveTier === 'shariah-conservative' ? ' (Conservative: Gold Spread + Halal LP + Gold Allocation)' : ''}`
+              ? `Live scores for ${effectiveTier === 'shariah-conservative' ? '3' : '5'} AI-scored screened strategies`
               : 'Live scores for all 4 AI-scored signal strategies'}
           </p>
         </div>
@@ -232,7 +210,7 @@ export function StrategiesPage({ selectedTier, onSelectTier, onAgentRunningChang
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           {isShariahTab
-            ? <ShariahStrategyGrid minScore={75} />
+            ? <ShariahStrategyGrid tier={effectiveTier as 'shariah-conservative' | 'shariah-dynamic'} />
             : <StrategyScores tier={effectiveTier} />
           }
         </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useReadContract } from 'wagmi';
 import { ArrowLeftRight, Zap, Clock, Scale } from 'lucide-react';
 import {
@@ -57,126 +57,91 @@ interface AgentScore {
   destinationDomain: number;
 }
 
-// ─── card props ──────────────────────────────────────────────────
-interface StrategyCardProps {
-  index: number;
-  value: number;
-  timestamp: number;           // 0 means no on-chain data yet
-  agentScore: AgentScore | null;
-  nowSeconds: number;
-  isWinner: boolean;
-  destinationDomain: number;
-  tierEligible: boolean;
-  tier: 'passive' | 'aggressive';
+// ─── shared card view (used by conventional and Shariah tiers) ────
+export interface StrategyCardViewProps {
+  label: string;               // e.g. "Strategy 1"
+  icon: React.ReactNode;
+  trigger: string;             // e.g. "Every 30s"
+  name: string;
+  color: string;               // accent used when highlighted
+  score: number;
+  hasData: boolean;
+  isLive: boolean;
+  isStale: boolean;
+  highlight: boolean;          // winner / best: tinted card
+  badgeLabel: string;          // Simulated | Active | Winner | Expired | Screened | Best
+  freshness: string;
+  signal?: string;
+  chainBadge: string;
+  isCrosschain: boolean;
+  chainTitle: string;
+  eligible: boolean;
+  ineligibleTag?: string;      // shown when not eligible for the tier
+  description: string;
+  details: string[];           // inputs, signal, rule
 }
 
-function StrategyCard({
-  index, value, timestamp, agentScore, nowSeconds,
-  isWinner, destinationDomain, tierEligible, tier,
-}: StrategyCardProps) {
-  const name    = STRATEGY_NAMES[index];
-  const color   = STRATEGY_COLORS[index];
-  const trigger = STRATEGY_TRIGGER_MODES[index];
-  const details = STRATEGY_DETAILS[index];
-  const desc    = STRATEGY_DESCRIPTIONS[index];
-  const icon    = STRATEGY_ICON_NODES[index];
+const BADGE_STYLES: Record<string, React.CSSProperties> = {
+  Expired:   { background: 'rgba(255,255,255,0.06)', color: 'var(--subtle)', border: '1px solid var(--border)' },
+  Suspended: { background: 'rgba(255,255,255,0.06)', color: 'var(--subtle)', border: '1px solid var(--border)' },
+  Simulated: { background: 'rgba(240,180,41,0.10)', color: '#f0b429', border: '1px solid rgba(240,180,41,0.25)' },
+  Winner:    { background: 'rgba(141,216,159,0.15)', color: '#8dd89f', border: '1px solid rgba(141,216,159,0.3)' },
+  Best:      { background: 'rgba(141,216,159,0.15)', color: '#8dd89f', border: '1px solid rgba(141,216,159,0.3)' },
+  Screened:  { background: 'rgba(141,216,159,0.08)', color: '#8dd89f', border: '1px solid rgba(141,216,159,0.2)' },
+  Active:    { background: 'rgba(172,198,233,0.12)', color: 'var(--accent)', border: '1px solid rgba(172,198,233,0.2)' },
+};
 
-  // Use on-chain timestamp if available, otherwise trust agent as "live"
-  const hasOnChain = timestamp > 0;
-  const age        = hasOnChain ? nowSeconds - timestamp : 0;
-  const isStale    = hasOnChain && age > 300;
-
-  // Score source: on-chain > agent simulation
-  const displayValue  = hasOnChain ? value : (agentScore?.score ?? 0);
-  const hasData       = hasOnChain || agentScore !== null;
-  const isLive        = hasData && !isStale;
-  const effectiveDomain = hasOnChain ? destinationDomain : (agentScore?.destinationDomain ?? 0);
-
-  // Status badge logic
-  // "Expired" only when we have absolutely no data at all
-  // "Simulated" when agent has scores but contracts not yet deployed
-  // "Active" / "Winner" when on-chain data is fresh
-  const badgeLabel =
-    !hasData        ? 'Expired' :
-    isStale         ? 'Expired' :
-    !hasOnChain     ? 'Simulated' :
-    isWinner        ? 'Winner' :
-                      'Active';
-
-  const badgeStyle =
-    badgeLabel === 'Expired'    ? { background: 'rgba(255,255,255,0.06)', color: 'var(--subtle)',   border: '1px solid var(--border)' } :
-    badgeLabel === 'Simulated'  ? { background: 'rgba(240,180,41,0.10)', color: '#f0b429',          border: '1px solid rgba(240,180,41,0.25)' } :
-    badgeLabel === 'Winner'     ? { background: 'rgba(141,216,159,0.15)', color: '#8dd89f',         border: '1px solid rgba(141,216,159,0.3)' } :
-                                  { background: 'rgba(172,198,233,0.12)', color: 'var(--accent)',   border: '1px solid rgba(172,198,233,0.2)' };
-
-  const lbl = scoreLabel(displayValue);
-  const bar = scoreColor(displayValue);
-  const isCrosschain = effectiveDomain !== 0;
-  const chainBadge   = isCrosschain
-    ? `CCTP→${CCTP_DOMAIN_BADGES[effectiveDomain] ?? effectiveDomain}`
-    : 'LOCAL';
-
-  const freshness = hasOnChain
-    ? (isStale ? `Stale — ${age}s ago` : `Updated ${age}s ago`)
-    : (agentScore ? 'Agent simulation' : 'Awaiting data');
-
+export function StrategyCardView(p: StrategyCardViewProps) {
+  const lbl = scoreLabel(p.score);
+  const bar = scoreColor(p.score);
+  const lit = p.highlight && p.isLive;
   return (
     <div
       className="rounded-xl overflow-hidden flex flex-col"
       style={{
-        background: isWinner && isLive
-          ? `rgba(${hexToRgb(color)}, 0.06)`
-          : 'var(--surface)',
-        border: `1px solid ${isWinner && isLive ? `rgba(${hexToRgb(color)}, 0.28)` : 'var(--border)'}`,
+        background: lit ? `rgba(${hexToRgb(p.color)}, 0.06)` : 'var(--surface)',
+        border: `1px solid ${lit ? `rgba(${hexToRgb(p.color)}, 0.28)` : 'var(--border)'}`,
         transition: 'border-color 0.3s, background 0.3s',
-        // Dim ineligible strategies for the selected tier
-        opacity: tierEligible ? 1 : 0.38,
-        filter: tierEligible ? 'none' : 'grayscale(0.6)',
+        opacity: p.eligible ? 1 : 0.38,
+        filter: p.eligible ? 'none' : 'grayscale(0.6)',
       }}
     >
       {/* ── card header ── */}
-      <div
-        className="px-4 pt-4 pb-3 flex items-start justify-between gap-2"
-        style={{ borderBottom: '1px solid var(--border)' }}
-      >
+      <div className="px-4 pt-4 pb-3 flex items-start justify-between gap-2" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1.5">
-            <span
-              className="flex items-center gap-1 text-xs font-medium"
-              style={{ color: isWinner && isLive ? color : 'var(--muted)' }}
-            >
-              <span style={{ color: isWinner && isLive ? color : 'var(--subtle)' }}>{icon}</span>
-              Strategy {index + 1}
+            <span className="flex items-center gap-1 text-xs font-medium" style={{ color: lit ? p.color : 'var(--muted)' }}>
+              <span style={{ color: lit ? p.color : 'var(--subtle)' }}>{p.icon}</span>
+              {p.label}
             </span>
-            <span className="text-xs" style={{ color: 'var(--subtle)' }}>{trigger}</span>
+            <span className="text-xs" style={{ color: 'var(--subtle)' }}>{p.trigger}</span>
           </div>
-          <p className="text-sm font-semibold leading-snug" style={{ color: 'var(--ink-2)' }}>{name}</p>
+          <p className="text-sm font-semibold leading-snug" style={{ color: 'var(--ink-2)' }}>{p.name}</p>
         </div>
 
         <div className="flex flex-col items-end gap-1 flex-shrink-0 mt-0.5">
-          {/* Tier eligibility tag */}
-          {!tierEligible && (
+          {!p.eligible && p.ineligibleTag && (
             <span
               className="text-xs px-2 py-0.5 rounded font-medium"
               style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--subtle)', border: '1px solid var(--border)', fontSize: '0.6rem' }}
             >
-              {tier === 'passive' ? 'Aggressive only' : 'Passive only'}
+              {p.ineligibleTag}
             </span>
           )}
-          <span className="text-xs px-2 py-0.5 rounded font-medium" style={badgeStyle}>
-            {badgeLabel}
+          <span className="text-xs px-2 py-0.5 rounded font-medium" style={BADGE_STYLES[p.badgeLabel] ?? BADGE_STYLES.Active}>
+            {p.badgeLabel}
           </span>
           <span
             className="mono text-xs px-1.5 py-0.5 rounded"
-            title={isCrosschain ? `Bridges via CCTP → ${CCTP_DOMAIN_NAMES[effectiveDomain]}` : 'Executes locally on Arc'}
+            title={p.chainTitle}
             style={{
-              background: isCrosschain ? 'rgba(240,180,41,0.1)' : 'rgba(172,198,233,0.08)',
-              color: isCrosschain ? '#f0b429' : 'var(--subtle)',
+              background: p.isCrosschain ? 'rgba(240,180,41,0.1)' : 'rgba(172,198,233,0.08)',
+              color: p.isCrosschain ? '#f0b429' : 'var(--subtle)',
               fontSize: '0.6rem',
               letterSpacing: '0.04em',
             }}
           >
-            {chainBadge}
+            {p.chainBadge}
           </span>
         </div>
       </div>
@@ -196,49 +161,45 @@ function StrategyCard({
               <circle
                 cx="28" cy="28" r="22"
                 fill="none"
-                stroke={isLive ? bar : 'var(--border)'}
+                stroke={p.isLive ? bar : 'var(--border)'}
                 strokeWidth="3"
                 strokeLinecap="round"
                 strokeDasharray={`${2 * Math.PI * 22}`}
-                strokeDashoffset={`${2 * Math.PI * 22 * (1 - (hasData ? displayValue / 100 : 0))}`}
+                strokeDashoffset={`${2 * Math.PI * 22 * (1 - (p.hasData ? p.score / 100 : 0))}`}
                 transform="rotate(-90 28 28)"
                 style={{ transition: 'stroke-dashoffset 0.8s ease' }}
               />
             </svg>
-            <span
-              className="tabular-nums text-sm font-bold"
-              style={{ color: isLive ? bar : 'var(--subtle)', zIndex: 1 }}
-            >
-              {hasData ? displayValue : '—'}
+            <span className="tabular-nums text-sm font-bold" style={{ color: p.isLive ? bar : 'var(--subtle)', zIndex: 1 }}>
+              {p.hasData ? p.score : '—'}
             </span>
           </div>
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-1.5">
-              {hasData ? (
+              {p.hasData ? (
                 <span className="text-xs px-1.5 py-0.5 rounded font-medium" style={{ background: lbl.bg, color: lbl.color }}>
                   {lbl.text}
                 </span>
               ) : (
                 <span className="text-xs" style={{ color: 'var(--subtle)' }}>No data</span>
               )}
-              <span className="text-xs tabular-nums" style={{ color: 'var(--subtle)' }}>{freshness}</span>
+              <span className="text-xs tabular-nums" style={{ color: 'var(--subtle)' }}>{p.freshness}</span>
             </div>
             <div className="h-1 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
               <div
                 className="h-full rounded-full"
                 style={{
-                  width: hasData ? `${displayValue}%` : '0%',
-                  background: isStale ? 'var(--subtle)' : bar,
-                  opacity: isStale ? 0.4 : 1,
+                  width: p.hasData ? `${p.score}%` : '0%',
+                  background: p.isStale ? 'var(--subtle)' : bar,
+                  opacity: p.isStale ? 0.4 : 1,
                   transition: 'width 0.8s ease',
                 }}
               />
             </div>
-            {/* Agent signal line */}
-            {agentScore?.signal && !hasOnChain && (
-              <p className="text-xs mt-1.5 truncate" style={{ color: 'var(--subtle)' }}>
-                {agentScore.signal}
+            {p.signal && (
+              <p className="text-xs mt-1.5 truncate" style={{ color: 'var(--subtle)' }} title={p.signal}>
+                {p.signal}
               </p>
             )}
           </div>
@@ -247,26 +208,84 @@ function StrategyCard({
 
       {/* ── description ── */}
       <div className="px-4 pb-3">
-        <p className="text-xs leading-relaxed" style={{ color: 'var(--muted)' }}>{desc}</p>
+        <p className="text-xs leading-relaxed" style={{ color: 'var(--muted)' }}>{p.description}</p>
       </div>
 
       {/* ── inputs / signal / rule rows ── */}
       <div className="px-4 pb-4 space-y-1.5">
-        {[
-          { value: details.inputs },
-          { value: details.signal },
-          { value: details.rule },
-        ].map((row, ri) => (
-          <div
-            key={ri}
-            className="rounded-lg px-3 py-2"
-            style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}
-          >
-            <span className="text-xs" style={{ color: 'var(--muted)' }}>{row.value}</span>
+        {p.details.map((value, ri) => (
+          <div key={ri} className="rounded-lg px-3 py-2" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+            <span className="text-xs" style={{ color: 'var(--muted)' }}>{value}</span>
           </div>
         ))}
       </div>
     </div>
+  );
+}
+
+// ─── conventional card ───────────────────────────────────────────
+interface StrategyCardProps {
+  index: number;
+  value: number;
+  timestamp: number;           // 0 means no on-chain data yet
+  agentScore: AgentScore | null;
+  nowSeconds: number;
+  isWinner: boolean;
+  destinationDomain: number;
+  tierEligible: boolean;
+  tier: 'passive' | 'aggressive';
+}
+
+function StrategyCard({
+  index, value, timestamp, agentScore, nowSeconds,
+  isWinner, destinationDomain, tierEligible, tier,
+}: StrategyCardProps) {
+  // Use on-chain timestamp if available, otherwise trust agent as "live"
+  const hasOnChain = timestamp > 0;
+  const age        = hasOnChain ? nowSeconds - timestamp : 0;
+  const isStale    = hasOnChain && age > 300;
+
+  // Score source: on-chain > agent simulation
+  const displayValue    = hasOnChain ? value : (agentScore?.score ?? 0);
+  const hasData         = hasOnChain || agentScore !== null;
+  const isLive          = hasData && !isStale;
+  const effectiveDomain = hasOnChain ? destinationDomain : (agentScore?.destinationDomain ?? 0);
+
+  const badgeLabel =
+    !hasData    ? 'Expired' :
+    isStale     ? 'Expired' :
+    !hasOnChain ? 'Simulated' :
+    isWinner    ? 'Winner' :
+                  'Active';
+
+  const isCrosschain = effectiveDomain !== 0;
+  const details = STRATEGY_DETAILS[index];
+
+  return (
+    <StrategyCardView
+      label={`Strategy ${index + 1}`}
+      icon={STRATEGY_ICON_NODES[index]}
+      trigger={STRATEGY_TRIGGER_MODES[index]}
+      name={STRATEGY_NAMES[index]}
+      color={STRATEGY_COLORS[index]}
+      score={displayValue}
+      hasData={hasData}
+      isLive={isLive}
+      isStale={isStale}
+      highlight={isWinner}
+      badgeLabel={badgeLabel}
+      freshness={hasOnChain
+        ? (isStale ? `Stale — ${age}s ago` : `Updated ${age}s ago`)
+        : (agentScore ? 'Agent simulation' : 'Awaiting data')}
+      signal={!hasOnChain ? agentScore?.signal : undefined}
+      chainBadge={isCrosschain ? `CCTP→${CCTP_DOMAIN_BADGES[effectiveDomain] ?? effectiveDomain}` : 'LOCAL'}
+      isCrosschain={isCrosschain}
+      chainTitle={isCrosschain ? `Bridges via CCTP → ${CCTP_DOMAIN_NAMES[effectiveDomain]}` : 'Executes locally on Arc'}
+      eligible={tierEligible}
+      ineligibleTag={tier === 'passive' ? 'Aggressive only' : 'Passive only'}
+      description={STRATEGY_DESCRIPTIONS[index]}
+      details={[details.inputs, details.signal, details.rule]}
+    />
   );
 }
 
