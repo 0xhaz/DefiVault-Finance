@@ -276,7 +276,7 @@ function StrategyCard({
       highlight={isWinner}
       badgeLabel={badgeLabel}
       freshness={hasOnChain
-        ? (isStale ? `Stale — ${age}s ago` : `Updated ${age}s ago`)
+        ? (isStale ? `Stale (${age}s ago)` : `Updated ${age}s ago`)
         : (agentScore ? 'Agent live' : 'Awaiting data')}
       signal={!hasOnChain ? agentScore?.signal : undefined}
       chainBadge={isCrosschain ? `CCTP→${CCTP_DOMAIN_BADGES[effectiveDomain] ?? effectiveDomain}` : 'LOCAL'}

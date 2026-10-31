@@ -431,7 +431,7 @@ async function fetchLiquidationRwaData(): Promise<LiquidationRwaData> {
   const atRisk = Math.max(0, Math.round(4 + Math.sin(t * 1.1) * 5 + Math.random() * 2));
   const minHF  = 1.05 + Math.max(0, Math.sin(t * 0.8)) * 0.25 + Math.random() * 0.05;
 
-  // Aave USDC borrow rate oscillates 3–6%
+  // Aave USDC borrow rate oscillates 3-6%
   const aaveBorrow = 3.5 + Math.sin(t * 0.5) * 1.2 + Math.random() * 0.3;
 
   // OUSG yield is stable ~5.0-5.5% (T-bill backed)
@@ -513,10 +513,10 @@ async function fetchProtocolSignals(): Promise<ProtocolSignals> {
   const now = Date.now();
   const t = now / 60_000;
 
-  // Compound V3 USDC supply APY: stable 3–5%
+  // Compound V3 USDC supply APY: stable 3-5%
   const compoundApy = 3.8 + Math.sin(t * 0.4) * 0.8 + Math.random() * 0.2;
 
-  // Curve 3pool fee APY: 0.5–2% from swap fees + CRV gauge
+  // Curve 3pool fee APY: 0.5-2% from swap fees + CRV gauge
   const curveApy = 1.2 + Math.sin(t * 0.6) * 0.5 + Math.random() * 0.15;
 
   // Aave 2x loop net APY: supply APY * 1.5 - borrow rate * 0.5
@@ -525,7 +525,7 @@ async function fetchProtocolSignals(): Promise<ProtocolSignals> {
   const borrowApy = 4.8 + Math.sin(t * 0.5) * 0.5 + Math.random() * 0.15;
   const aaveLoopNet = supplyApy * 1.5 - borrowApy * 0.5;
 
-  // GMX GLP APY: volatile 15–35% (protocol fees from leverage traders)
+  // GMX GLP APY: volatile 15-35% (protocol fees from leverage traders)
   const gmxApy = 20 + Math.sin(t * 1.2) * 10 + Math.random() * 3;
 
   return {
@@ -586,7 +586,7 @@ function computeTierRouting(
     } else if (!passesScore) {
       reason = `Score ${s.score} < min ${minScore} for ${tier} tier`;
     } else {
-      reason = `Eligible — score ${s.score} ≥ ${minScore}`;
+      reason = `Eligible: score ${s.score} ≥ ${minScore}`;
     }
     return { idx: i, name: STRATEGY_NAMES[i], score: s.score, eligible: inMask && passesScore, reason };
   });
@@ -1112,7 +1112,7 @@ app.post('/api/apy/estimate', (req, res) => {
 
   res.json({
     disclaimer: [
-      'These are illustrative scenario estimates only — NOT a prediction, guarantee, or projection.',
+      'These are illustrative scenario estimates only. They are not a prediction, guarantee or projection.',
       'Actual returns depend on market conditions, strategy execution, and protocol risk.',
       'Past performance analogues used for P10/P50/P90 ranges are not indicative of future results.',
       'This output is advisory only and must not be presented as a Shariah board endorsement.',

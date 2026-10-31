@@ -25,7 +25,7 @@ const TIER_SPECS: Record<TierSelection, {
     icon: <Shield size={16} strokeWidth={1.8} />,
     isShariahTier: false,
     specs: [
-      { label: 'Target APY',          value: '8–14%' },
+      { label: 'Target APY',          value: '8-14%' },
       { label: 'Max Allocation',      value: '40% of TVL' },
       { label: 'Min Score',           value: '80 / 100' },
       { label: 'Execution Cooldown',  value: '2 hours' },
@@ -34,14 +34,14 @@ const TIER_SPECS: Record<TierSelection, {
       { label: 'Strategies',          value: 'S1, S4' },
       { label: 'Protocols',           value: 'Compound V3, Curve 3pool' },
     ],
-    description: 'Allocates to the two lowest-volatility strategies: stablecoin spread arbitrage and the Liquidation+RWA blend. Capital is kept local on Arc. The execution cooldown and high minimum score mean the agent only fires on strong, well-formed signals.',
+    description: 'Allocates to the two lowest-volatility strategies: stablecoin spread arbitrage and the Liquidation+RWA blend. Capital is kept local on Arc. The long cooldown and high minimum score mean capital moves only on strong signals.',
   },
   aggressive: {
     name: 'Aggressive Vault', tagline: 'Higher yield, accepts mid risk', color: '#f0b429',
     icon: <Zap size={16} strokeWidth={1.8} />,
     isShariahTier: false,
     specs: [
-      { label: 'Target APY',          value: '18–34%' },
+      { label: 'Target APY',          value: '18-34%' },
       { label: 'Max Allocation',      value: '80% of TVL' },
       { label: 'Min Score',           value: '60 / 100' },
       { label: 'Execution Cooldown',  value: '30 minutes' },
@@ -50,14 +50,14 @@ const TIER_SPECS: Record<TierSelection, {
       { label: 'Strategies',          value: 'S1, S2, S3, S4' },
       { label: 'Protocols',           value: 'Aave 2x Loop, GMX GLP, Compound, Curve' },
     ],
-    description: 'All 4 strategies compete for capital. Funding rate arb and bridge front-running add higher-yield opportunities with corresponding volatility. Aave loop amplifies yield via 2x leverage. Crosschain CCTP bridges pre-position ahead of detected capital flows.',
+    description: 'All 4 strategies compete for capital. Funding rate arb and bridge front-running add higher-yield opportunities with corresponding volatility. Aave loop amplifies yield via 2x leverage. CCTP transfers can move capital to another chain ahead of large bridge flows.',
   },
   'shariah-conservative': {
     name: 'Conservative Shariah', tagline: 'Low-volatility screened strategies only', color: '#8dd89f',
     icon: <Moon size={16} strokeWidth={1.8} />,
     isShariahTier: true,
     specs: [
-      { label: 'Target APY',          value: '8–16%' },
+      { label: 'Target APY',          value: '8-16%' },
       { label: 'Max Allocation',      value: '50% of TVL' },
       { label: 'Min Score',           value: '80 / 100' },
       { label: 'Execution Cooldown',  value: '2 hours' },
@@ -66,14 +66,14 @@ const TIER_SPECS: Record<TierSelection, {
       { label: 'Charity (sadaqah)',   value: '2.5% auto-routed' },
       { label: 'Strategies',          value: 'S2-H, S3-H, S6-H' },
     ],
-    description: 'Three low-volatility Shariah strategies: PAXG gold spread (S2-H), Uniswap V3 LP (S3-H, swap-fee income only), and XAUT Gold Allocation (S6-H, spot — board ruling pending). No Murabaha trades and no stablecoin spread — conservative depositors get stable yield with minimal volatility. No riba-based lending, no perp funding, no front-running.',
+    description: 'Three low-volatility Shariah strategies: PAXG gold spread (S2-H), Uniswap V3 LP (S3-H, swap-fee income only), and XAUT Gold Allocation (S6-H, spot; board ruling pending). It leaves out Murabaha trades and the stablecoin spread to keep volatility low, and never uses interest-bearing lending, perpetual funding trades or front-running.',
   },
   'shariah-dynamic': {
     name: 'Dynamic Shariah', tagline: 'All 5 screened strategies, higher yield', color: '#c9b8f5',
     icon: <Moon size={16} strokeWidth={1.8} />,
     isShariahTier: true,
     specs: [
-      { label: 'Target APY',          value: '12–22%' },
+      { label: 'Target APY',          value: '12-22%' },
       { label: 'Max Allocation',      value: '70% of TVL' },
       { label: 'Min Score',           value: '70 / 100' },
       { label: 'Execution Cooldown',  value: '1 hour' },
@@ -82,7 +82,7 @@ const TIER_SPECS: Record<TierSelection, {
       { label: 'Charity (sadaqah)',   value: '2.5% auto-routed' },
       { label: 'Strategies',          value: 'S1-H, S2-H, S3-H, S4-H, S6-H' },
     ],
-    description: 'Five active Shariah strategies: USDC/ETH cross-chain spread (S1-H), PAXG gold spread (S2-H), LP swap-fee income (S3-H), Commodity Murabaha (S4-H), and XAUT Gold Allocation (S6-H, board ruling pending). Dynamic allocation maximises halal yield. No riba-based lending, no perp funding, no front-running. Charitable contribution auto-routed before Musharakah split.',
+    description: 'Five active Shariah strategies: USDC/ETH cross-chain spread (S1-H), PAXG gold spread (S2-H), LP swap-fee income (S3-H), Commodity Murabaha (S4-H), and XAUT Gold Allocation (S6-H, board ruling pending). It never uses interest-bearing lending, perpetual funding trades or front-running. The charitable contribution is paid before the Musharakah split.',
   },
 };
 
@@ -167,8 +167,8 @@ export function VaultPage({ selectedTier, onSelectTier, vaultMode }: VaultPagePr
             <Info size={14} style={{ color: spec.color, flexShrink: 0, marginTop: 1 }} />
             <p className="text-xs leading-relaxed" style={{ color: 'var(--muted)' }}>
               {spec.isShariahTier
-                ? 'Shares are ERC-4626 compliant. Withdraw any time — Musharakah profit is claimed separately by the vault manager after the settlement period. A charitable contribution (sadaqah) is auto-routed before the split.'
-                : 'Shares are ERC-4626 compliant. Withdraw any time — the agent will automatically recall capital from the active strategy adapter to fulfil your redemption.'}
+                ? 'Shares follow ERC-4626. You can redeem at any time, up to the USDC the vault holds idle. Profit goes through the Musharakah waterfall, and the charitable contribution (sadaqah) is paid before the split.'
+                : 'Shares follow ERC-4626. You can redeem at any time, up to the USDC the vault holds idle. Capital in a strategy returns when the manager recalls it.'}
             </p>
           </div>
         </div>

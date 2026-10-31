@@ -28,7 +28,7 @@ const META: Record<number, Pick<SimShariahRow, 'trigger' | 'description' | 'inpu
        inputs: 'Uniswap V3 USDC/ETH pools on Arbitrum, Base, and Optimism', signal: 'Max cross-chain ETH/USDC deviation', targetRule: 'Spread above 0.3% becomes actionable' },
   1: { trigger: 'Every 30s', description: 'Reads PAXG/USDC pricing across chains. PAX Gold is 1:1 physically-backed gold in Brinks vaults.',
        inputs: 'Uniswap V3 PAXG/USDC pools on mainnet and Arbitrum', signal: 'Cross-chain gold price deviation', targetRule: 'Spread above 0.3% becomes actionable' },
-  2: { trigger: 'Every 30s', description: 'Provides liquidity to Uniswap V3 USDC/ETH pools. Earns trading fees only — no lending or yield farming.',
+  2: { trigger: 'Every 30s', description: 'Provides liquidity to Uniswap V3 USDC/ETH pools. Earns trading fees only, with no lending or yield farming.',
        inputs: 'Uniswap V3 USDC/ETH pool liquidity depth on Arbitrum and Base', signal: 'Pool trading fee APY (real volume, no interest)', targetRule: 'Fee APY above 8% yields top score' },
   3: { trigger: 'Event-driven', description: 'Executes cost-plus commodity trades. The vault buys an asset at spot and sells at a pre-disclosed markup.',
        inputs: 'Trade request events from CommodityMurabahaAdapter', signal: 'Pending trade size and markup percentage', targetRule: 'Trade above $10K and markup above 1.0% becomes actionable' },
@@ -39,7 +39,7 @@ const META: Record<number, Pick<SimShariahRow, 'trigger' | 'description' | 'inpu
 const STRATEGIES = [
   {
     id: 0, key: 'ETH_SPREAD',  name: 'USDC/ETH Cross-Chain Spread',
-    shariahBasis: 'Commodity pair arbitrage — no interest involved',
+    shariahBasis: 'Commodity pair arbitrage with no interest involved',
     permittedAssets: ['USDC', 'ETH'],
     baseScore: 72, amp: 18, freq: 1.1, phase: 0,
     signal: (s: number) => `ETH cross-chain deviation ${(s * 0.004).toFixed(3)}%`,
@@ -47,7 +47,7 @@ const STRATEGIES = [
   },
   {
     id: 1, key: 'GOLD_SPREAD', name: 'Atomic Gold Spread',
-    shariahBasis: 'Gold allocation (spot) — single-tx atomic USDC/PAXG swap (yad bi yad). Cross-chain routing blocked by NonAtomicGoldExchange guard. Board ruling pending (SR-005, SR-006).',
+    shariahBasis: 'Gold allocation (spot): single-tx atomic USDC/PAXG swap (yad bi yad). Cross-chain routing blocked by NonAtomicGoldExchange guard. Board ruling pending (SR-005, SR-006).',
     permittedAssets: ['USDC', 'PAXG'],
     baseScore: 65, amp: 22, freq: 0.8, phase: 1.2,
     signal: (s: number) => `PAXG/USDC deviation ${(s * 0.003).toFixed(3)}%`,
@@ -55,7 +55,7 @@ const STRATEGIES = [
   },
   {
     id: 2, key: 'HALAL_LP',   name: 'Uniswap V3 Liquidity Pool',
-    shariahBasis: 'Musharakah in a trading pool — fee income only',
+    shariahBasis: 'Musharakah in a trading pool; fee income only',
     permittedAssets: ['USDC', 'ETH'],
     baseScore: 70, amp: 15, freq: 1.4, phase: 2.4,
     signal: (s: number) => `Pool fee APY ${(4 + s * 0.08).toFixed(2)}% on arbitrum`,
@@ -63,7 +63,7 @@ const STRATEGIES = [
   },
   {
     id: 3, key: 'MURABAHA',   name: 'Commodity Murabaha',
-    shariahBasis: 'Cost-plus sale — profit fully disclosed before execution',
+    shariahBasis: 'Cost-plus sale with the profit disclosed before execution',
     permittedAssets: ['USDC', 'PAXG', 'ETH'],
     baseScore: 35, amp: 45, freq: 0.4, phase: 0.7,
     signal: (s: number) => s > 75 ? '2 pending trades, best markup 1.4%' : 'No pending Murabaha trades',
@@ -74,7 +74,7 @@ const STRATEGIES = [
   // See docs/agents/SHARIAH_REVIEW.md for board ruling stub.
   {
     id: 5, key: 'GOLD_ALLOCATION', name: 'Gold Allocation (XAUT, spot)',
-    shariahBasis: 'Spot allocated-gold holding — single-tx atomic USDC/XAUT swap (yad bi yad). No yield; return follows gold price. Board acceptance pending (SR-008, SR-009). XAUT not yet deployed on Arc Testnet — testnet uses MockXAUT.',
+    shariahBasis: 'Spot allocated-gold holding: single-tx atomic USDC/XAUT swap (yad bi yad). No yield; return follows gold price. Board acceptance pending (SR-008, SR-009). XAUT not yet deployed on Arc Testnet; testnet uses MockXAUT.',
     permittedAssets: ['USDC', 'XAUT'],
     baseScore: 45, amp: 30, freq: 0.6, phase: 3.1,
     signal: (s: number) => `Gold weight ${(s * 0.2).toFixed(1)}% vs target 20% (drift ${((s - 50) * 0.08).toFixed(2)}%)`,

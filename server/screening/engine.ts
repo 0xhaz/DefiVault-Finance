@@ -290,7 +290,7 @@ function evalQS002(data: ProtocolData): RuleResult {
       ruleId: 'QS-002', category: 'QUALITATIVE',
       description: 'Gold and commodity exchanges must be atomic (yad bi yad)',
       verdict: 'PASS',
-      detail: 'Not applicable — no gold/commodity exchange in this protocol.',
+      detail: 'Not applicable: no gold/commodity exchange in this protocol.',
       metricValue: null, threshold: null,
     };
   }
@@ -312,7 +312,7 @@ function evalQS003(data: ProtocolData): RuleResult {
       ruleId: 'QS-003', category: 'QUALITATIVE',
       description: 'LP fee income must come from genuine trade activity only (musharakah)',
       verdict: 'PASS',
-      detail: 'Not applicable — no LP position in this protocol.',
+      detail: 'Not applicable: no LP position in this protocol.',
       metricValue: null, threshold: null,
     };
   }
@@ -323,7 +323,7 @@ function evalQS003(data: ProtocolData): RuleResult {
     verdict,
     detail: data.lpIncomeIsSwapFeeOnly
       ? 'LP income sourced from swap fees only. Musharakah basis confirmed.'
-      : 'LP income source unclear — may include lending yield. REVIEW required.',
+      : 'LP income source unclear; it may include lending yield. REVIEW required.',
     metricValue: null, threshold: null,
   };
 }
@@ -359,7 +359,7 @@ export function screen(data: ProtocolData, timestampSeconds?: number): Screening
 
   const summaryMap: Record<RuleVerdict, string> = {
     PASS:   `${data.protocolName} passes all SC Malaysia Shariah screening checks.`,
-    REVIEW: `${data.protocolName} requires board review — one or more checks returned REVIEW. No FAIL detected.`,
+    REVIEW: `${data.protocolName} requires board review: one or more checks returned REVIEW. No FAIL detected.`,
     FAIL:   `${data.protocolName} fails SC Malaysia Shariah screening. One or more hard-exclude rules triggered. Not eligible for Shariah vault deployment without board override.`,
   };
 

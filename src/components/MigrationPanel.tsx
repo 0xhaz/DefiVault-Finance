@@ -82,7 +82,7 @@ export function MigrationPanel({ v1ShareBalance = '0.00', v2Address, onClose }: 
         >
           <Info size={14} style={{ color: '#8dd89f', flexShrink: 0, marginTop: 2 }} />
           <p className="text-xs leading-relaxed" style={{ color: 'var(--muted)' }}>
-            V1 stays live indefinitely. Migration is voluntary — you can redeem from V1 at any time. V2 uses the new governance-gated adapter registry with on-chain board pronouncements.
+            V1 stays live indefinitely. Migration is voluntary, and you can redeem from V1 at any time. V2 uses the new governance-gated adapter registry with on-chain board pronouncements.
           </p>
         </div>
 
@@ -140,7 +140,7 @@ export function MigrationPanel({ v1ShareBalance = '0.00', v2Address, onClose }: 
               >
                 <div className="flex items-center gap-1.5">
                   <AlertTriangle size={11} style={{ color: '#e8837a', flexShrink: 0 }} />
-                  <span className="text-xs font-medium" style={{ color: '#e8837a' }}>Disclaimer — always read before investing</span>
+                  <span className="text-xs font-medium" style={{ color: '#e8837a' }}>Disclaimer: read before investing</span>
                 </div>
                 {apyData.disclaimer.map((line, i) => (
                   <p key={i} className="text-xs leading-relaxed pl-4" style={{ color: 'var(--muted)' }}>{line}</p>
@@ -178,7 +178,7 @@ export function MigrationPanel({ v1ShareBalance = '0.00', v2Address, onClose }: 
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium" style={{ color: 'var(--ink-2)' }}>Redeem from V1</p>
               <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-                Signature 1 of 2 — redeems your <strong>{v1ShareBalance}</strong> svUSDC shares at current NAV.
+                Signature 1 of 2: redeems your <strong>{v1ShareBalance}</strong> svUSDC shares at current NAV.
                 USDC lands in your wallet.
               </p>
               {step === 'idle' && (
@@ -244,7 +244,7 @@ export function MigrationPanel({ v1ShareBalance = '0.00', v2Address, onClose }: 
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium" style={{ color: 'var(--ink-2)' }}>Deposit to V2</p>
               <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-                Signature 2 of 2 — deposits your USDC into ShariahVaultV2 ({v2Address ? `${v2Address.slice(0, 6)}…${v2Address.slice(-4)}` : 'address TBD'}).
+                Signature 2 of 2: deposits your USDC into ShariahVaultV2 ({v2Address ? `${v2Address.slice(0, 6)}…${v2Address.slice(-4)}` : 'address TBD'}).
                 You receive svUSDCv2 shares.
               </p>
               {step === 'step1_signed' && (

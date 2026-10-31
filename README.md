@@ -1,20 +1,18 @@
 # DeFiVault Finance
 
-**An AI-guided USDC vault on Arc, with a Shariah-screened tier built around profit sharing instead of interest.**
+An AI-guided USDC vault on Arc, with a Shariah-screened tier built around profit sharing instead of interest.
 
 Built with [Arc Studio](https://studio.arc.io). Live on Arc mainnet as a hackathon demo.
 
 | | |
 |---|---|
-| **Live app** | https://defi-vault-finance.vercel.app |
-| **AI agent API** | https://defivault-finance-production.up.railway.app/status |
-| **Vault (Arc mainnet)** | [`0xDc40ed79F74141BBba84d54f84Eafd43CD8Bc470`](https://explorer.arc.io/address/0xDc40ed79F74141BBba84d54f84Eafd43CD8Bc470) |
-| **Example USDC deposit** | [`0xaec64e1e…c1011d`](https://explorer.arc.io/tx/0xaec64e1e7f47eecc6c32c6245df2283868bdf68a302f81f7c82069a0ffc1011d) |
-| **Example USDC redeem** | [`0x0a734ab9…18e30de`](https://explorer.arc.io/tx/0x0a734ab9a97e8929e2eb2f07bcaaa41f4dc949efb1ca21e14e134376518e30de) |
+| Live app | https://defi-vault-finance.vercel.app |
+| AI agent API | https://defivault-finance-production.up.railway.app/status |
+| Vault (Arc mainnet) | [`0xDc40ed79F74141BBba84d54f84Eafd43CD8Bc470`](https://explorer.arc.io/address/0xDc40ed79F74141BBba84d54f84Eafd43CD8Bc470) |
+| Example USDC deposit | [`0xaec64e1e…c1011d`](https://explorer.arc.io/tx/0xaec64e1e7f47eecc6c32c6245df2283868bdf68a302f81f7c82069a0ffc1011d) |
+| Example USDC redeem | [`0x0a734ab9…18e30de`](https://explorer.arc.io/tx/0x0a734ab9a97e8929e2eb2f07bcaaa41f4dc949efb1ca21e14e134376518e30de) |
 
-> **Unaudited demo.** The mainnet contracts have not had an independent audit and no Shariah board has ruled on them yet. Use small amounts only. Details in [What is live today](#what-is-live-today).
-
----
+> Unaudited demo. The mainnet contracts have not had an independent audit and no Shariah board has ruled on them yet. Use small amounts only. Details in [What is live today](#what-is-live-today).
 
 ## The problem
 
@@ -22,12 +20,13 @@ Yield in DeFi moves fast, and keeping capital in the best opportunity means watc
 
 ## What DeFiVault does
 
-- **One USDC deposit, managed allocation.** Users deposit USDC into an ERC-4626 vault and receive shares. The vault deploys capital into approved strategies and prices shares from net asset value.
-- **An AI agent picks the opportunity.** The agent reads live market data, scores each strategy from 0 to 100, and the highest-scoring permitted strategy can be executed by anyone, on-chain, once its score clears the tier's threshold.
-- **A Shariah tier with the rules in code.** Profit is shared (Musharakah) rather than paid as interest. Every profit distribution runs a fixed waterfall: purification of non-permissible income, then a charity contribution, then the profit split. Strategies must be screened by a Shariah board before they can receive any funds.
-- **Separate tiers, separate capital.** Conventional and Shariah vaults are independent deployments. Their funds never mix.
+Users deposit USDC into an ERC-4626 vault and receive shares priced from net asset value. The vault deploys that capital into approved strategies.
 
----
+An AI agent reads live market data and scores each strategy from 0 to 100. Once the top permitted strategy clears its tier's threshold, anyone can execute it on-chain.
+
+In the Shariah tier, profit is shared under Musharakah. Every distribution runs a fixed waterfall: purification of non-permissible income, then a charity contribution, then the profit split. A strategy can receive funds only after the Shariah board screens it.
+
+Conventional and Shariah vaults are separate deployments, so their funds never mix.
 
 ## How it works
 
@@ -46,41 +45,35 @@ flowchart LR
     W --> D[4. Depositors]
 ```
 
-1. **Deposit.** USDC goes into the vault and the depositor receives shares at the current net asset value.
-2. **Score.** The agent pulls live data (Uniswap pools, Hyperliquid funding, Stargate flows, Aave and Ondo yields), scores each strategy and publishes the scores.
-3. **Execute.** When the top permitted strategy clears the tier's minimum score, anyone can call `executeWinner()`. The executor enforces a cooldown, a gas-price ceiling, per-strategy size limits and the tier's allowed strategies.
-4. **Value.** Losses on deployed capital are marked into the share price; gains count only once realized. Gold positions are priced from an oracle.
-5. **Share profit.** Profit is split through the waterfall above. A user who exits settles their share of the waterfall at exit, so no one can leave others holding the distribution cost.
-6. **Redeem.** Users redeem shares for USDC at any time, up to the idle liquidity the vault holds.
-
----
+1. USDC goes into the vault and the depositor receives shares at the current net asset value.
+2. The agent pulls live data (Uniswap pools, Hyperliquid funding, Stargate flows, Aave and Ondo yields), scores each strategy and publishes the scores.
+3. When the top permitted strategy clears the tier's minimum score, anyone can call `executeWinner()`. The executor enforces a cooldown, a gas-price ceiling, per-strategy size limits and the tier's allowed strategies.
+4. Losses on deployed capital are marked into the share price; gains count only once realized. Gold positions are priced from an oracle.
+5. Profit is split through the waterfall above. A user who exits settles their share of it on the way out, so the cost never falls on the holders who stay.
+6. Users redeem shares for USDC at any time, up to the idle liquidity the vault holds.
 
 ## The Shariah design
 
 | Principle | How the code enforces it |
 |---|---|
-| Profit sharing, not interest | The manager earns a Musharakah share (10%) only of profit **above** a 4% hurdle, and nothing while depositors are below their previous high-water mark. A 0.5% yearly Wakala (agency) fee covers administration. |
+| Profit sharing, not interest | The manager earns a Musharakah share (10%) only on profit above a 4% hurdle, and nothing while depositors are below their previous high-water mark. A 0.5% yearly Wakala (agency) fee covers administration. |
 | Remove non-permissible income | Purification is the first step of every profit distribution and goes straight to the charity wallet. |
 | Give to charity | A charity contribution (default 2.5%) is the second step, before any split. |
 | Only approved strategies | An adapter can receive funds only after the board screens it through a registry with a 30-day timelock and an expiry date, tied to a published pronouncement. |
 | No sudden rule changes | Every Shariah parameter (charity rate and wallet, purification rate, dust threshold) changes only through a board proposal and a 30-day timelock. Hard safety caps are fixed in code. |
 | Exit is always possible | Redemptions are never blocked by oracles or external dependencies, and there is no forced migration between vault versions. |
 
-Strategies in the conservative Shariah tier: an atomic gold exchange (PAXG), a spot gold allocation (XAUT, oracle-checked, capped at 30% of the vault), and a Uniswap V3 liquidity position that earns swap fees. All of them are **pending board rulings**; the app labels them "screened, board ruling pending".
-
----
+Strategies in the conservative Shariah tier: an atomic gold exchange (PAXG), a spot gold allocation (XAUT, oracle-checked, capped at 30% of the vault), and a Uniswap V3 liquidity position that earns swap fees. All of them are pending board rulings; the app labels them "screened, board ruling pending".
 
 ## The AI agent
 
-The agent (`server/agent.ts`, running on Railway) is an **advisory scoring service**:
+The agent (`server/agent.ts`, running on Railway) is an advisory scoring service. It:
 
-- Scans live sources every 30 to 60 seconds and scores each strategy from 0 to 100 with a plain-language signal (for example "20.7 bps max deviation").
-- Runs an advisory Shariah screen (11 rules covering business activity, interest-bearing income and leverage) and flags each protocol PASS, REVIEW or FAIL. It never declares anything permissible; that is the board's role.
-- Serves the scores and screening results to the app through `/status`, `/shariah` and `/tiers`.
+- scans live sources every 30 to 60 seconds and scores each strategy from 0 to 100 with a plain-language signal (for example "20.7 bps max deviation").
+- runs an advisory Shariah screen (11 rules covering business activity, interest-bearing income and leverage) and flags each protocol PASS, REVIEW or FAIL. It never declares anything permissible; that is the board's role.
+- serves the scores and screening results to the app through `/status`, `/shariah` and `/tiers`.
 
 Scores are written on-chain by the oracle role, and `executeWinner()` is permissionless. On testnet both steps were run live (see below). Wiring the agent to sign its own score updates is the next step on the roadmap.
-
----
 
 ## What is live today
 
@@ -113,22 +106,18 @@ On testnet the whole loop runs end to end, including a real Uniswap V3 position:
 
 Transaction-by-transaction log: [docs/rehearsal.md](docs/rehearsal.md). Addresses: [docs/agents/deployed-addresses.md](docs/agents/deployed-addresses.md).
 
----
-
 ## Testing and security
 
-- **2,097 Foundry tests passing**, including 8 protocol invariants (256 runs, depth 50) and fuzz tests on the profit waterfall, hurdle and exit accounting.
-- **Fork tests against real Arc contracts:** Circle CCTP V2 on Arc Testnet, and the liquidity adapter against Uniswap's real USDC/EURC pool on an Arc mainnet fork.
-- **Static analysis:** Slither and Aderyn, every high and medium result triaged ([docs/static-analysis.md](docs/static-analysis.md)).
-- **Coverage:** about 96% of lines and branches on the vault and its libraries ([docs/coverage.md](docs/coverage.md)).
-- **Internal security reviews:** 41 findings recorded, each fixed or accepted with a written reason ([docs/security-review.md](docs/security-review.md)).
-- **Not yet done:** an independent audit, Shariah board rulings, and multisig governance. These are required before any real launch ([docs/mainnet-deploy.md](docs/mainnet-deploy.md)).
-
----
+- 2,097 Foundry tests pass, including 8 protocol invariants (256 runs, depth 50) and fuzz tests on the profit waterfall, hurdle and exit accounting.
+- Fork tests run against real Arc contracts: Circle CCTP V2 on Arc Testnet, and the liquidity adapter against Uniswap's real USDC/EURC pool on an Arc mainnet fork.
+- Slither and Aderyn ran over the contracts, and every high and medium result was triaged ([docs/static-analysis.md](docs/static-analysis.md)).
+- Test coverage is about 96% of lines and branches on the vault and its libraries ([docs/coverage.md](docs/coverage.md)).
+- Internal security reviews recorded 41 findings, each fixed or accepted with a written reason ([docs/security-review.md](docs/security-review.md)).
+- Still to do before any real launch: an independent audit, Shariah board rulings and multisig governance ([docs/mainnet-deploy.md](docs/mainnet-deploy.md)).
 
 ## Built with Arc Studio
 
-The contracts, tests, agent and app were built in Arc Studio: Solidity contracts and Foundry tests, the Bun agent, the React app, and the deployment scripts for Arc Testnet and Arc mainnet.
+Everything in this repository was built in Arc Studio: the Solidity contracts and Foundry tests, the Bun agent, the React app, and the deployment scripts for Arc Testnet and mainnet.
 
 ## Tech stack
 
@@ -138,8 +127,6 @@ The contracts, tests, agent and app were built in Arc Studio: Solidity contracts
 | Chain | Arc (USDC as gas), Circle CCTP V2 for cross-chain capital |
 | AI agent | Bun, Express, viem (hosted on Railway) |
 | App | React 18, Vite, TypeScript, Tailwind, wagmi and viem (hosted on Vercel) |
-
----
 
 ## Run it locally
 
@@ -164,8 +151,6 @@ src/                  React app
 docs/                 Security review, deploy runbooks, rehearsal logs, audit package
 ```
 
----
-
 ## Roadmap
 
 1. Independent security audit, then redeploy the audited code.
@@ -173,7 +158,5 @@ docs/                 Security review, deploy runbooks, rehearsal logs, audit pa
 3. Let the agent sign its own score updates and trigger execution.
 4. Screen and fund the first strategies on mainnet (30-day timelock).
 5. ShariahVaultV3 with Uniswap v4 liquidity.
-
----
 
 *DeFiVault Finance is experimental software. It is not financial advice and has not been audited. Strategy screenings shown in the app are advisory until the Shariah board issues a ruling.*

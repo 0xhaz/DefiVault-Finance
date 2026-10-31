@@ -69,15 +69,15 @@ const PROTOCOL_LABELS_AGGRESSIVE = [
 ];
 // Conservative: Gold Spread + Halal LP + Gold Allocation (mask 0b100110)
 const CONSERVATIVE_PROTOCOLS = [
-  { label: 'PAXG Gold Spread',      value: '2–6% APY' },
-  { label: 'LP swap fees (Uni V3)',     value: '4–9% APY' },
+  { label: 'PAXG Gold Spread',      value: '2-6% APY' },
+  { label: 'LP swap fees (Uni V3)',     value: '4-9% APY' },
   { label: 'XAUT Allocation (spot)', value: 'Gold price return' },
 ];
 // Dynamic: all 5 active halal strategies (mask 0b101111)
 const DYNAMIC_PROTOCOLS = [
-  { label: 'ETH Cross-Chain Arb',   value: '3–8% APY' },
-  { label: 'PAXG Gold Spread',      value: '2–6% APY' },
-  { label: 'LP swap fees (Uni V3)',     value: '4–9% APY' },
+  { label: 'ETH Cross-Chain Arb',   value: '3-8% APY' },
+  { label: 'PAXG Gold Spread',      value: '2-6% APY' },
+  { label: 'LP swap fees (Uni V3)',     value: '4-9% APY' },
   { label: 'Murabaha Trades',       value: 'Event-driven' },
   { label: 'XAUT Allocation (spot)', value: 'Gold price return' },
 ];
@@ -368,7 +368,7 @@ function TierCard({
           ))}
           {willExecute ? (
             <p className="text-xs mt-1.5 font-medium" style={{ color: '#8dd89f' }}>
-              Ready — {winnerName} ({winnerScore})
+              Ready: {winnerName} ({winnerScore})
             </p>
           ) : (
             <p className="text-xs mt-1.5 flex items-center gap-1" style={{ color: 'var(--subtle)' }}>
@@ -495,7 +495,7 @@ function ShariahTierCard({
           <p className="text-xs mt-1.5 flex items-center gap-1.5"
             style={{ color: winner.score >= 75 ? iconColor : 'var(--subtle)' }}>
             {winner.score >= 75
-              ? <>{live ? 'Ready' : 'Simulated'} — {winner.name} ({winner.score})</>
+              ? <>{live ? 'Ready' : 'Simulated'}: {winner.name} ({winner.score})</>
               : <><Lock size={10} /> No eligible winner yet</>
             }
           </p>

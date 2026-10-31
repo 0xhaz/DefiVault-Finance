@@ -188,7 +188,7 @@ export function VaultActions() {
               </span>
             </>
           ) : (
-            <span style={{ color: 'var(--muted)' }}>Permissionless — callable by anyone when score threshold is met</span>
+            <span style={{ color: 'var(--muted)' }}>Anyone can call this once the top score meets the threshold</span>
           )}
         </div>
 
@@ -225,7 +225,7 @@ export function VaultActions() {
 
         {tab === 'execute' && (
           <div className="rounded-lg p-3 text-xs space-y-1" style={{ background: 'var(--surface-muted)', color: 'var(--subtle)' }}>
-            <p>Reads the winning strategy from ScoreAggregator and deploys capital autonomously.</p>
+            <p>Reads the winning strategy from the score aggregator and deploys capital into it.</p>
             <p>Requires: score ≥ min threshold, cooldown elapsed, gas price within limit.</p>
           </div>
         )}

@@ -65,7 +65,7 @@ export function AgentActivityFeed() {
           id: log.transactionHash ?? `score-${Date.now()}`,
           kind: 'score',
           title: `${STRATEGY_NAMES[stratIdx] ?? `Strategy ${stratIdx}`} scored`,
-          detail: `New score: ${value}/100 — ${value >= 80 ? 'VERY HIGH' : value >= 60 ? 'HIGH' : value >= 40 ? 'MEDIUM' : 'LOW'} opportunity`,
+          detail: `New score ${value}/100, ${value >= 80 ? 'VERY HIGH' : value >= 60 ? 'HIGH' : value >= 40 ? 'MEDIUM' : 'LOW'} opportunity`,
           timestamp: Date.now(),
           strategyIdx: stratIdx,
           txHash: log.transactionHash ?? undefined,
@@ -100,9 +100,9 @@ export function AgentActivityFeed() {
   useEffect(() => {
     if (aggregatorEnabled) return;
     const strategies = [
-      { name: 'Stablecoin Spread', detail: 'USDC spread: 0.18% — APY ~11.4%', score: 45 },
-      { name: 'Funding Rate Arb', detail: 'ETH-PERP funding rate 0.015%/8h — APY 16.4%', score: 95 },
-      { name: 'Bridge Flow', detail: 'Stargate $1.2M flow detected — impact 0.42%', score: 90 },
+      { name: 'Stablecoin Spread', detail: 'USDC spread 0.18%, APY ~11.4%', score: 45 },
+      { name: 'Funding Rate Arb', detail: 'ETH-PERP funding rate 0.015%/8h, APY 16.4%', score: 95 },
+      { name: 'Bridge Flow', detail: 'Stargate $1.2M flow detected, impact 0.42%', score: 90 },
       { name: 'Liquidation + RWA', detail: 'Aave HF 1.12, OUSG yield 4.8% APY', score: 60 },
     ];
     let idx = 0;

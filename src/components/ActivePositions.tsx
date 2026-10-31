@@ -68,7 +68,7 @@ export function ActivePositions() {
 
       {list.length === 0 ? (
         <div className="rounded-xl p-8 text-center" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-          <p className="text-sm" style={{ color: 'var(--subtle)' }}>No active positions — the agent is scanning for opportunities</p>
+          <p className="text-sm" style={{ color: 'var(--subtle)' }}>No active positions. The agent is scanning for opportunities.</p>
         </div>
       ) : (
         <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>

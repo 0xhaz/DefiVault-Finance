@@ -8,8 +8,8 @@ interface LandingPageProps {
 }
 
 const STATS = [
-  { label: 'Target APY',      value: '18–34%',  sub: 'Aggressive vault' },
-  { label: 'Shariah APY',       value: '8–16%',   sub: 'Shariah Conservative' },
+  { label: 'Target APY',      value: '18-34%',  sub: 'Aggressive vault' },
+  { label: 'Shariah APY',       value: '8-16%',   sub: 'Shariah Conservative' },
   { label: 'Scan Interval',   value: '30s',      sub: 'Fastest strategy' },
   { label: 'Total Strategies',value: '9',        sub: '4 conventional · 5 screened' },
 ];
@@ -17,38 +17,38 @@ const STATS = [
 const FEATURES = [
   {
     icon: <Zap size={18} strokeWidth={1.8} />,
-    title: 'Autonomous Execution',
-    desc: 'The AI agent scans DeFi signals every 30 seconds, scores 9 strategies 0–100, and routes capital to the highest-conviction opportunity with no human input required.',
+    title: 'AI-scored allocation',
+    desc: 'The AI agent reads DeFi market data every 30 seconds and scores each strategy from 0 to 100. Anyone can then trigger the vault to fund the top-scoring strategy, within fixed limits.',
     color: '#acc6e9',
   },
   {
     icon: <ArrowLeftRight size={18} strokeWidth={1.8} />,
-    title: 'Crosschain Capital',
-    desc: 'Capital flows across Arbitrum, Base, and Optimism via CCTP. When a better opportunity exists on another chain, the vault bridges USDC atomically and pre-positions automatically.',
+    title: 'Cross-chain capital',
+    desc: 'The vault can send USDC to Arbitrum, Base or Optimism through Circle CCTP when a strategy on that chain scores higher.',
     color: '#f0b429',
   },
   {
     icon: <Shield size={18} strokeWidth={1.8} />,
-    title: 'Four Risk Tiers',
-    desc: 'Passive and Aggressive for conventional DeFi. Conservative Shariah (Gold Spread + LP + Gold Allocation) and Dynamic Shariah (all 5 active screened strategies) for the Muslim community — fully isolated capital.',
+    title: 'Four risk tiers',
+    desc: 'Passive and Aggressive for conventional DeFi. Conservative Shariah (Gold Spread + LP + Gold Allocation) and Dynamic Shariah (all 5 active screened strategies) for the Muslim community. Each tier keeps its capital separate.',
     color: '#8dd89f',
   },
   {
     icon: <Moon size={18} strokeWidth={1.8} />,
-    title: 'Shariah-Screened',
+    title: 'Shariah screening',
     desc: 'Two dedicated Shariah vaults with Wakala (0.5% AUM) + Musharakah (10% profit-share above 4% hurdle) fee structure and automatic 2.5% charity routing. 5 active screened strategies. RWA removed per board screening (SR-001).',
     color: '#c9b8f5',
   },
   {
     icon: <TrendingUp size={18} strokeWidth={1.8} />,
-    title: 'ERC-4626 Standard',
-    desc: 'All four vaults are fully ERC-4626 compliant. Deposit USDC, receive yield-bearing shares. Compatible with any DeFi protocol or aggregator that reads the standard.',
+    title: 'ERC-4626 standard',
+    desc: 'All four vaults follow ERC-4626. You deposit USDC and receive shares that any protocol or aggregator reading the standard can use.',
     color: '#e86d7a',
   },
   {
     icon: <Star size={18} strokeWidth={1.8} />,
-    title: 'Transparent Fees',
-    desc: 'Conventional vaults charge a flat 0.75% AUM admin fee. Shariah vaults use a Wakala+Musharakah model — no hidden spread, no interest, no riba-based protocol actions.',
+    title: 'Transparent fees',
+    desc: 'Conventional vaults charge a flat 0.75% yearly fee on assets. Shariah vaults charge a Wakala fee and a Musharakah profit share, and never use interest-bearing protocols.',
     color: '#f0c17a',
   },
 ];
@@ -61,12 +61,12 @@ const CONVENTIONAL_STRATEGIES = [
 ];
 
 const SHARIAH_STRATEGIES = [
-  { num: 'S1-H', name: 'USDC/ETH Cross-Chain Spread',    trigger: 'Every 30s',    rule: 'Spread >0.35% between Arc/Arbitrum/Base — commodity arbitrage (SR-007 pending)',                tiers: ['dynamic'] },
-  { num: 'S2-H', name: 'Atomic Gold Spread',             trigger: 'Every 30s',    rule: 'PAXG/USDC swap >0.4% premium — single-tx atomic swap (yad bi yad, SR-005)',                      tiers: ['conservative', 'dynamic'] },
-  { num: 'S3-H', name: 'Swap-fee Liquidity Pool',           trigger: 'Event-driven', rule: 'Uniswap V3 USDC/ETH swap-fee APY >8% — swap-fee income only',                                    tiers: ['conservative', 'dynamic'] },
-  { num: 'S4-H', name: 'Commodity Murabaha',             trigger: 'Event-driven', rule: 'Murabaha trade request with markup >1.2% — cost-plus, counterparty required',                     tiers: ['dynamic'] },
+  { num: 'S1-H', name: 'USDC/ETH Cross-Chain Spread',    trigger: 'Every 30s',    rule: 'Spread >0.35% between Arc/Arbitrum/Base; commodity arbitrage (SR-007 pending)',                tiers: ['dynamic'] },
+  { num: 'S2-H', name: 'Atomic Gold Spread',             trigger: 'Every 30s',    rule: 'PAXG/USDC swap >0.4% premium; single-tx atomic swap (yad bi yad, SR-005)',                      tiers: ['conservative', 'dynamic'] },
+  { num: 'S3-H', name: 'Swap-fee Liquidity Pool',           trigger: 'Event-driven', rule: 'Uniswap V3 USDC/ETH swap-fee APY >8%; swap-fee income only',                                    tiers: ['conservative', 'dynamic'] },
+  { num: 'S4-H', name: 'Commodity Murabaha',             trigger: 'Event-driven', rule: 'Murabaha trade request with markup >1.2%; cost-plus, counterparty required',                     tiers: ['dynamic'] },
   // S5-H (RWA/Sukuk) removed — OUSG/BUIDL are US Treasury-backed; yield is riba. SR-001.
-  { num: 'S6-H', name: 'Gold Allocation (XAUT, spot)',   trigger: 'Every 5 min',  rule: 'XAUT weight drifts >5% from 20% target — no yield, value follows gold price (SR-008 pending)',   tiers: ['conservative', 'dynamic'] },
+  { num: 'S6-H', name: 'Gold Allocation (XAUT, spot)',   trigger: 'Every 5 min',  rule: 'XAUT weight drifts >5% from 20% target; no yield, value follows gold price (SR-008 pending)',   tiers: ['conservative', 'dynamic'] },
 ];
 
 const VAULT_TIERS = [
@@ -74,7 +74,7 @@ const VAULT_TIERS = [
     label: 'Passive',
     color: '#acc6e9',
     community: 'Conventional',
-    apy: '8–14%',
+    apy: '8-14%',
     risk: 'Minimal',
     strategies: 'S1 + S4',
     protocols: 'Compound V3, Curve 3pool',
@@ -86,7 +86,7 @@ const VAULT_TIERS = [
     label: 'Aggressive',
     color: '#f0b429',
     community: 'Conventional',
-    apy: '18–34%',
+    apy: '18-34%',
     risk: 'Managed',
     strategies: 'All 4',
     protocols: 'Aave 2x Loop, GMX GLP',
@@ -98,7 +98,7 @@ const VAULT_TIERS = [
     label: 'Conservative Shariah',
     color: '#8dd89f',
     community: 'Shariah',
-    apy: '8–16%',
+    apy: '8-16%',
     risk: 'Low volatility',
     strategies: 'S2-H + S3-H + S6-H',
     protocols: 'Uniswap V3, PAXG, XAUT (atomic)',
@@ -110,7 +110,7 @@ const VAULT_TIERS = [
     label: 'Dynamic Shariah',
     color: '#c9b8f5',
     community: 'Shariah',
-    apy: '12–22%',
+    apy: '12-22%',
     risk: 'Moderate',
     strategies: 'All 5 screened',
     protocols: 'Uniswap V3, PAXG, XAUT, Murabaha',
@@ -181,13 +181,13 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
             className="text-lg sm:text-xl max-w-2xl mx-auto mb-4 text-pretty"
             style={{ color: 'var(--muted)', lineHeight: 1.65 }}
           >
-            An ERC-4626 vault where an AI agent hunts for the highest-yield signal across 8 strategies and 5 chains — and deploys your USDC without any human intervention.
+            An ERC-4626 vault for USDC. An AI agent scores strategies from live market data, and the vault funds the highest-scoring one within fixed limits.
           </p>
 
           {/* Community callout */}
           <p className="text-sm max-w-xl mx-auto mb-10 text-pretty" style={{ color: 'var(--subtle)', lineHeight: 1.6 }}>
-            Two communities, four vaults. Conventional investors get Passive and Aggressive tiers.
-            The Muslim community gets two fully isolated Shariah vaults with Wakala fees and charity routing — 5 screened strategies including gold allocation (XAUT, spot). RWA removed per SR-001.
+            Conventional investors choose between the Passive and Aggressive tiers.
+            The Muslim community has two separate Shariah vaults with Wakala fees and charity routing, running 5 screened strategies including a spot gold allocation (XAUT). The RWA strategy was removed under SR-001.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -395,18 +395,18 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
               style={{ background: 'linear-gradient(135deg, rgba(172,198,233,0.08) 0%, transparent 100%)', borderRight: '1px solid var(--border)' }}
             >
               <p className="text-xs uppercase mb-3 font-semibold" style={{ color: 'var(--accent)', letterSpacing: '0.1em' }}>Conventional</p>
-              <h3 className="display text-xl font-bold mb-2" style={{ color: 'var(--ink)', letterSpacing: '-0.02em' }}>Two risk tiers, maximum yield</h3>
+              <h3 className="display text-xl font-bold mb-2" style={{ color: 'var(--ink)', letterSpacing: '-0.02em' }}>Two conventional tiers</h3>
               <p className="text-sm mb-5 text-pretty" style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
                 Passive vault runs S1+S4 with Compound V3 and Curve 3pool. Aggressive adds leveraged Aave loops and GMX GLP for higher yield.
                 Flat 0.75% AUM admin fee.
               </p>
               <div className="flex gap-3">
                 <div className="rounded-lg px-3 py-2 text-center" style={{ background: 'rgba(172,198,233,0.08)', border: '1px solid rgba(172,198,233,0.15)' }}>
-                  <p className="display text-lg font-bold" style={{ color: '#acc6e9' }}>8–14%</p>
+                  <p className="display text-lg font-bold" style={{ color: '#acc6e9' }}>8-14%</p>
                   <p className="text-xs" style={{ color: 'var(--subtle)' }}>Passive APY</p>
                 </div>
                 <div className="rounded-lg px-3 py-2 text-center" style={{ background: 'rgba(240,180,41,0.08)', border: '1px solid rgba(240,180,41,0.15)' }}>
-                  <p className="display text-lg font-bold" style={{ color: '#f0b429' }}>18–34%</p>
+                  <p className="display text-lg font-bold" style={{ color: '#f0b429' }}>18-34%</p>
                   <p className="text-xs" style={{ color: 'var(--subtle)' }}>Aggressive APY</p>
                 </div>
               </div>
@@ -420,18 +420,18 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
               <div className="flex items-center gap-2 mb-3">
                 <p className="text-xs uppercase font-semibold" style={{ color: '#8dd89f', letterSpacing: '0.1em' }}>Shariah</p>
               </div>
-              <h3 className="display text-xl font-bold mb-2" style={{ color: 'var(--ink)', letterSpacing: '-0.02em' }}>Two Shariah tiers, no riba</h3>
+              <h3 className="display text-xl font-bold mb-2" style={{ color: 'var(--ink)', letterSpacing: '-0.02em' }}>Two Shariah tiers without interest</h3>
               <p className="text-sm mb-5 text-pretty" style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
                 Conservative Shariah runs Gold Spread + LP + Gold Allocation (mask 0b100110). Dynamic Shariah runs all 5 active strategies (mask 0b101111).
                 Wakala 0.5% + Musharakah 10% fees. Charity 2.5% routing. RWA removed per SR-001.
               </p>
               <div className="flex gap-3">
                 <div className="rounded-lg px-3 py-2 text-center" style={{ background: 'rgba(141,216,159,0.08)', border: '1px solid rgba(141,216,159,0.15)' }}>
-                  <p className="display text-lg font-bold" style={{ color: '#8dd89f' }}>8–16%</p>
+                  <p className="display text-lg font-bold" style={{ color: '#8dd89f' }}>8-16%</p>
                   <p className="text-xs" style={{ color: 'var(--subtle)' }}>Conservative APY</p>
                 </div>
                 <div className="rounded-lg px-3 py-2 text-center" style={{ background: 'rgba(201,184,245,0.08)', border: '1px solid rgba(201,184,245,0.15)' }}>
-                  <p className="display text-lg font-bold" style={{ color: '#c9b8f5' }}>12–22%</p>
+                  <p className="display text-lg font-bold" style={{ color: '#c9b8f5' }}>12-22%</p>
                   <p className="text-xs" style={{ color: 'var(--subtle)' }}>Dynamic APY</p>
                 </div>
               </div>
@@ -458,7 +458,7 @@ export function LandingPage({ onNavigate }: LandingPageProps) {
             Ready to let the agent work?
           </h2>
           <p className="text-sm mb-2 relative" style={{ color: 'var(--muted)' }}>
-            Deposit USDC, choose your risk tier and community, and the agent handles the rest.
+            Choose a community and risk tier, then deposit USDC. The agent scores the strategies and the vault allocates within the tier limits.
           </p>
           <p className="text-xs mb-8 relative" style={{ color: 'var(--subtle)' }}>
             Conventional investors: Passive or Aggressive. Muslim community: Conservative Shariah or Dynamic Shariah.

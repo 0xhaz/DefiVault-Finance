@@ -40,13 +40,13 @@ const FEE_ROWS: FeeRow[] = [
     label: 'Fee destination',
     conventional: 'ConventionalTreasury',
     shariah: 'ShariahTreasury',
-    note: 'Fully isolated — funds never mix',
+    note: 'Separate treasuries; funds never mix',
   },
   {
     label: 'Fee mechanism',
     conventional: 'Accounting-only accrual; owner sweeps on claim',
     shariah: 'Accounting-only accrual; owner sweeps on claim',
-    note: 'Sweep amount capped to pendingFees (audit fix)',
+    note: 'A sweep can never exceed the fees owed',
   },
 ];
 

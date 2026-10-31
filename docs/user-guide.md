@@ -2,9 +2,7 @@
 
 DeFiVault is a USDC vault on Arc. You deposit USDC once; the vault allocates it to approved strategies, guided by an AI agent that scores opportunities from live market data. A Shariah tier runs on profit sharing instead of interest, with its rules written into the contracts.
 
-> **Hackathon demo on Arc mainnet.** The contracts are unaudited, governance is held by single keys, and no Shariah board has ruled on the strategies yet. Use small amounts only.
-
----
+> Hackathon demo on Arc mainnet. The contracts are unaudited, governance is held by single keys, and no Shariah board has ruled on the strategies yet. Use small amounts only.
 
 ## Getting started
 
@@ -15,7 +13,7 @@ DeFiVault is a USDC vault on Arc. You deposit USDC once; the vault allocates it 
 
 ### Add Arc to your wallet
 
-The app asks your wallet to switch to Arc automatically when you click **Switch to Arc Mainnet**. To add it by hand:
+The app asks your wallet to switch to Arc automatically when you click Switch to Arc Mainnet. To add it by hand:
 
 | Field | Value |
 |---|---|
@@ -27,33 +25,31 @@ The app asks your wallet to switch to Arc automatically when you click **Switch 
 
 ### Deposit
 
-1. Click **Connect Wallet** (top right) and approve the connection.
-2. Open **Vault** and choose a tier.
-3. Enter an amount and click **Approve USDC**. This lets the vault move exactly that amount from your wallet.
-4. Click **Deposit**. You receive vault shares (**svUSDC**) in return.
+1. Click Connect Wallet (top right) and approve the connection.
+2. Open Vault and choose a tier.
+3. Enter an amount and click Approve USDC. This lets the vault move exactly that amount from your wallet.
+4. Click Deposit. You receive vault shares (svUSDC) in return.
 
 ### Redeem
 
-1. Open **Vault** and switch to the **Redeem** tab.
-2. Click **Redeem All Shares**. Your shares are burned and USDC is sent back to your wallet.
+1. Open Vault and switch to the Redeem tab.
+2. Click Redeem All Shares. Your shares are burned and USDC is sent back to your wallet.
 
 Let your wallet estimate the gas. When the vault has realized profit, a redeem also settles your share of the profit distribution, which needs more gas than a plain transfer; a wallet with a hard-coded low gas limit will fail.
-
----
 
 ## How the vault works
 
 ### Shares and share price
 
-The vault follows the ERC-4626 standard. When you deposit, you receive shares priced at the vault's **net asset value (NAV)** per share. When you redeem, each share is worth its slice of NAV at that moment. You never hold the strategy positions directly; the vault does.
+The vault follows the ERC-4626 standard. When you deposit, you receive shares priced at the vault's net asset value (NAV) per share. When you redeem, each share is worth its slice of NAV at that moment. You never hold the strategy positions directly; the vault does.
 
 ### How NAV is valued
 
-- **Idle USDC** counts at face value.
-- **Losses** on deployed capital are marked into the share price straight away.
-- **Gains** count only once they are realized (returned to the vault). This stops anyone from buying in cheaply before a gain is booked.
-- **Gold positions** are priced from a gold price oracle. If the oracle goes stale, the position is valued at its last good price minus a safety haircut.
-- **Pending distribution.** The share price already excludes the cut a profit distribution would take, so no one can redeem just before a distribution and leave others to pay it.
+- Idle USDC counts at face value.
+- Losses on deployed capital are marked into the share price straight away.
+- Gains count only once they are realized (returned to the vault), so no one can buy in cheaply just before a gain is booked.
+- Gold positions are priced from a gold price oracle. If the oracle goes stale, the position is valued at its last good price minus a safety haircut.
+- The share price already excludes the cut a profit distribution would take, so no one can redeem just before a distribution and leave others to pay it.
 
 ### When you can withdraw
 
@@ -61,12 +57,10 @@ You can redeem at any time, up to the USDC the vault holds idle. Capital deploye
 
 ### Safety limits
 
-- At most **80%** of the vault can be deployed; the rest stays liquid.
-- Gold exposure is capped at **30%** of the vault.
-- At most **5** non-gold strategies can be funded at once.
+- At most 80% of the vault can be deployed; the rest stays liquid.
+- Gold exposure is capped at 30% of the vault.
+- At most 5 non-gold strategies can be funded at once.
 - New deposits pause automatically if a strategy's value cannot be read or its losses exceed a small threshold. Exits stay open.
-
----
 
 ## Vault tiers
 
@@ -79,16 +73,13 @@ Each tier is a separate vault with its own NAV and share token. Capital never mo
 | Conservative Shariah | Shariah | S2-H, S3-H, S6-H | 80 | 2 hours | 0.5% Wakala + 10% Musharakah |
 | Dynamic Shariah | Shariah | S1-H to S4-H, S6-H | 70 | 1 hour | 0.5% Wakala + 10% Musharakah |
 
-- **Min score**: the AI score (0 to 100) a strategy needs before capital can be deployed into it.
-- **Cooldown**: the minimum time between two deployments.
+Min score is the AI score (0 to 100) a strategy needs before capital can be deployed into it. Cooldown is the minimum time between two deployments.
 
-On Arc mainnet today, the **Conservative Shariah** vault is deployed. The other tiers run on Arc Testnet.
-
----
+On Arc mainnet today, the Conservative Shariah vault is deployed. The other tiers run on Arc Testnet.
 
 ## Strategies
 
-Every strategy has a scorer in the AI agent. Each card on the **Strategies** page shows the live score, how often it updates, what data it reads, what signal it computes, and the rule that turns the signal into a high score.
+Every strategy has a scorer in the AI agent. Each card on the Strategies page shows the live score, how often it updates, what data it reads, what signal it computes, and the rule that turns the signal into a high score.
 
 ### Conventional strategies
 
@@ -112,20 +103,18 @@ Every strategy has a scorer in the AI agent. Each card on the **Strategies** pag
 
 Gold trades always settle in one transaction (hand-to-hand exchange), and gold strategies are never routed cross-chain.
 
----
-
 ## The AI agent
 
 ### What it does
 
 The agent is a service that runs continuously next to the app. Every 30 to 60 seconds it:
 
-1. **Reads live data**: Uniswap pools on Ethereum, Arbitrum, Base and Optimism, Hyperliquid funding rates, Stargate bridge flows, Aave health factors and borrow rates, and tokenized treasury yields.
-2. **Scores each strategy** from 0 to 100, with a one-line reason (for example "20.7 bps max deviation").
-3. **Screens protocols** against a Shariah rule set (business activity, interest-bearing income, leverage) and marks each one PASS, REVIEW or FAIL. This screen is advisory. Only the Shariah board can approve a strategy.
-4. **Publishes** the scores and screening results to the app.
+1. Reads live data: Uniswap pools on Ethereum, Arbitrum, Base and Optimism, Hyperliquid funding rates, Stargate bridge flows, Aave health factors and borrow rates, and tokenized treasury yields.
+2. Scores each strategy from 0 to 100, with a one-line reason (for example "20.7 bps max deviation").
+3. Screens protocols against a Shariah rule set (business activity, interest-bearing income, leverage) and marks each one PASS, REVIEW or FAIL. This screen is advisory. Only the Shariah board can approve a strategy.
+4. Publishes the scores and screening results to the app.
 
-The **Agent Engine** panel shows the raw market data the agent read in its latest cycle and how it evaluated each strategy. **Run cycle** asks the agent to rescan immediately.
+The Agent Engine panel shows the raw market data the agent read in its latest cycle and how it evaluated each strategy. Run cycle asks the agent to rescan immediately.
 
 ### How a score becomes an allocation
 
@@ -135,7 +124,7 @@ market data → AI agent → score (0-100) → score aggregator (on-chain) → e
 
 1. The oracle role writes the scores on-chain to the score aggregator.
 2. The aggregator picks the highest-scoring enabled strategy. Scores older than 5 minutes are ignored.
-3. **Anyone** can call `executeWinner()` (the **Execute** tab on the Vault page). The executor checks that:
+3. Anyone can call `executeWinner()` from the Execute tab on the Vault page. The executor checks that:
    - the winner is allowed in this tier,
    - its score is at or above the tier's minimum,
    - the cooldown has passed,
@@ -147,8 +136,6 @@ The agent never holds user funds, and it cannot move them. Its only on-chain pow
 ### Current status
 
 The agent runs live and scores from real market data. On-chain score writing and execution have been run end to end on Arc Testnet, where `executeWinner()` funded a real Uniswap V3 position through the vault and recalled it. Letting the agent sign its own score updates automatically is the next step on the roadmap.
-
----
 
 ## Fees
 
@@ -163,11 +150,9 @@ The agent runs live and scores from real market data. On-chain score writing and
 | Fee | Rate | When |
 |---|---|---|
 | Wakala (agency) fee | 0.5% of assets a year | Accrues over time, like a management fee |
-| Musharakah (profit share) | 10% of profit **above** a 4% yearly hurdle | Only when profit is distributed |
+| Musharakah (profit share) | 10% of profit above a 4% yearly hurdle | Only when profit is distributed |
 
-The manager earns no profit share while the share price is below its previous high (a **high-water mark**), so the manager is not paid for recovering losses.
-
----
+The manager earns no profit share while the share price is below its previous high (a high-water mark), so the manager is not paid for recovering losses.
 
 ## Shariah governance
 
@@ -175,19 +160,19 @@ The manager earns no profit share while the share price is below its previous hi
 
 Every profit distribution in a Shariah vault runs these steps in order:
 
-1. **Purification.** Any income the board identifies as non-permissible is sent to the charity wallet. Default 0%, maximum 10%.
-2. **Charity.** A voluntary contribution (sadaqah), default 2.5% of profit, maximum 5%.
-3. **Musharakah split.** The manager's 10% share of profit above the hurdle, subject to the high-water mark.
-4. **Depositors.** The rest stays in the vault and raises the share price.
+1. Purification: any income the board identifies as non-permissible is sent to the charity wallet. Default 0%, maximum 10%.
+2. Charity: a voluntary contribution (sadaqah), default 2.5% of profit, maximum 5%.
+3. Musharakah split: the manager's 10% share of profit above the hurdle, subject to the high-water mark.
+4. Depositors: the rest stays in the vault and raises the share price.
 
 When you redeem while realized profit exists, your slice of this waterfall is settled at that moment, so departing holders never shift the cost onto the ones who stay.
 
 ### Strategy screening
 
-A strategy adapter can receive funds only after it is screened in the on-chain **adapter registry**:
+A strategy adapter can receive funds only after it is screened in the on-chain adapter registry:
 
 - A board member proposes the adapter together with the hash of a published pronouncement.
-- A **30-day timelock** must pass before the screening takes effect.
+- A 30-day timelock must pass before the screening takes effect.
 - Every screening has an expiry date.
 
 "Screened, board ruling pending" in the app means the protocol passed the agent's advisory screen but the board has not issued a ruling. Until it does, no capital goes to that strategy on mainnet.
@@ -196,18 +181,14 @@ A strategy adapter can receive funds only after it is screened in the on-chain *
 
 Every Shariah parameter (charity rate and wallet, purification rate, the deposit-pause threshold, cross-chain recipients) can only change through a board proposal followed by a 30-day timelock. Hard safety caps, such as the 30% gold limit and the maximum charity rate, are fixed in the contracts and cannot be changed.
 
----
-
 ## Risks
 
-- **Unaudited contracts.** The code has passed more than 2,000 automated tests, static analysis and internal reviews, but no independent audit.
-- **Single-key governance.** The demo is owned by single keys, not multisig wallets.
-- **Strategy risk.** Liquidity positions can lose value when prices move (impermanent loss); gold positions follow the gold price.
-- **Oracle risk.** Gold valuation depends on a price oracle; a stale oracle triggers a haircut and pauses deposits.
-- **Liquidity.** Only idle USDC can be redeemed instantly; deployed capital must be recalled first.
-- **Pending rulings.** The Shariah board has not ruled on any strategy yet.
-
----
+- The contracts are unaudited. The code has passed more than 2,000 automated tests, static analysis and internal reviews, but no independent audit.
+- Governance is held by single keys rather than multisig wallets.
+- Liquidity positions can lose value when prices move (impermanent loss); gold positions follow the gold price.
+- Gold valuation depends on a price oracle; a stale oracle triggers a haircut and pauses deposits.
+- Only idle USDC can be redeemed instantly; deployed capital must be recalled first.
+- The Shariah board has not ruled on any strategy yet.
 
 ## Contract addresses (Arc mainnet)
 
@@ -220,8 +201,6 @@ Every Shariah parameter (charity rate and wallet, purification rate, the deposit
 | Treasury | [0xf17585cB249EF6Ab8bB450595107DB34d46FfE91](https://explorer.arc.io/address/0xf17585cB249EF6Ab8bB450595107DB34d46FfE91) |
 | Charity module | [0x99D53De353d32e34F18a21c8c760424FC92D01a9](https://explorer.arc.io/address/0x99D53De353d32e34F18a21c8c760424FC92D01a9) |
 | Purification escrow | [0x3dA4697D8154A794DaC1d63276072142ed7C1890](https://explorer.arc.io/address/0x3dA4697D8154A794DaC1d63276072142ed7C1890) |
-
----
 
 ## FAQ
 
@@ -239,8 +218,6 @@ Not yet. The design follows Shariah principles (profit sharing, purification, ch
 
 **What does "Live" mean on a strategy card?**
 The score comes from the running AI agent and today's market data. If the app cannot reach the agent, it shows clearly marked simulated scores instead.
-
----
 
 ## Glossary
 

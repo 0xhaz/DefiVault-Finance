@@ -106,7 +106,7 @@ export function AgentStatus({ onRunningChange }: AgentStatusProps) {
       {error ? (
         <div className="px-4 py-3 text-center">
           <p className="text-xs" style={{ color: 'var(--subtle)' }}>
-            Agent not running — start with <span className="mono">bun run agent</span>
+            Agent not running. Start it with <span className="mono">bun run agent</span>
           </p>
         </div>
       ) : !status ? (

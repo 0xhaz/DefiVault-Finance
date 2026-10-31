@@ -294,7 +294,7 @@ export async function scoreRwaSukuk(): Promise<RwaSukukResult> {
     strategy: 'RWA_SUKUK',
     score: 0,
     destinationDomain: 0,
-    signal: 'DISABLED — strategy suspended pending board ruling (SR-001)',
+    signal: 'DISABLED: strategy suspended pending board ruling (SR-001)',
     ousgApy: 0,
     ousgPrice: 0,
     triggered: false,
@@ -368,7 +368,7 @@ export async function scoreGoldAllocation(): Promise<GoldAllocationResult> {
     score,
     destinationDomain: 0, // always local — same atomic rule as S2-H
     signal: !isPriceSane
-      ? 'SUSPENDED — oracle stale or pool deviation too high'
+      ? 'SUSPENDED: oracle stale or pool deviation too high'
       : !outsideBand
         ? `Gold weight ${(clampedWeightBps / 100).toFixed(1)}% within target band (${((targetBps - bandBps) / 100).toFixed(0)}-${((targetBps + bandBps) / 100).toFixed(0)}%)`
         : `${direction} signal: gold weight ${(clampedWeightBps / 100).toFixed(1)}% vs target ${(targetBps / 100).toFixed(0)}% (drift ${(drift / 100).toFixed(1)}%)`,
@@ -393,7 +393,7 @@ export const SHARIAH_STRATEGY_META = [
     inputs: 'Uniswap V3 USDC/ETH pools on Arbitrum, Base, and Optimism',
     signal: 'Max cross-chain ETH/USDC deviation',
     targetRule: 'Spread above 0.3% becomes actionable',
-    shariahBasis: 'Commodity pair arbitrage — ETH is a productive asset, no interest involved',
+    shariahBasis: 'Commodity pair arbitrage; ETH is a productive asset and no interest is involved',
     permittedAssets: ['USDC', 'ETH'],
   },
   {
@@ -409,11 +409,11 @@ export const SHARIAH_STRATEGY_META = [
   {
     id: 2, key: 'HALAL_LP', name: 'Uniswap V3 Liquidity Pool',
     trigger: 'Every 30s', icon: 'droplets',
-    description: 'Provides liquidity to Uniswap V3 USDC/ETH pools. Earns trading fees only — no lending or yield farming.',
+    description: 'Provides liquidity to Uniswap V3 USDC/ETH pools. Earns trading fees only, with no lending or yield farming.',
     inputs: 'Uniswap V3 USDC/ETH pool liquidity depth on Arbitrum and Base',
     signal: 'Pool trading fee APY (real volume, no interest)',
     targetRule: 'Fee APY above 8% yields top score',
-    shariahBasis: 'Musharakah in a trading pool — fee income from genuine commerce',
+    shariahBasis: 'Musharakah in a trading pool, earning fees from real trading volume',
     permittedAssets: ['USDC', 'ETH'],
   },
   {
@@ -429,11 +429,11 @@ export const SHARIAH_STRATEGY_META = [
   {
     id: 4, key: 'RWA_SUKUK', name: 'RWA Yield (retired, SR-001)',
     trigger: 'SUSPENDED', icon: 'building2',
-    description: 'SUSPENDED — SR-001: OUSG/BUIDL are US Treasury-backed; yield is riba (interest income). Strategy index 4 is RESERVED_4 on-chain. See SHARIAH_REVIEW.md.',
-    inputs: 'N/A — scorer disabled',
+    description: 'SUSPENDED under SR-001: OUSG/BUIDL are US Treasury-backed; yield is riba (interest income). Strategy index 4 is RESERVED_4 on-chain. See SHARIAH_REVIEW.md.',
+    inputs: 'N/A (scorer disabled)',
     signal: 'N/A',
     targetRule: 'N/A',
-    shariahBasis: 'FAIL — US Treasury underlying constitutes riba income regardless of tokenisation.',
+    shariahBasis: 'FAIL: the US Treasury underlying constitutes riba income regardless of tokenisation.',
     permittedAssets: [],
   },
   {
@@ -443,7 +443,7 @@ export const SHARIAH_STRATEGY_META = [
     inputs: 'GoldAllocationAdapter.currentValue(), vault.totalAssets(), goldAllocTargetBps, isPriceSane()',
     signal: 'Gold weight drift outside target band',
     targetRule: '|weight - target| > band AND isPriceSane() == true',
-    shariahBasis: 'Spot allocated-gold holding — atomic USDC/XAUT swap (yad bi yad). Board acceptance pending (SR-008). XAUT not deployed on Arc Testnet — testnet uses MockXAUT.',
+    shariahBasis: 'Spot allocated-gold holding: atomic USDC/XAUT swap (yad bi yad). Board acceptance pending (SR-008). XAUT not deployed on Arc Testnet; testnet uses MockXAUT.',
     permittedAssets: ['USDC', 'XAUT'],
   },
 ];

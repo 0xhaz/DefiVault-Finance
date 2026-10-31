@@ -113,7 +113,7 @@ function TreasuryCard({ state }: { state: TreasuryState }) {
       >
         <Landmark size={11} style={{ color: '#8dd89f' }} />
         <p className="text-xs" style={{ color: 'var(--subtle)' }}>
-          Fully isolated — {isShariah ? 'Conventional' : 'Shariah'} funds never enter this treasury
+          Separate treasury: {isShariah ? 'Conventional' : 'Shariah'} funds never enter it
         </p>
       </div>
     </div>
