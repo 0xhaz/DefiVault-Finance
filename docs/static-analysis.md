@@ -14,7 +14,7 @@ Slither compiles with `forge build`, using `foundry.toml` (solc 0.8.28, `evm_ver
 
 "In scope" means the files in `docs/audit-handoff.md` section 2. Results in out-of-scope files (`ConventionalVault`, the conventional `ScoreAggregator`, conventional strategy adapters) are counted but not triaged.
 
-Aderyn was not run (not installed). Running it is an open follow-up for P-3.
+Aderyn 0.6.8 was run afterwards (2026-10-31, branch `p3b-aderyn`); see "Aderyn" below.
 
 ## Summary
 
@@ -62,5 +62,35 @@ Aderyn was not run (not installed). Running it is an open follow-up for P-3.
 
 1. ~~Fix N-35~~ (done, `n35-returncapital-funded-only`).
 2. ~~P-5: zero-address checks in the `HalalLPAdapter` constructor~~ (done, `p5-halal-lp-zero-checks`: `positionManager`, `swapRouter`, `vault`, `token0`, `token1`; `HalalLPAdapterP5Test.t.sol`).
-3. Run Aderyn and add its results here.
+3. ~~Run Aderyn and add its results here~~ (done, below).
 4. Re-run Slither on the frozen audit commit and attach the JSON to the audit package.
+
+## Aderyn
+
+Run 2026-10-31 on branch `p3b-aderyn` (code identical to `p7-audit-handoff`), Aderyn 0.6.8 from npm (`@cyfrin/aderyn`), restricted to the 13 in-scope Solidity files (3,931 SLOC; scripts excluded):
+
+```bash
+aderyn . -i contracts/ShariahVault.sol,contracts/ShariahVaultV2.sol,contracts/AutonomousVault.sol,contracts/TreasuryModule.sol,\
+contracts/PurificationEscrow.sol,contracts/CharityModule.sol,contracts/ShariahAdapterRegistry.sol,contracts/RiskTieredExecutor.sol,\
+contracts/ShariahScoreAggregator.sol,contracts/ZakatModule.sol,contracts/adapters/GoldExchangeAdapter.sol,\
+contracts/adapters/GoldAllocationAdapter.sol,contracts/adapters/HalalLPAdapter.sol -o aderyn-report.json
+```
+
+Result: 3 high-impact detectors and 18 low-impact detectors. **No new real finding.**
+
+| Impact | Detector | Instances | Verdict |
+|---|---|---|---|
+| High | arbitrary-transfer-from | 1 | The N-35 line (`ShariahAccountingLogic.returnCapital`). Already fixed: it reverts `AdapterNotFunded` unless the adapter has booked principal, so `from` can only be a funded adapter |
+| High | reentrancy-state-change | 26 | Accepted. Gold and LP adapter `deploy`/`recall`/`executeEmergencyExit` are `nonReentrant` and `onlyVault`/`onlyOwner`, and call only immutable routers, pools and oracles. Executor paths hold `_executionLocked`; `deployCapitalAndExecute` holds `_adapterExecutionLocked`. `GoldAllocationAdapter` lines 181 to 183 are constructor `decimals()` reads. `PurificationEscrow` line 291 reads `charityModule.charityBps()` (view) inside a board-only proposal. `AutonomousVault.recallCapital` (lines 340 to 342) is the conventional base; the Shariah vault overrides it |
+| High | reused-contract-name | 4 | False positive for safety: duplicate local interface names (for example `IShariahRegistry`) declared in several files. Worth renaming for clarity in audit tooling; no behaviour impact |
+| Low | centralization-risk | 88 | By design; see the trust model in `docs/audit-handoff.md` section 5 |
+| Low | dead-code | 2 | `AutonomousVault._validateSettlementHeader` and `_consumeInbound` are unused internal functions (the compiler drops them; no bytecode cost). Cleanup candidate |
+| Low | unused-error | 3 | `GoldExchangeAdapter.DeadlineExceeded`, `StalePrice`; `HalalLPAdapter.NoActivePosition`. Cleanup candidate |
+| Low | state-variable-could-be-immutable | 4 | `RiskTieredExecutor.tierName`, `TreasuryModule.treasuryType` (strings cannot be immutable), `TreasuryModule.asset`, `isShariahTreasury` (could be immutable; gas only) |
+| Low | state-change-without-event | 8 | Checked each one. The vault's `returnCapital`, `retireGoldPrincipal` and `writeOffAdapterPrincipal` emit from the library. **Missing events worth adding (Info, monitoring only):** owner `ShariahVault.setHurdlePrincipal`, owner `AutonomousVault.setProfitUnlockPeriod`, and board `ShariahAdapterRegistry.cancelProposal`. `PurificationEscrow.grantBoardRole`/`revokeBoardRole` are dead: the constructor requires a registry and `boardRegistry` is never reassigned, so `onlyBoard` always uses `registry.isBoard()` and the local `boardRole` mapping is never read. Removal candidate (it reads like an untimelocked board change) |
+| Low | unchecked-return | 8 | Same set as Slither `unused-return` (intentional; see above) |
+| Low | uninitialized-local-variable | 3 | Same as Slither `uninitialized-local` (locals start at zero on purpose) |
+| Low | others | | `large-numeric-literal`, `literal-instead-of-constant`, `unspecific-solidity-pragma` (`^0.8.28`; the build pins 0.8.28), `non-reentrant-not-first`, `local-variable-shadowing` (`TreasuryModule` constructor arguments), `redundant-statement`, `costly-loop` and `require-revert-in-loop` (fixed 6-entry loops in the aggregator), `modifier-used-only-once`, `unused-public-function`, `state-no-address-check` (owner setters, overlaps Slither `missing-zero-check`): style or gas only |
+
+The cleanup candidates (dead internal functions, the dead escrow `boardRole` path, unused errors, could-be-immutable variables, duplicate interface names, the three missing events) do not change fund behaviour. Adding events to the vault costs bytecode against the 259 B margin. They are left for a post-audit tidy-up so the audited code does not move.
+
