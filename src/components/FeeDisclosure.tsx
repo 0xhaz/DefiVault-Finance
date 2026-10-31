@@ -31,7 +31,7 @@ const FEE_ROWS: FeeRow[] = [
     note: 'Vault only participates in profits above 4%',
   },
   {
-    label: 'Zakat auto-deduction',
+    label: 'Charity deduction (sadaqah)',
     conventional: '—',
     shariah: '2.5% of gross Musharakah profit',
     note: 'Routed to charity wallet before fee split',
@@ -122,7 +122,7 @@ export function FeeDisclosure({ isShariahTier: _isShariahTier }: { isShariahTier
               className="text-xs font-medium"
               style={{
                 color: row.shariah === '—' ? 'var(--border)'
-                  : row.shariah.includes('Zakat') || row.shariah.includes('Musharakah') ? '#c5b3f7'
+                  : row.label.startsWith('Charity') || row.shariah.includes('Musharakah') ? '#c5b3f7'
                   : 'var(--ink-2)',
               }}
             >
@@ -137,8 +137,8 @@ export function FeeDisclosure({ isShariahTier: _isShariahTier }: { isShariahTier
         <p className="text-xs leading-relaxed" style={{ color: 'var(--subtle)' }}>
           <span className="font-medium" style={{ color: '#c5b3f7' }}>Musharakah structure:</span> The vault acts as a
           silent partner (Rab al-Mal), providing capital. Returns are profit-sharing, not interest. The 10% vault share
-          is earned only after depositors clear their 4% hurdle. Zakat deduction happens first, before any split, to
-          fulfil the obligation before profit is recognised.
+          is earned only after depositors clear their 4% hurdle. Purification and the charity deduction come first, before
+          any split.
         </p>
       </div>
     </div>
@@ -153,7 +153,7 @@ export function FeeDisclosureBadge({ tier }: { tier: 'conventional' | 'shariah' 
         {[
           { label: '0.5% Wakala', color: '#c5b3f7' },
           { label: '10% Musharakah', color: '#c5b3f7' },
-          { label: '2.5% Zakat', color: '#8dd89f' },
+          { label: '2.5% Charity', color: '#8dd89f' },
         ].map(b => (
           <span
             key={b.label}

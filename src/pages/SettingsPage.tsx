@@ -68,7 +68,7 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error' | 'resetting';
 
 const MODE_OPTIONS: { id: VaultMode; label: string; sub: string; icon: typeof Shield; color: string }[] = [
   { id: 'conventional', label: 'Conventional', sub: 'Passive + Aggressive vaults', icon: Shield, color: '#acc6e9' },
-  { id: 'shariah',      label: 'Shariah',       sub: 'Halal-certified vault only',  icon: Moon,   color: '#8dd89f' },
+  { id: 'shariah',      label: 'Shariah',       sub: 'Shariah-screened vault only',  icon: Moon,   color: '#8dd89f' },
   { id: 'both',         label: 'Both',          sub: 'All three vault tiers',       icon: Globe,  color: '#c9b8f5' },
 ];
 
@@ -214,7 +214,7 @@ export function SettingsPage({ selectedTier, onSelectTier, vaultMode, onVaultMod
             { id: 'passive'    as const, label: 'Passive',    sub: 'Min score 80, cooldown 2h, 40% max alloc',      color: '#acc6e9', icon: Shield, visible: vaultMode !== 'shariah' },
             { id: 'aggressive' as const, label: 'Aggressive', sub: 'Min score 60, cooldown 30min, 80% max alloc',   color: '#f0b429', icon: Zap,    visible: vaultMode !== 'shariah' },
             { id: 'shariah-conservative' as const, label: 'Conservative Shariah', sub: 'Min score 80, cooldown 2h, S2-H S3-H S5-H only',  color: '#8dd89f', icon: Moon, visible: vaultMode !== 'conventional' },
-            { id: 'shariah-dynamic'      as const, label: 'Dynamic Shariah',      sub: 'Min score 70, cooldown 1h, all 5 halal strategies', color: '#c9b8f5', icon: Moon, visible: vaultMode !== 'conventional' },
+            { id: 'shariah-dynamic'      as const, label: 'Dynamic Shariah',      sub: 'Min score 70, cooldown 1h, all 5 screened strategies', color: '#c9b8f5', icon: Moon, visible: vaultMode !== 'conventional' },
           ] as const).filter(t => t.visible).map((t, i, arr) => {
             const active = selectedTier === t.id;
             return (

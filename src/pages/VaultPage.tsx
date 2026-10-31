@@ -53,7 +53,7 @@ const TIER_SPECS: Record<TierSelection, {
     description: 'All 4 strategies compete for capital. Funding rate arb and bridge front-running add higher-yield opportunities with corresponding volatility. Aave loop amplifies yield via 2x leverage. Crosschain CCTP bridges pre-position ahead of detected capital flows.',
   },
   'shariah-conservative': {
-    name: 'Conservative Shariah', tagline: 'Low-volatility halal strategies only', color: '#8dd89f',
+    name: 'Conservative Shariah', tagline: 'Low-volatility screened strategies only', color: '#8dd89f',
     icon: <Moon size={16} strokeWidth={1.8} />,
     isShariahTier: true,
     specs: [
@@ -66,10 +66,10 @@ const TIER_SPECS: Record<TierSelection, {
       { label: 'Charity (sadaqah)',   value: '2.5% auto-routed' },
       { label: 'Strategies',          value: 'S2-H, S3-H, S6-H' },
     ],
-    description: 'Three low-volatility Shariah strategies: PAXG gold spread (S2-H), Halal Uniswap V3 LP (S3-H, swap-fee income only), and XAUT Gold Allocation (S6-H, spot — board certification pending). No Murabaha trades and no stablecoin spread — conservative depositors get stable yield with minimal volatility. No riba-based lending, no perp funding, no front-running.',
+    description: 'Three low-volatility Shariah strategies: PAXG gold spread (S2-H), Uniswap V3 LP (S3-H, swap-fee income only), and XAUT Gold Allocation (S6-H, spot — board ruling pending). No Murabaha trades and no stablecoin spread — conservative depositors get stable yield with minimal volatility. No riba-based lending, no perp funding, no front-running.',
   },
   'shariah-dynamic': {
-    name: 'Dynamic Shariah', tagline: 'All 5 halal strategies, higher yield', color: '#c9b8f5',
+    name: 'Dynamic Shariah', tagline: 'All 5 screened strategies, higher yield', color: '#c9b8f5',
     icon: <Moon size={16} strokeWidth={1.8} />,
     isShariahTier: true,
     specs: [
@@ -82,7 +82,7 @@ const TIER_SPECS: Record<TierSelection, {
       { label: 'Charity (sadaqah)',   value: '2.5% auto-routed' },
       { label: 'Strategies',          value: 'S1-H, S2-H, S3-H, S4-H, S6-H' },
     ],
-    description: 'Five active Shariah strategies: USDC/ETH cross-chain spread (S1-H), PAXG gold spread (S2-H), Halal LP swap-fee income (S3-H), Commodity Murabaha (S4-H), and XAUT Gold Allocation (S6-H, board certification pending). Dynamic allocation maximises halal yield. No riba-based lending, no perp funding, no front-running. Charitable contribution auto-routed before Musharakah split.',
+    description: 'Five active Shariah strategies: USDC/ETH cross-chain spread (S1-H), PAXG gold spread (S2-H), LP swap-fee income (S3-H), Commodity Murabaha (S4-H), and XAUT Gold Allocation (S6-H, board ruling pending). Dynamic allocation maximises halal yield. No riba-based lending, no perp funding, no front-running. Charitable contribution auto-routed before Musharakah split.',
   },
 };
 

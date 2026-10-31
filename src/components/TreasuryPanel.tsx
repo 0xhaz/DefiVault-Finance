@@ -49,7 +49,7 @@ function TreasuryCard({ state }: { state: TreasuryState }) {
         { label: 'Annual Wakala fee', value: `${state.adminFeeBps / 100}%` },
         { label: 'Musharakah share', value: `${state.musharakahShareBps / 100}%` },
         { label: 'Hurdle rate', value: `${state.hurdleRateBps / 100}% APY` },
-        { label: 'Zakat auto-deduction', value: '2.5% of profits' },
+        { label: 'Charity deduction (sadaqah)', value: '2.5% of profits' },
       ]
     : [
         { label: 'Annual admin fee', value: `${state.adminFeeBps / 100}%` },

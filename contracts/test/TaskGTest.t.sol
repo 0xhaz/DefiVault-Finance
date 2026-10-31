@@ -310,15 +310,14 @@ contract TaskGTest is Test {
 
     // ── G3-9 ─────────────────────────────────────────────────────────────────
 
-    /// @notice setCertified (backward-compat alias) also sets strategyEnabled.
-    function test_G3_setCertified_alias_works() public {
+    /// @notice P-8: the setCertified alias is removed ("certified" is reserved for board rulings).
+    function test_G3_setCertified_alias_removed() public {
         vm.prank(owner);
-        aggregator.setCertified(ShariahScoreAggregator.ShariahStrategy.ETH_SPREAD, true);
-
-        assertTrue(
-            aggregator.strategyEnabled(ShariahScoreAggregator.ShariahStrategy.ETH_SPREAD),
-            "strategyEnabled must be true after setCertified alias"
+        (bool ok,) = address(aggregator).call(
+            abi.encodeWithSignature("setCertified(uint8,bool)", uint8(ShariahScoreAggregator.ShariahStrategy.ETH_SPREAD), true)
         );
+        assertFalse(ok, "setCertified selector must not exist");
+        assertFalse(aggregator.strategyEnabled(ShariahScoreAggregator.ShariahStrategy.ETH_SPREAD));
     }
 
     // ── G3-10 ────────────────────────────────────────────────────────────────

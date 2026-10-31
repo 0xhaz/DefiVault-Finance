@@ -124,7 +124,7 @@ contract ShariahScoreAggregator is Ownable2Step {
             uint8[6] memory values,
             uint40[6] memory timestamps,
             uint32[6] memory destinationDomains,
-            bool[6] memory certified
+            bool[6] memory enabled
         )
     {
         for (uint8 i = 0; i < 6; i++) {
@@ -133,7 +133,7 @@ contract ShariahScoreAggregator is Ownable2Step {
             values[i] = current.value;
             timestamps[i] = current.timestamp;
             destinationDomains[i] = current.destinationDomain;
-            certified[i] = strategyEnabled[strategy];
+            enabled[i] = strategyEnabled[strategy];
         }
     }
 
@@ -161,16 +161,10 @@ contract ShariahScoreAggregator is Ownable2Step {
     /// @notice Enable or disable a strategy for winner selection.
     /// @dev    On testnet: may be set true for demos. On production chains: requires a
     ///         recorded board pronouncement before setting true (G3 deploy-script guard).
-    ///         Renamed from setCertified — "certified" is reserved for board rulings.
+    ///         Replaces setCertified (removed in P-8) — "certified" is reserved for board rulings.
     function setEnabled(ShariahStrategy strategy, bool enabled) external onlyOwner {
         strategyEnabled[strategy] = enabled;
         emit StrategyEnabledUpdated(strategy, enabled);
-    }
-
-    /// @notice Backward-compat alias for setEnabled (test suites may use old name).
-    function setCertified(ShariahStrategy strategy, bool certified) external onlyOwner {
-        strategyEnabled[strategy] = certified;
-        emit StrategyEnabledUpdated(strategy, certified);
     }
 
     function setOracle(address newOracle) external onlyOwner {

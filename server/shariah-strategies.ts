@@ -1,7 +1,7 @@
 /**
  * Shariah-compliant strategy scorers for the Shariah vault tier.
  *
- * Five strategies, all screened for halal compliance:
+ * Five strategies, all passed through the advisory Shariah screen (board rulings pending):
  *   S0-H: ETH_SPREAD   — USDC/ETH cross-chain spread (every 30s)
  *   S1-H: GOLD_SPREAD  — PAXG/USDC cross-chain spread (every 30s)
  *   S2-H: HALAL_LP     — Uniswap V3 USDC/ETH fee APY (every 30s)
@@ -403,7 +403,7 @@ export const SHARIAH_STRATEGY_META = [
     inputs: 'Uniswap V3 PAXG/USDC pools on mainnet and Arbitrum',
     signal: 'Cross-chain gold price deviation',
     targetRule: 'Spread above 0.3% becomes actionable',
-    shariahBasis: 'Gold arbitrage is universally halal — physical asset, no interest',
+    shariahBasis: 'Gold arbitrage on a physical asset, no interest (board ruling pending)',
     permittedAssets: ['USDC', 'PAXG'],
   },
   {
@@ -423,7 +423,7 @@ export const SHARIAH_STRATEGY_META = [
     inputs: 'Trade request events from CommodityMurabahaAdapter',
     signal: 'Pending trade size and markup percentage',
     targetRule: 'Trade above $10K and markup above 1.0% becomes actionable',
-    shariahBasis: 'Murabaha (cost-plus sale) — universally halal; profit fully disclosed before execution',
+    shariahBasis: 'Murabaha (cost-plus sale); profit fully disclosed before execution (board ruling pending)',
     permittedAssets: ['USDC', 'PAXG', 'ETH'],
   },
   {

@@ -136,7 +136,7 @@ contract DeployGoldAllocation is Script {
         console.log("MockUniswapV3PoolXAUT:", d.mockPool);
         console.log("GoldAllocationAdapter:", d.adapter);
         console.log("");
-        console.log("IMPORTANT: shariahCertified[5] = false (GOLD_ALLOCATION).");
+        console.log("IMPORTANT: strategyEnabled[5] = false (GOLD_ALLOCATION).");
         console.log("Set to true ONLY after board accepts SR-008.");
     }
 }
