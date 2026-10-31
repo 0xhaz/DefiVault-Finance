@@ -45,6 +45,8 @@ contract ShariahVault is AutonomousVault {
     uint256 internal constant EXIT_SETTLE_GAS = 700_000;
     /// @dev N-33: settlement re-reads each funded adapter 8 times; 8 x ADAPTER_READ_GAS (150k) plus margin.
     uint256 internal constant EXIT_SETTLE_GAS_PER_ADAPTER = 1_300_000;
+    /// @dev N-38: settlement reads each funded gold slot about 16 times (uncapped, trusted slot); about 60k each.
+    uint256 internal constant EXIT_SETTLE_GAS_PER_GOLD = 1_000_000;
     error UseAtomicDeploy(address adapter);
     /// @notice N-35: returnCapital only pulls from an adapter that holds booked principal.
     error AdapterNotFunded(address adapter);
@@ -370,7 +372,10 @@ contract ShariahVault is AutonomousVault {
                     // Requiring twice the settlement budget up front makes that limit unreachable.
                     // The budget grows with the number of funded adapters because settlement re-reads
                     // each adapter's value several times.
-                    if (gasleft() < 2 * (EXIT_SETTLE_GAS + fundedAdapters.length * EXIT_SETTLE_GAS_PER_ADAPTER)) {
+                    uint256 budget = EXIT_SETTLE_GAS + fundedAdapters.length * EXIT_SETTLE_GAS_PER_ADAPTER;
+                    if (goldSpreadAdapter != address(0)) budget += EXIT_SETTLE_GAS_PER_GOLD;
+                    if (goldAllocationAdapter != address(0)) budget += EXIT_SETTLE_GAS_PER_GOLD;
+                    if (gasleft() < 2 * budget) {
                         revert InsufficientExitGas();
                     }
                     try this.exitSettle{gas: gasleft() / 2}(grossProfit) {} catch {}

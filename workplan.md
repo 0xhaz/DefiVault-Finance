@@ -136,7 +136,7 @@ Decision: stay on Uniswap V3 for `ShariahVaultV2`. Test with a fork (LP-1/LP-2) 
 | ID | Task | Owner | Done when |
 |---|---|---|---|
 | M-1 | Board rulings needed for launch: SR-002, 003, 004, 012, 014, 018, 020, 025, 026. Before gold: SR-005, 008, 009, 010, 013, 016. Before LP: SR-011 and SR-027 (ETH) | Board | Pronouncements and hashes recorded |
-| M-2 | Confirm Arc mainnet's contract size limit (259 B margin) | Operator / Circle contact | Written confirmation |
+| M-2 | Confirm Arc mainnet's contract size limit (162 B margin) | Operator / Circle contact | Written confirmation |
 | M-3 | Gold dependencies on Arc mainnet: PAXG, XAUT, XAU/USD oracle, routers, liquidity depth. If they don't exist, launch without gold | Operator | Addresses verified, or gold deferred |
 | M-4 | LP venue on Arc mainnet: official Uniswap V3 is live and has a USDC/EURC 0.05% pool with about $90k depth (survey in Phase 2). Still to do: set a per-deploy size cap against that depth, recheck liquidity right before launch, and get a board ruling on EURC as a permitted pair asset (new SR item) | Operator / board | Size cap set and the SR item ruled |
 | M-5 | Owner and Board Safes (at least 2-of-3, hardware signers, recovery plan), the oracle operator hot key, and the charity wallet (not blocklisted) | Operator / board | Addresses double-checked by two people |
@@ -158,7 +158,7 @@ Uniswap v4 is live on Arc Testnet and mainnet and seems to be where most Arc DEX
 | V3-LP3 | **Native currency.** Many Arc v4 pools use `address(0)` (native USDC, 18 decimals). Either restrict to ERC-20 USDC (`0x3600…`) pools or handle the 18/6 view explicitly | Same risk as Invariant 3 |
 | V3-LP4 | Testnet: use the existing v4 USDC/EURC hookless pool `0xf775…29ea` (seed liquidity from the faucet), or a pool with an oracle hook | Pool exists, depth is negligible |
 | V3-LP5 | Shariah review: hooks can carry arbitrary logic, so the board screening must cover the hook as well as the pool | New SR item |
-| V3-LP6 | Size budget: the V2 vault has 259 B of margin. A V3 vault is a new deployment and can be restructured | Plan the library split up front |
+| V3-LP6 | Size budget: the V2 vault has 162 B of margin. A V3 vault is a new deployment and can be restructured | Plan the library split up front |
 | V3-G1 | Deposit gate for LP strategies (N-34, D-6): size the loss gate per adapter (for example, relative to its principal) instead of the gold-sized dust threshold | Auditors and board consulted |
 | V3-G2 | Tier-aware winner (N-36, D-7): pass the executor's strategy mask to the aggregator so a tier picks its best allowed strategy | One aggregator can serve all tiers |
 
