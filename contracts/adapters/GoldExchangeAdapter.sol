@@ -436,7 +436,10 @@ contract GoldExchangeAdapter is IStrategyAdapter, Ownable2Step, ReentrancyGuard 
     function setGoldOracle(address oracle) external onlyOwner {
         // The emergency-sale floor derives from the cached oracle price; while emergency exits are
         // armed the feed cannot be swapped instantly (disable them first via the 30-day timelock).
-        if (emergencyExitEnabled) revert OracleLockedWhileEmergencyEnabled();
+        // N-39: the lock also holds while an enable proposal is pending, so a feed cannot be swapped
+        // in just before the flag turns on; any swap is visible for the full 30-day enable window.
+        PendingChange memory pc = pendingChanges[PARAM_EMERGENCY_EXIT_ENABLED];
+        if (emergencyExitEnabled || (pc.pending && pc.newValue != 0)) revert OracleLockedWhileEmergencyEnabled();
         if (oracle == address(0)) revert OracleRequired();
         address previous = address(goldOracle);
         goldOracle = IAggregatorV3(oracle);

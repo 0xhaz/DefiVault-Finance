@@ -52,19 +52,30 @@ contract GoldOracleLockTest is GoldExitExchangeFixture {
         assertEq(address(a.goldOracle()), address(oracle), "oracle unchanged");
     }
 
-    function test_ProposingEnableAloneDoesNotLockOracle() public {
+    /// N-39 (P-2 F4): a pending enable proposal locks the oracle too, so a hostile feed cannot be swapped in
+    /// one block before executeParamChange(ENABLED) and then sit behind the lock for 30 days.
+    function test_N39_PendingEnableProposalLocksOracle() public {
+        vm.prank(owner);
+        a.proposeParamChange(PARAM, 1);
+        vm.expectRevert(GoldExchangeAdapter.OracleLockedWhileEmergencyEnabled.selector);
+        vm.prank(owner);
+        a.setGoldOracle(address(oracle2));
+        // Still locked one second before the enable can execute.
+        vm.warp(block.timestamp + 30 days - 1);
+        vm.expectRevert(GoldExchangeAdapter.OracleLockedWhileEmergencyEnabled.selector);
+        vm.prank(owner);
+        a.setGoldOracle(address(oracle2));
+        assertEq(address(a.goldOracle()), address(oracle), "oracle unchanged");
+    }
+
+    function test_N39_CancellingEnableProposalUnlocksOracle() public {
         vm.prank(owner);
         a.proposeParamChange(PARAM, 1);
         vm.prank(owner);
+        a.cancelParamChange(PARAM);
+        vm.prank(owner);
         a.setGoldOracle(address(oracle2));
         assertEq(address(a.goldOracle()), address(oracle2));
-        // Timelock not yet elapsed -> still cannot execute.
-        vm.warp(block.timestamp + 30 days - 1);
-        vm.expectRevert("GoldExchangeAdapter: timelock not elapsed");
-        vm.prank(owner);
-        a.executeParamChange(PARAM);
-        vm.prank(owner);
-        a.setGoldOracle(address(oracle));
     }
 
     function test_StillLockedUntilDisableTimelockElapses() public {
