@@ -169,6 +169,18 @@ contract LibraryAccountingTest is LibTestBase {
         assertEq(ShariahAccountingLogic.liquidRedeemLimit(address(t), 10, 99, 100), 9);
     }
 
+    function test_P2F1_LiquidLimit_reservesPendingCut() public {
+        MockERC20 t = _tok(1_000e6);
+        libPendingCut = 400e6; // 600e6 usable: floor(600e6 * 1000e6 / (1000e6 + 1)) shares
+        uint256 lim = ShariahAccountingLogic.liquidRedeemLimit(address(t), 1_000e6, 1_000e6, 1_000e6);
+        assertLt(lim, 600e6 + 1);
+        assertGt(lim, 599e6);
+        assertEq(ShariahAccountingLogic.exitLiquidity(address(t)), 600e6);
+        libPendingCut = 2_000e6; // cut above the balance leaves nothing to exit with
+        assertEq(ShariahAccountingLogic.exitLiquidity(address(t)), 0);
+        assertEq(ShariahAccountingLogic.liquidRedeemLimit(address(t), 1_000e6, 1_000e6, 1_000e6), 0);
+    }
+
     function test_LiquidLimit_ZeroLiquidityReturnsZero() public {
         MockERC20 t = _tok(0);
         assertEq(ShariahAccountingLogic.liquidRedeemLimit(address(t), 10, 99, 100), 0);
