@@ -1,14 +1,15 @@
-import { LayoutDashboard, Vault, BarChart2, Briefcase, Bell, Settings, ChevronRight, Zap, X, Menu, Shield, Moon, Globe } from 'lucide-react';
+import { LayoutDashboard, Vault, BarChart2, Briefcase, Bell, Settings, ChevronRight, Zap, X, Menu, Shield, Moon, Globe, BookOpen } from 'lucide-react';
 import { useState } from 'react';
 import type { VaultMode } from '../App';
 import { ARC_NETWORK_NAME } from '../chain';
 
-export type Page = 'landing' | 'dashboard' | 'vault' | 'strategies' | 'portfolio' | 'alerts' | 'settings';
+export type Page = 'landing' | 'dashboard' | 'vault' | 'strategies' | 'portfolio' | 'alerts' | 'settings' | 'docs';
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ReactNode; badge?: string }[] = [
   { id: 'dashboard',  label: 'Dashboard',  icon: <LayoutDashboard size={16} strokeWidth={1.8} /> },
   { id: 'vault',      label: 'Vault',      icon: <Vault           size={16} strokeWidth={1.8} /> },
   { id: 'strategies', label: 'Strategies', icon: <BarChart2       size={16} strokeWidth={1.8} /> },
+  { id: 'docs',       label: 'Docs',       icon: <BookOpen        size={16} strokeWidth={1.8} /> },
   { id: 'portfolio',  label: 'Portfolio',  icon: <Briefcase       size={16} strokeWidth={1.8} /> },
   { id: 'alerts',     label: 'Alerts',     icon: <Bell            size={16} strokeWidth={1.8} />, badge: '3' },
   { id: 'settings',   label: 'Settings',   icon: <Settings        size={16} strokeWidth={1.8} /> },

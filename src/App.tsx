@@ -7,6 +7,7 @@ import { StrategiesPage } from './pages/StrategiesPage';
 import { PortfolioPage } from './pages/PortfolioPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { DocsPage } from './pages/DocsPage';
 import { IS_MAINNET } from './chain';
 import { ConnectKitButton } from 'connectkit';
 
@@ -47,7 +48,8 @@ export default function App() {
         />
       )}
 
-      <div className={`flex-1 min-w-0 ${!isLanding ? 'overflow-y-auto' : ''}`}>
+      {/* overflow-x-clip (not overflow-auto): clips sideways overflow without creating a scroll container, so sticky elements in pages keep working. */}
+      <div className={`flex-1 min-w-0 ${!isLanding ? 'overflow-x-clip' : ''}`}>
         {IS_MAINNET && (
           <div
             role="alert"
@@ -89,6 +91,7 @@ export default function App() {
                 vaultMode={vaultMode}
               />
             )}
+            {page === 'docs'      && <DocsPage />}
             {page === 'portfolio' && <PortfolioPage />}
             {page === 'alerts'    && <AlertsPage />}
             {page === 'settings'  && (
