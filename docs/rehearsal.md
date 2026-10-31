@@ -2,7 +2,8 @@
 
 Chain: **Arc Testnet** (chain ID 5042002)  
 Script: `contracts/script/Rehearsal.s.sol`  
-Date: TBD (populate after run)
+Date: 2026-10-28 (run 2). Later runs (3 to 5) are logged at the end of this file and in `docs/agents/deployed-addresses.md`.  
+Rows marked "not recorded" or "not run live" were reconciled on 2026-10-31 (workplan P-1): the step was either done without recording the value, or not run on live testnet.
 
 ---
 
@@ -86,13 +87,17 @@ Each wallet deposits 100 USDC into Conservative V2.
 
 | Wallet | Tx hash | Gas used | Shares received |
 |---|---|---|---|
-| WALLET_A | `TBD` | TBD | TBD |
-| WALLET_B | `TBD` | TBD | TBD |
-| WALLET_C | `TBD` | TBD | TBD |
+| WALLET_A | not recorded | not recorded | not recorded |
+| WALLET_B | same wallet (single key rehearsal) | — | — |
+| WALLET_C | same wallet (single key rehearsal) | — | — |
+
+Done with `cast send` from a single wallet (the forge broadcast hits the Arc Testnet USDC `StackUnderflow`, see Summary item 1). Tx hashes were not recorded.
 
 ---
 
-## Step 3 — Screen S3-H via Short Testnet Timelock
+## Step 3 — Screen an adapter via Short Testnet Timelock
+
+The script step is named for S3-H, but in run 2 it screened the **GoldExchangeAdapter (S2-H)**: no `HalalLPAdapter` was deployed. The LP adapter has still not been deployed on testnet; see `workplan.md` Phase 2.
 
 ```bash
 # Propose screening (boardMultisig must sign)
@@ -170,12 +175,10 @@ forge script contracts/script/Rehearsal.s.sol \
 
 | Step | Tx hash | Gas used | Notes |
 |---|---|---|---|
-| deployCrossChain | `TBD` | TBD | nonce: TBD |
-| settleCrossChainWithMessage | `TBD` | TBD | feeExecuted: TBD |
+| deployCrossChain | not run live | — | — |
+| settleCrossChainWithMessage | not run live | — | — |
 
-**CrossChainFeeDeducted emitted?** Yes / No  
-**CrossChainSettled shortfall:** TBD  
-**NAV before / after:** TBD / TBD
+Not run on live testnet. The settle path is verified on a fork of the real Arc Testnet contracts ("Fork Verification Results" below and `ForkCctpRealArc*.t.sol`). A live round trip is still open (workplan Phase 3).
 
 ---
 
@@ -195,9 +198,9 @@ Expected outcomes:
 
 | Condition | Expected result | Actual result |
 |---|---|---|
-| Gold position == 0 (no deploy yet) | `maxDeposit > 0` (dust rule — deposits NOT blocked) | TBD |
-| Gold position > dustThreshold AND oracle stale | `maxDeposit == 0` (deposits BLOCKED) | TBD |
-| Redemption while oracle stale | Succeeds (redemptions always open) | TBD |
+| Gold position == 0 (no deploy yet) | `maxDeposit > 0` (dust rule — deposits NOT blocked) | Confirmed live (run 2) |
+| Gold position > dustThreshold AND oracle stale | `maxDeposit == 0` (deposits BLOCKED) | Not run live (no gold position at the time); covered by unit tests |
+| Redemption while oracle stale | Succeeds (redemptions always open) | Not run live; covered by unit tests |
 
 ---
 
@@ -222,7 +225,7 @@ forge script contracts/script/Rehearsal.s.sol \
 | vaultShare (step 3) | SKIPPED | Arc Testnet USDC blocker |
 | depositorShare (step 4) | SKIPPED | Arc Testnet USDC blocker |
 | lockedProfit after claim | SKIPPED | Arc Testnet USDC blocker |
-| unlockedAt | TBD | block.timestamp + 3 days |
+| unlockedAt | SKIPPED | The claim-time lock was later removed (N-11); a claim no longer sets `unlockedAt` |
 
 ---
 
@@ -288,7 +291,7 @@ Result: **4/4 PASS**
 |---|---|---|
 | `test_step5_settle_fee_lt_maxfee` | PASS | feeExecuted=2e6 < maxFee=5e6; expectedNet=98e6 received; CrossChainFeeDeducted emitted; L1 offset fix load-bearing confirmed |
 | `test_step5_settle_regression_guard` | PASS | Clean settle in independent fork snapshot |
-| `test_step7_claimMusharakahProfit_waterfall` | PASS (after CharityModule fix) | WaterfallExecuted + MusharakahProfitClaimed emitted; lockedProfit>0; profit unlocks over 3 days |
+| `test_step7_claimMusharakahProfit_waterfall` | PASS (after CharityModule fix) | WaterfallExecuted + MusharakahProfitClaimed emitted; lockedProfit>0; profit unlocks over 3 days (as of 2026-10-28; N-11 later removed the claim-time lock, and the test now asserts an unchanged share price) |
 | `test_step7_depositor_redeems_above_cost` | PASS | Depositor receives 104.99 USDC on 100 USDC deposit; no dilution |
 
 **CharityModule bug fixed** (found during fork test): `distributeCharity()` was checking `msg.sender == vault` but the actual caller is `PurificationEscrow`. Fixed by adding `escrow` address field + `setEscrow(address)` owner-only setter, updating the guard to accept vault or escrow, and pulling from `msg.sender` (escrow) rather than hardcoded `vault`. `Rehearsal.s.sol` updated to call `charity.setEscrow(escrow)` after both are deployed. All 26 existing CharityModule unit tests still pass.

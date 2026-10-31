@@ -84,7 +84,7 @@ Fixed findings are listed with explanations in `docs/security-review.md` (N-01 t
 - **Manager-dependent exits:** deployed capital returns only when the manager (or owner) recalls it; no permissionless withdrawal queue. `maxWithdraw`/`maxRedeem` reflect idle liquidity.
 - **Concealed LP loss:** if a `HalalLPAdapter` price is unreadable, deposits are blocked but exits are priced at unmarked NAV.
 - **Emergency exit lead time:** enabling needs 30 days; a crash beyond 80 percent still blocks it.
-- **Exit gas floor:** exits with realized profit revert below the gas floor; integrators with hardcoded low gas will fail. Since N-33 an exit reads every funded adapter about 23 times; with at most 5 funded adapters the measured worst case (140k per read) is 25.3M gas, inside Arc's 30M block limit. A real Uniswap V3 LP adapter exit measured about 6.1M gas.
+- **Exit gas floor:** exits with realized profit revert below the gas floor; integrators with hardcoded low gas will fail. Since N-33 an exit reads every funded adapter about 23 times; with at most 5 funded adapters the measured worst case (140k per read) is 25.3M gas, inside Arc's 30M block limit. With one funded real Uniswap V3 LP adapter, a cold exit with realized profit settles the cut from 4.97M gas (full stack on the Arc mainnet fork, `ForkVaultLPArcMainnet.t.sol`).
 - **Degraded exit mode:** a broken escrow, charity or treasury leaves the leaver's cut in the vault as ordinary profit.
 - **Adapter self-reporting:** a screened adapter that overstates value is not detected.
 - **Size margin:** 259 bytes; the vault cannot take another feature without another split.
@@ -97,7 +97,7 @@ Run from the repository root with Foundry (`forge 1.x`, the project pins `solc 0
 
 ```bash
 forge build --sizes                      # ShariahVaultV2 runtime 24,317 B (limit 24,576)
-forge test                               # 2066 tests passed, 0 failed at handoff (some fork tests skip without ARC_TESTNET_RPC)
+forge test                               # 2074 passed, 0 failed, 4 skipped on 2026-10-31 (fork suites skip without ARC_TESTNET_RPC / ARC_MAINNET_RPC)
 forge test --match-path 'contracts/test/invariant/*'
 contracts/script/local/run-local.sh      # deploy-script rehearsal on a local anvil: 207 checks passed
 ```

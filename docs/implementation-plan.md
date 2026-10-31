@@ -1,6 +1,6 @@
-Reading the existing plan file before updating it. Good — I have the current plan. Now writing the full Task F plan section as text, then persisting it.
+# Task F implementation plan (archived)
 
----
+> **Historical record.** This is the plan approved before Task F (S6-H Gold Allocation) was built in October 2026. Task F is **done**; the code is the source of truth. Later changes are not reflected here: the aggregator flag is now `strategyEnabled` ("certified" is reserved for board rulings), gold deployment goes through the atomic path (N-23), and the vault has linked libraries (N-30). For current status see `AGENTS.md`, `docs/security-review.md` and `workplan.md`.
 
 ## Implementation Plan: Task F — S6-H XAUT Gold Allocation
 
@@ -23,7 +23,7 @@ Task F adds a sixth Shariah strategy, S6-H "Gold Allocation (XAUT, spot)": a cap
 - **New enum index:** `GOLD_ALLOCATION = 5` appended to `ShariahScoreAggregator.ShariahStrategy` — never touching 0–4
 - **New adapter:** `GoldAllocationAdapter.sol` — oracle-gated, single-transaction USDC↔XAUT swap
 - **New mock contracts (testnet only):** `MockXAUT`, `MockXauUsdAggregator`, `MockUniswapV3PoolXAUT` (stripped V3 — price settable)
-- **Redeploy script:** `RedeployShariahAggregator.s.sol` — deploys fresh 6-enum aggregator, re-applies certified flags, re-points both executors
+- **Redeploy script:** `RedeployShariahAggregator.s.sol` — deploys fresh 6-enum aggregator, re-applies enabled flags, re-points both executors
 - **Deploy script:** `DeployGoldAllocation.s.sol` — deploys all mocks + adapter, wires vaults + executors
 - **Masks updated:** Conservative `6` → `38` (`0b100110`), Dynamic `15` → `47` (`0b101111`)
 - **Combined gold cap:** `MAX_GOLD_BPS = 3000` hard-coded in `ShariahVault`; board-settable `goldAllocTargetBps` (default 2000) + `goldAllocBandBps` (default 500) behind 30-day timelock
@@ -150,14 +150,12 @@ Task F adds a sixth Shariah strategy, S6-H "Gold Allocation (XAUT, spot)": a cap
 
 ---
 
-Now persisting this to the plan file. Plan saved. A few things worth stating plainly before you approve Task F for build:
+### Notes recorded at approval time
 
 **The stripped Uniswap V3 pool mock adds real scope.** A genuine V3 pool (`IUniswapV3Pool`) requires implementing `slot0()`, `swap()` with callback routing, and `sqrtPriceX96` ↔ price conversion. The mock does not need to be a full fork — it only needs to satisfy the three calls `GoldAllocationAdapter` makes: `slot0()` (to read pool price for deviation check) and `exactInputSingle()` on the router (to execute the swap). The stripped mock stores a settable `sqrtPriceX96`, returns it from `slot0()`, and executes swaps at that price. That is roughly 80–100 lines of Solidity, not 3,000+.
 
 **The 30-day timelock on param changes has a testnet usability cost.** Setting `maxSlippageBps` or `maxDeviationBps` for the first time requires proposing a change, then warping `block.timestamp` forward 30 days in tests, then executing. Tests handle this with `vm.warp`. But any live testnet operator wanting to tune these params will wait a real 30 days per change. That is the intended behaviour per your answer — flagging it so there are no surprises.
 
-**Redeploy of `ShariahScoreAggregator` loses score history.** The contract is not upgradeable and the enum must grow from 5 to 6 entries. `RedeployShariahAggregator.s.sol` will log a clear warning and re-apply all certified flags. The old aggregator address should be kept in `deployed-addresses.md` as `DEPRECATED_ShariahScoreAggregator_v1` so indexers can still read historical data from it.
+**Redeploy of `ShariahScoreAggregator` loses score history.** The contract is not upgradeable and the enum must grow from 5 to 6 entries. `RedeployShariahAggregator.s.sol` will log a clear warning and re-apply all enabled flags. The old aggregator address should be kept in `deployed-addresses.md` as `DEPRECATED_ShariahScoreAggregator_v1` so indexers can still read historical data from it.
 
 **Order of F within the overall sequence.** The task file says "Do this task before Task E; v2 reuses this adapter." So the order becomes: A (done) → C (done) → **F** → B → D → E. The plan file records this correctly in the build sequence.
-
-Ready to build Task F — say "build" to proceed, or switch to Build mode and approve.
