@@ -19,6 +19,7 @@ import {MockXAUT}              from "../test-helpers/MockXAUT.sol";
 import {MockXauUsdAggregator}  from "../test-helpers/MockXauUsdAggregator.sol";
 import {MockUniswapV3PoolXAUT} from "../test-helpers/MockUniswapV3PoolXAUT.sol";
 import {MockPositionManager}   from "../test-helpers/MockPositionManager.sol";
+import {MockSwapRouter}        from "../test-helpers/MockSwapRouter.sol";
 
 /*
  * Regression tests for the security-review fixes F-01 .. F-08.
@@ -756,8 +757,12 @@ contract SRF03HalalLPTest is Test {
         usdc = new MockERC20("Mock USDC", "mUSDC", 6);
         pair = new MockERC20("Pair", "PAIR", 18);
         pm   = new MockPositionManager(address(usdc), address(pair));
+        MockSwapRouter router = new MockSwapRouter(address(usdc), address(pair));
+        // Tick zero quotes equal RAW units, even though the fixture tokens have different decimals.
+        usdc.mint(address(router), 1_000_000e18);
+        pair.mint(address(router), 1_000_000e18);
         adapter = new HalalLPAdapter(
-            address(pm), address(usdc), address(pair), 3000, address(usdc), vault, owner
+            address(pm), address(router), address(usdc), address(pair), 3000, address(usdc), vault, owner
         );
         // The mock manager pays out the paired token on collect().
         pair.mint(address(pm), 1_000_000e18);
@@ -893,24 +898,41 @@ contract SRF03HalalLPTest is Test {
     function test_F03_deployPassesNonZeroMinAmount() public {
         _deploy(1_000e6);
         assertEq(pm.mintCount(), 1);
-        assertEq(pm.lastMintAmount0Desired(), 1_000e6);
-        assertEq(pm.lastMintAmount0Min(), 990e6, "99% of desired at default 100 bps");
-        assertEq(pm.lastMintAmount1Min(), 0, "no min on the zero-desired side");
-        assertEq(usdc.allowance(address(adapter), address(pm)), 0, "allowance cleared");
+        // Two-sided deploy at price 1.0: half the USDC is swapped 1:1 into the pair token.
+        assertEq(pm.lastMintAmount0Desired(), 500e6, "USDC leg is half of the deployed amount");
+        assertEq(pm.lastMintAmount1Desired(), 500e6, "pair leg is the swap output");
+        assertEq(pm.lastMintAmount0Min(), 495e6, "99% of USDC leg at default 100 bps");
+        assertEq(pm.lastMintAmount1Min(), 495e6, "99% of pair leg at default 100 bps");
+        assertEq(usdc.allowance(address(adapter), address(pm)), 0, "usdc allowance cleared");
+        assertEq(pair.allowance(address(adapter), address(pm)), 0, "pair allowance cleared");
         assertEq(adapter.totalDeployed(), 1_000e6);
     }
 
-    function test_F03_deployTinyAmountStillHasMinOfOne() public {
-        _deploy(1);
-        assertEq(pm.lastMintAmount0Min(), 1);
+    function test_F03_deployTinyAmountRevertsAtomically() public {
+        // One wei cannot be split into two non-empty legs: mint has no liquidity and the
+        // whole deploy (including the cost-basis update) reverts.
+        usdc.mint(address(adapter), 1);
+        vm.prank(vault);
+        vm.expectRevert(bytes("liquidity"));
+        adapter.deploy(1);
+        assertEq(adapter.totalDeployed(), 0);
+        assertEq(adapter.positionTokenId(), 0);
+        assertEq(usdc.balanceOf(address(adapter)), 1, "funds untouched");
     }
 
     function testFuzz_F03_deployMinNeverZero(uint256 amount) public {
-        amount = bound(amount, 1, 1e15);
+        amount = bound(amount, 1e6, 1e15);
         _deploy(amount);
-        uint256 min0 = pm.lastMintAmount0Min();
-        assertGt(min0, 0, "min amount must be non-zero");
-        assertLe(min0, amount);
+        uint256 d0 = pm.lastMintAmount0Desired();
+        uint256 d1 = pm.lastMintAmount1Desired();
+        assertGt(d0, 0);
+        assertGt(d1, 0);
+        assertGt(pm.lastMintAmount0Min(), 0, "usdc min amount must be non-zero");
+        assertGt(pm.lastMintAmount1Min(), 0, "pair min amount must be non-zero");
+        assertLe(pm.lastMintAmount0Min(), d0);
+        assertLe(pm.lastMintAmount1Min(), d1);
+        assertEq(pm.lastMintAmount0Min(), d0 * 9_900 / 10_000);
+        assertEq(pm.lastMintAmount1Min(), d1 * 9_900 / 10_000);
     }
 
     function test_F03_deployRevertsWhenManagerPaysBelowMin() public {
@@ -929,16 +951,21 @@ contract SRF03HalalLPTest is Test {
 
     function test_F03_recallPassesNonZeroMinAmounts() public {
         _deploy(1_000e6);
+        uint256 liq = pm.posLiquidity();
         vm.prank(vault);
         uint256 returned = adapter.recall(400e6);
 
         assertEq(pm.decreaseCount(), 1);
-        assertEq(pm.lastDecLiquidity(), 400e6);
+        assertEq(pm.lastDecLiquidity(), liq * 400 / 1000, "40% of the position burned");
         assertGt(pm.lastDecAmount0Min(), 0, "amount0Min non-zero");
         assertGt(pm.lastDecAmount1Min(), 0, "amount1Min non-zero");
-        assertLe(pm.lastDecAmount0Min(), 400e6);
-        assertEq(returned, 400e6);
-        assertEq(usdc.balanceOf(vault), 400e6);
+        // ~200e6 of each token is expected; min is 99% of the TWAP-derived expectation.
+        assertApproxEqAbs(pm.lastDecAmount0Min(), 198e6, 1e3);
+        assertApproxEqAbs(pm.lastDecAmount1Min(), 198e6, 1e3);
+        // Pair leg is swapped back at par: the vault receives ~400 USDC (rounding only).
+        assertApproxEqAbs(returned, 400e6, 1e3);
+        assertEq(usdc.balanceOf(vault), returned);
+        assertEq(pair.balanceOf(address(adapter)), 0, "no pair token stranded");
         assertEq(adapter.totalDeployed(), 600e6);
     }
 
@@ -965,7 +992,8 @@ contract SRF03HalalLPTest is Test {
 
         pm.setPayoutBps(9_700); // 3% shortfall: would revert at 1%, ok at 5%
         _deploy(1_000e6);
-        assertEq(pm.lastMintAmount0Min(), 950e6, "95% of desired at 500 bps");
+        assertEq(pm.lastMintAmount0Min(), 475e6, "95% of the 500e6 USDC leg at 500 bps");
+        assertEq(pm.lastMintAmount1Min(), 475e6, "95% of the 500e6 pair leg at 500 bps");
     }
 
     function test_R2_secondDeployRevertsWithoutOverwritingPosition() public {

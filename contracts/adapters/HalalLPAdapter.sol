@@ -7,6 +7,21 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+interface IHalalSwapRouter {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
+}
 
 interface IPositionFactory {
     function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address);
@@ -77,10 +92,14 @@ interface INonfungiblePositionManager {
         );
 }
 
-contract HalalLPAdapter is IStrategyAdapter, Ownable2Step {
+contract HalalLPAdapter is IStrategyAdapter, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     error OnlyVault();
+    error ZeroAddress();
+    error InvalidPair();
+    error EmptyPosition();
+    error SwapSlippage();
     error NoActivePosition();
     error PositionAlreadyOpen();
     error SpotTwapDeviation(int24 spotTick, int24 twapTick);
@@ -123,13 +142,24 @@ contract HalalLPAdapter is IStrategyAdapter, Ownable2Step {
     event Deployed(uint256 amount);
     event Recalled(uint256 amount);
     event TickRangeUpdated(int24 lower, int24 upper);
+    event Swapped(address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
 
+    address public immutable swapRouter;
     address public immutable positionManager;
     address public immutable token0;
     address public immutable token1;
     uint24 public immutable poolFee;
     address public immutable usdc;
     address public immutable override vault;
+
+    struct RecallState {
+        uint256 basis;
+        uint256 share;
+        uint256 idleUsdc;
+        uint256 idlePair;
+        uint160 price;
+        bool full;
+    }
 
     uint256 public positionTokenId;
     uint256 public totalDeployed;
@@ -138,6 +168,7 @@ contract HalalLPAdapter is IStrategyAdapter, Ownable2Step {
 
     constructor(
         address positionManager_,
+        address swapRouter_,
         address token0_,
         address token1_,
         uint24 poolFee_,
@@ -145,6 +176,9 @@ contract HalalLPAdapter is IStrategyAdapter, Ownable2Step {
         address vault_,
         address owner_
     ) Ownable(owner_) {
+        if (swapRouter_ == address(0)) revert ZeroAddress();
+        if (token0_ == token1_ || (usdc_ != token0_ && usdc_ != token1_)) revert InvalidPair();
+        swapRouter = swapRouter_;
         positionManager = positionManager_;
         token0 = token0_;
         token1 = token1_;
@@ -161,11 +195,13 @@ contract HalalLPAdapter is IStrategyAdapter, Ownable2Step {
         _;
     }
 
-    function deploy(uint256 amount) external onlyVault returns (uint256 deployed) {
+    function deploy(uint256 amount) external onlyVault nonReentrant returns (uint256 deployed) {
         if (positionTokenId != 0) revert PositionAlreadyOpen();
-        address factory = INonfungiblePositionManager(positionManager).factory();
-        _checkedTwapPrice(IPositionFactory(factory).getPool(token0, token1, poolFee));
-        IERC20(usdc).forceApprove(positionManager, amount);
+        uint160 price = _checkedTwapPrice(_pool());
+        uint256 swapAmount = _swapAllocation(amount, price);
+        // Record the cost basis before making token/router calls; any failure rolls it back.
+        totalDeployed += amount;
+        uint256 pairAmount = _swap(usdc, swapAmount, price);
 
         INonfungiblePositionManager.MintParams memory params;
         params.token0 = token0;
@@ -173,83 +209,172 @@ contract HalalLPAdapter is IStrategyAdapter, Ownable2Step {
         params.fee = poolFee;
         params.tickLower = tickLower;
         params.tickUpper = tickUpper;
-        params.amount0Desired = usdc == token0 ? amount : 0;
-        params.amount1Desired = usdc == token1 ? amount : 0;
+        params.amount0Desired = usdc == token0 ? amount - swapAmount : pairAmount;
+        params.amount1Desired = usdc == token1 ? amount - swapAmount : pairAmount;
         params.amount0Min = _minimumAmount(params.amount0Desired);
         params.amount1Min = _minimumAmount(params.amount1Desired);
         params.recipient = address(this);
         params.deadline = block.timestamp + 300;
 
-        (uint256 tokenId,,,) = INonfungiblePositionManager(positionManager).mint(params);
+        IERC20(token0).forceApprove(positionManager, params.amount0Desired);
+        IERC20(token1).forceApprove(positionManager, params.amount1Desired);
+        (uint256 tokenId, uint128 liquidity,,) = INonfungiblePositionManager(positionManager).mint(params);
+        if (tokenId == 0 || liquidity == 0) revert EmptyPosition();
         positionTokenId = tokenId;
+        IERC20(token0).forceApprove(positionManager, 0);
+        IERC20(token1).forceApprove(positionManager, 0);
 
-        IERC20(usdc).forceApprove(positionManager, 0);
-
-        totalDeployed += amount;
         emit Deployed(amount);
         return amount;
     }
 
-    function recall(uint256 amount) external onlyVault returns (uint256 returned) {
+    function recall(uint256 amount) external onlyVault nonReentrant returns (uint256 returned) {
+        if (amount == 0) return 0;
+        RecallState memory state;
+        state.basis = totalDeployed;
+        state.full = amount >= state.basis;
+        state.share = state.full ? state.basis : amount;
+        address pair = _pairToken();
+        state.price = _checkedTwapPrice(_pool());
+        state.idleUsdc = IERC20(usdc).balanceOf(address(this));
+        state.idlePair = IERC20(pair).balanceOf(address(this));
         uint256 tokenId = positionTokenId;
-        if (tokenId == 0) {
-            return 0;
+        totalDeployed = state.full ? 0 : state.basis - state.share;
+        if (state.full) positionTokenId = 0;
+
+        if (tokenId != 0) {
+            _collectRecall(tokenId, state);
         }
+        // All freshly collected proceeds belong to this recall. Existing idle balances
+        // are allocated pro rata; full recall sweeps both balances, including donations.
+        uint256 pairToSwap = IERC20(pair).balanceOf(address(this)) - state.idlePair
+            + (state.full ? state.idlePair : Math.mulDiv(state.idlePair, state.share, state.basis));
+        uint256 usdcToSend = IERC20(usdc).balanceOf(address(this)) - state.idleUsdc
+            + (state.full ? state.idleUsdc : Math.mulDiv(state.idleUsdc, state.share, state.basis));
+        usdcToSend += _swap(pair, pairToSwap, state.price);
+        if (usdcToSend != 0) IERC20(usdc).safeTransfer(vault, usdcToSend);
+        emit Recalled(amount);
+        return usdcToSend;
+    }
 
-        (,,,,,,, uint128 liquidity,,,,) = INonfungiblePositionManager(positionManager).positions(tokenId);
+    function _collectRecall(uint256 tokenId, RecallState memory state) internal {
+        (,,,,,,, uint128 liquidity,,, uint128 owed0, uint128 owed1) =
+            INonfungiblePositionManager(positionManager).positions(tokenId);
+        uint128 burn = state.full ? liquidity : uint128(Math.mulDiv(liquidity, state.share, state.basis));
+        (uint256 amount0, uint256 amount1) = _decrease(tokenId, burn);
+        // Do not give a partial recall all previously accrued fees.
+        amount0 += state.full ? owed0 : Math.mulDiv(owed0, state.share, state.basis);
+        amount1 += state.full ? owed1 : Math.mulDiv(owed1, state.share, state.basis);
+        INonfungiblePositionManager(positionManager).collect(
+            INonfungiblePositionManager.CollectParams({
+                tokenId: tokenId,
+                recipient: address(this),
+                amount0Max: state.full ? type(uint128).max : uint128(Math.min(amount0, type(uint128).max)),
+                amount1Max: state.full ? type(uint128).max : uint128(Math.min(amount1, type(uint128).max))
+            })
+        );
+    }
 
-        uint128 liquidityToBurn;
-        if (totalDeployed > 0) {
-            liquidityToBurn = uint128((uint256(liquidity) * amount) / totalDeployed);
-        } else {
-            liquidityToBurn = liquidity;
-        }
-
-        if (liquidityToBurn > liquidity) {
-            liquidityToBurn = liquidity;
-        }
-
-        (uint256 expected0, uint256 expected1) = _expectedAmounts(tokenId, liquidityToBurn);
-        INonfungiblePositionManager(positionManager).decreaseLiquidity(
+    function _decrease(uint256 tokenId, uint128 liquidity) internal returns (uint256, uint256) {
+        if (liquidity == 0) return (0, 0);
+        (uint256 expected0, uint256 expected1) = _expectedAmounts(tokenId, liquidity);
+        return INonfungiblePositionManager(positionManager).decreaseLiquidity(
             INonfungiblePositionManager.DecreaseLiquidityParams({
                 tokenId: tokenId,
-                liquidity: liquidityToBurn,
+                liquidity: liquidity,
                 amount0Min: _minimumAmount(expected0),
                 amount1Min: _minimumAmount(expected1),
                 deadline: block.timestamp + 300
             })
         );
-
-        (uint256 amount0, uint256 amount1) = INonfungiblePositionManager(positionManager).collect(
-            INonfungiblePositionManager.CollectParams({
-                tokenId: tokenId,
-                recipient: vault,
-                amount0Max: type(uint128).max,
-                amount1Max: type(uint128).max
-            })
-        );
-
-        if (amount >= totalDeployed) {
-            totalDeployed = 0;
-        } else {
-            totalDeployed -= amount;
-        }
-
-        uint256 received = usdc == token0 ? amount0 : amount1;
-        emit Recalled(amount);
-        return received;
     }
 
     function currentValue() public view returns (uint256) {
-        if (positionTokenId == 0) {
+        // An unavailable price (TWAP history, pool, position manager, arithmetic) must NOT be
+        // reported as cost basis: that would hide a loss and look healthy to the vault. Let the
+        // failure propagate; the vault reads this with a bounded call, treats a failed read as
+        // unmarked for exits and blocks deposits (valuationHealthy() == false).
+        if (positionTokenId == 0 && totalDeployed == 0
+            && IERC20(token0).balanceOf(address(this)) == 0 && IERC20(token1).balanceOf(address(this)) == 0) {
             return 0;
         }
+        return this.markToMarketValue();
+    }
 
-        (,,,,,,,,,, uint128 tokensOwed0, uint128 tokensOwed1) =
-            INonfungiblePositionManager(positionManager).positions(positionTokenId);
+    /// @dev Self-call boundary for currentValue(); not an alternative price oracle.
+    function markToMarketValue() external view returns (uint256) {
+        require(msg.sender == address(this), "self only");
+        (uint160 price,) = _twapPrice(_pool());
+        uint256 amount0 = IERC20(token0).balanceOf(address(this));
+        uint256 amount1 = IERC20(token1).balanceOf(address(this));
+        if (positionTokenId != 0) {
+            (,,,,, int24 lower, int24 upper, uint128 liquidity,,, uint128 owed0, uint128 owed1) =
+                INonfungiblePositionManager(positionManager).positions(positionTokenId);
+            (uint256 principal0, uint256 principal1) = _amountsAtPrice(price, lower, upper, liquidity);
+            amount0 += principal0 + owed0;
+            amount1 += principal1 + owed1;
+        }
+        return usdc == token0 ? amount0 + _quote(amount1, false, price)
+            : amount1 + _quote(amount0, true, price);
+    }
 
-        uint256 usdcOwed = usdc == token0 ? uint256(tokensOwed0) : uint256(tokensOwed1);
-        return usdcOwed + totalDeployed;
+    function _pool() internal view returns (address) {
+        address factory = INonfungiblePositionManager(positionManager).factory();
+        return IPositionFactory(factory).getPool(token0, token1, poolFee);
+    }
+
+    function _pairToken() internal view returns (address) {
+        return usdc == token0 ? token1 : token0;
+    }
+
+    function _swapAllocation(uint256 amount, uint160 price) internal view returns (uint256) {
+        uint160 lower = _sqrtRatioAtTick(tickLower);
+        uint160 upper = _sqrtRatioAtTick(tickUpper);
+        require(lower < upper, "invalid range");
+        if (price <= lower) return usdc == token0 ? 0 : amount;
+        if (price >= upper) return usdc == token1 ? 0 : amount;
+        // These are the USDC values of the two liquidity legs, normalized by
+        // the same factor L*Q96/price (or L*price/Q96 for USDC == token1).
+        // Pool prices are raw token1/token0 ratios, already incorporating decimals.
+        uint256 weight0 = Math.mulDiv(uint256(upper) - price, 1 << 96, upper);
+        uint256 weight1 = Math.mulDiv(uint256(price) - lower, 1 << 96, price);
+        return Math.mulDiv(amount, usdc == token0 ? weight1 : weight0, weight0 + weight1);
+    }
+
+    /// @dev OracleLibrary-style full precision quote in RAW token units. Applying
+    /// decimals again would incorrectly double-scale a V3 sqrtPriceX96 quote.
+    function _quote(uint256 amount, bool zeroForOne, uint160 price) internal pure returns (uint256) {
+        if (price <= type(uint128).max) {
+            uint256 ratioX192 = uint256(price) * price;
+            return zeroForOne ? Math.mulDiv(amount, ratioX192, 1 << 192)
+                : Math.mulDiv(amount, 1 << 192, ratioX192);
+        }
+        uint256 ratioX128 = Math.mulDiv(price, price, 1 << 64);
+        return zeroForOne ? Math.mulDiv(amount, ratioX128, 1 << 128)
+            : Math.mulDiv(amount, 1 << 128, ratioX128);
+    }
+
+    function _swap(address tokenIn, uint256 amount, uint160 price) internal returns (uint256 received) {
+        if (amount == 0) return 0;
+        address tokenOut = tokenIn == usdc ? _pairToken() : usdc;
+        uint256 minimum = _minimumAmount(_quote(amount, tokenIn == token0, price));
+        // Do not execute a nonzero swap with an unprotected, rounded-to-zero quote.
+        if (minimum == 0) revert SwapSlippage();
+        uint256 beforeBalance = IERC20(tokenOut).balanceOf(address(this));
+        IERC20(tokenIn).forceApprove(swapRouter, amount);
+        IHalalSwapRouter(swapRouter).exactInputSingle(IHalalSwapRouter.ExactInputSingleParams({
+            tokenIn: tokenIn,
+            tokenOut: tokenOut,
+            fee: poolFee,
+            recipient: address(this),
+            amountIn: amount,
+            amountOutMinimum: minimum,
+            sqrtPriceLimitX96: 0
+        }));
+        IERC20(tokenIn).forceApprove(swapRouter, 0);
+        received = IERC20(tokenOut).balanceOf(address(this)) - beforeBalance;
+        if (received < minimum) revert SwapSlippage();
+        emit Swapped(tokenIn, tokenOut, amount, received);
     }
 
     function protocolName() external pure returns (string memory) {
@@ -343,6 +468,15 @@ contract HalalLPAdapter is IStrategyAdapter, Ownable2Step {
     }
 
     function _checkedTwapPrice(address pool) internal view returns (uint160) {
+        (uint160 price, int24 averageTick) = _twapPrice(pool);
+        (, int24 spot,,,,,) = IPositionPool(pool).slot0();
+        int256 deviation = int256(spot) - int256(averageTick);
+        if (deviation < 0) deviation = -deviation;
+        if (uint256(deviation) > maxTwapDeviationTicks) revert SpotTwapDeviation(spot, averageTick);
+        return price;
+    }
+
+    function _twapPrice(address pool) internal view returns (uint160, int24) {
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = twapWindow;
         int56 delta;
@@ -359,11 +493,7 @@ contract HalalLPAdapter is IStrategyAdapter, Ownable2Step {
         if (delta < 0 && delta % window != 0) mean--;
         if (mean < -887272 || mean > 887272) revert TwapUnavailable();
         int24 averageTick = int24(mean);
-        (, int24 spot,,,,,) = IPositionPool(pool).slot0();
-        int256 deviation = int256(spot) - int256(averageTick);
-        if (deviation < 0) deviation = -deviation;
-        if (uint256(deviation) > maxTwapDeviationTicks) revert SpotTwapDeviation(spot, averageTick);
-        return _sqrtRatioAtTick(averageTick);
+        return (_sqrtRatioAtTick(averageTick), averageTick);
     }
 
     function _minimumAmount(uint256 expected) internal view returns (uint256) {
@@ -380,6 +510,12 @@ contract HalalLPAdapter is IStrategyAdapter, Ownable2Step {
         address factory = INonfungiblePositionManager(positionManager).factory();
         address pool = IPositionFactory(factory).getPool(position0, position1, fee);
         uint160 price = _checkedTwapPrice(pool);
+        return _amountsAtPrice(price, lower, upper, liquidity);
+    }
+
+    function _amountsAtPrice(uint160 price, int24 lower, int24 upper, uint128 liquidity)
+        internal pure returns (uint256 amount0, uint256 amount1)
+    {
         uint160 sqrtLower = _sqrtRatioAtTick(lower);
         uint160 sqrtUpper = _sqrtRatioAtTick(upper);
         if (price <= sqrtLower) {
