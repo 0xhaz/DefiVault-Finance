@@ -407,7 +407,7 @@ export const SHARIAH_STRATEGY_META = [
     permittedAssets: ['USDC', 'PAXG'],
   },
   {
-    id: 2, key: 'HALAL_LP', name: 'Halal Liquidity Pool',
+    id: 2, key: 'HALAL_LP', name: 'Uniswap V3 Liquidity Pool',
     trigger: 'Every 30s', icon: 'droplets',
     description: 'Provides liquidity to Uniswap V3 USDC/ETH pools. Earns trading fees only — no lending or yield farming.',
     inputs: 'Uniswap V3 USDC/ETH pool liquidity depth on Arbitrum and Base',
@@ -427,7 +427,7 @@ export const SHARIAH_STRATEGY_META = [
     permittedAssets: ['USDC', 'PAXG', 'ETH'],
   },
   {
-    id: 4, key: 'RWA_SUKUK', name: 'RWA / Sukuk Yield',
+    id: 4, key: 'RWA_SUKUK', name: 'RWA Yield (retired, SR-001)',
     trigger: 'SUSPENDED', icon: 'building2',
     description: 'SUSPENDED — SR-001: OUSG/BUIDL are US Treasury-backed; yield is riba (interest income). Strategy index 4 is RESERVED_4 on-chain. See SHARIAH_REVIEW.md.',
     inputs: 'N/A — scorer disabled',

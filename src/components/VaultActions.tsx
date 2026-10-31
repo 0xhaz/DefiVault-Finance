@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi';
+import { ConnectKitButton } from 'connectkit';
 import { erc20Abi, formatUnits, parseUnits } from 'viem';
 import { ARC_CHAIN_ID, ARC_NETWORK_NAME, txUrl } from '../chain';
 import { toast } from 'sonner';
@@ -22,6 +23,7 @@ export function VaultActions() {
   const isDeployed = VAULT_ADDRESS.length > 2;
   const executorDeployed = EXECUTOR_ADDRESS.length > 2;
   const isWrongChain = isConnected && chainId !== ARC_CHAIN_ID;
+  const { switchChain, isPending: isSwitching } = useSwitchChain();
 
   const { data: usdcBalance } = useReadContract({
     address: USDC_ADDRESS,
@@ -130,7 +132,10 @@ export function VaultActions() {
     return (
       <div className="rounded-xl p-6 text-center" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
         <p className="text-sm mb-1" style={{ color: 'var(--ink-2)' }}>Connect your wallet to interact</p>
-        <p className="text-xs" style={{ color: 'var(--subtle)' }}>Deposit USDC, redeem shares, or trigger execution</p>
+        <p className="text-xs mb-4" style={{ color: 'var(--subtle)' }}>Deposit USDC, redeem shares, or trigger execution</p>
+        <div className="flex justify-center">
+          <ConnectKitButton />
+        </div>
       </div>
     );
   }
@@ -226,7 +231,17 @@ export function VaultActions() {
         )}
 
         {isWrongChain && (
-          <p className="text-xs text-center" style={{ color: 'var(--danger)' }}>Switch to {ARC_NETWORK_NAME} to continue</p>
+          <div className="space-y-2">
+            <p className="text-xs text-center" style={{ color: 'var(--danger)' }}>Your wallet is on another network.</p>
+            <button
+              onClick={() => switchChain({ chainId: ARC_CHAIN_ID })}
+              disabled={isSwitching}
+              className="w-full py-2.5 rounded-lg text-sm font-medium disabled:opacity-40"
+              style={{ border: '1px solid var(--accent)', color: 'var(--accent)' }}
+            >
+              {isSwitching ? 'Switching…' : `Switch to ${ARC_NETWORK_NAME}`}
+            </button>
+          </div>
         )}
 
         <button

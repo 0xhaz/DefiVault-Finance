@@ -8,6 +8,7 @@ import { PortfolioPage } from './pages/PortfolioPage';
 import { AlertsPage } from './pages/AlertsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { IS_MAINNET } from './chain';
+import { ConnectKitButton } from 'connectkit';
 
 /** Top-level community filter — gates which vault tiers and strategy sets are shown. */
 export type VaultMode = 'conventional' | 'shariah' | 'both';
@@ -61,6 +62,9 @@ export default function App() {
           <LandingPage onNavigate={setPage} />
         ) : (
           <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8 lg:py-10">
+            <div className="flex justify-end mb-4">
+              <ConnectKitButton />
+            </div>
             {page === 'dashboard' && (
               <DashboardPage
                 selectedTier={selectedTier}

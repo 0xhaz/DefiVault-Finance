@@ -35,7 +35,7 @@ const STRATEGIES = [
     threshold: 75, domain: 0, // 0 = local only; cross-chain is blocked by vault guard
   },
   {
-    id: 2, key: 'HALAL_LP',   name: 'Halal Liquidity Pool',
+    id: 2, key: 'HALAL_LP',   name: 'Uniswap V3 Liquidity Pool',
     shariahBasis: 'Musharakah in a trading pool — fee income only',
     permittedAssets: ['USDC', 'ETH'],
     baseScore: 70, amp: 15, freq: 1.4, phase: 2.4,
