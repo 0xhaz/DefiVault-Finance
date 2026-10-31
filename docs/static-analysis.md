@@ -61,6 +61,6 @@ Aderyn was not run (not installed). Running it is an open follow-up for P-3.
 ## Follow-ups
 
 1. ~~Fix N-35~~ (done, `n35-returncapital-funded-only`).
-2. P-5: zero-address checks in the `HalalLPAdapter` constructor.
+2. ~~P-5: zero-address checks in the `HalalLPAdapter` constructor~~ (done, `p5-halal-lp-zero-checks`: `positionManager`, `swapRouter`, `vault`, `token0`, `token1`; `HalalLPAdapterP5Test.t.sol`).
 3. Run Aderyn and add its results here.
 4. Re-run Slither on the frozen audit commit and attach the JSON to the audit package.
