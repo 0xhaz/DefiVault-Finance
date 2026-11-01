@@ -47,3 +47,7 @@ Build for mainnet: `vite build --mode mainnet` (reads `.env.mainnet`: addresses 
 - Unaudited; open findings and accepted limitations are in `docs/security-review.md` (N-32, N-34, N-36, N-40 and "Known gaps").
 - No strategy can receive funds before an adapter completes the 30-day registry screening, and none is proposed. Deposits sit idle in the vault.
 - Single-key governance. Before holding meaningful funds: run `handoff()` to Safes, and follow every gate in `docs/mainnet-deploy.md` section 1.
+
+## Source verification (2026-11-01)
+
+All 12 contracts from `deployCore()` are verified on Sourcify for chain 5042 with `forge verify-contract --verifier sourcify`. Eleven are exact matches. ShariahVaultV2 (`0xDc40ed79F74141BBba84d54f84Eafd43CD8Bc470`) is a full match on code; only the trailing metadata hash differs. Check any address at `https://sourcify.dev/server/v2/contract/5042/<address>`. The explorer API at explorer.arc.io sits behind a Cloudflare challenge, so command-line verification against it fails; its web form takes the Standard JSON input from `forge verify-contract <address> <contract> --show-standard-json-input` (the vault also needs the four `--libraries` flags from the broadcast record).
